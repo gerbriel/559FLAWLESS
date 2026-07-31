@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
@@ -13,6 +13,7 @@ export interface ThreadMessage {
   body: string
   sender_id: string | null
   sender_name: string | null
+  is_internal?: boolean
   created_at: string
 }
 
@@ -34,6 +35,43 @@ export function MessageThreadView({
   const [body, setBody] = useState('')
   const [internal, setInternal] = useState(false)
   const [busy, setBusy] = useState(false)
+  const endRef = useRef<HTMLDivElement>(null)
+
+  // Keep the view pinned to the newest message.
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [messages])
+
+  // Live updates: subscribe to inserts on this thread so a reply from the other
+  // side appears without a manual refresh. RLS still applies to the realtime
+  // stream, so a client never receives an internal note; we defensively filter
+  // internal notes out of the client view here too.
+  useEffect(() => {
+    const supabase = createClient()
+    const channel = supabase
+      .channel(`thread:${threadId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `thread_id=eq.${threadId}`,
+        },
+        (payload) => {
+          const m = payload.new as ThreadMessage
+          if (!asStaff && m.is_internal) return
+          setMessages((prev) =>
+            prev.some((x) => x.id === m.id) ? prev : [...prev, m]
+          )
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [threadId, asStaff])
 
   async function send(e: React.FormEvent) {
     e.preventDefault()
@@ -51,7 +89,7 @@ export function MessageThreadView({
         body: body.trim(),
         is_internal: asStaff && internal,
       })
-      .select('id, body, sender_id, sender_name, created_at')
+      .select('id, body, sender_id, sender_name, is_internal, created_at')
       .single()
 
     setBusy(false)
@@ -61,7 +99,7 @@ export function MessageThreadView({
       return
     }
 
-    setMessages((m) => [...m, data])
+    setMessages((m) => (m.some((x) => x.id === data.id) ? m : [...m, data]))
     setBody('')
     router.refresh()
   }
@@ -100,6 +138,8 @@ export function MessageThreadView({
           )
         })}
       </ul>
+
+      <div ref={endRef} />
 
       <form onSubmit={send} className="mt-8">
         <Textarea
