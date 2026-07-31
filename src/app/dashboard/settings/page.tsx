@@ -1,0 +1,99 @@
+import { createClient } from '@/lib/supabase/server'
+import { Badge } from '@/components/ui/badge'
+import { BookingSettingsForm } from '@/components/shared/BookingSettingsForm'
+import { ROLE_LABELS, type UserRole } from '@/types/database'
+
+export const dynamic = 'force-dynamic'
+
+export default async function SettingsPage() {
+  const supabase = await createClient()
+
+  const [{ data: settings }, { data: staff }, { data: closures }] = await Promise.all([
+    supabase.from('booking_settings').select('*').eq('id', 1).maybeSingle(),
+    supabase
+      .from('profiles')
+      .select('id, first_name, last_name, email, role, accepts_online_booking, suspended_at')
+      .neq('role', 'client')
+      .order('role'),
+    supabase
+      .from('closures')
+      .select('id, closure_date, reason')
+      .gte('closure_date', new Date().toISOString().slice(0, 10))
+      .order('closure_date'),
+  ])
+
+  return (
+    <div className="max-w-3xl">
+      <h1 className="display text-3xl">Settings</h1>
+
+      <section className="mt-10">
+        <h2 className="display text-2xl">Booking policy</h2>
+        <p className="mt-2 text-sm text-[var(--color-muted)]">
+          These apply across every provider. Per-service deposits and cancellation
+          windows are set on the service itself.
+        </p>
+        <div className="mt-6">
+          {settings ? (
+            <BookingSettingsForm settings={settings} />
+          ) : (
+            <p className="text-sm text-[var(--color-muted)]">
+              Settings row missing — run migration 003.
+            </p>
+          )}
+        </div>
+      </section>
+
+      <section className="mt-14">
+        <h2 className="display text-2xl">Staff</h2>
+        <ul className="mt-6 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
+          {(staff ?? []).map((s) => (
+            <li key={s.id} className="flex flex-wrap items-center justify-between gap-4 py-4">
+              <div>
+                <p className="text-sm">
+                  {s.first_name} {s.last_name}
+                </p>
+                <p className="text-xs text-[var(--color-muted)]">{s.email}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Badge tone="neutral">{ROLE_LABELS[s.role as UserRole]}</Badge>
+                {s.role === 'provider' && (
+                  <Badge tone={s.accepts_online_booking ? 'success' : 'warning'}>
+                    {s.accepts_online_booking ? 'Bookable' : 'Not bookable'}
+                  </Badge>
+                )}
+                {s.suspended_at && <Badge tone="danger">Suspended</Badge>}
+              </div>
+            </li>
+          ))}
+        </ul>
+        <p className="mt-4 text-xs text-[var(--color-muted)]">
+          Roles and suspensions are changed in Supabase directly — a database trigger
+          rejects any attempt to change them from the app, including by an admin&rsquo;s
+          own session.
+        </p>
+      </section>
+
+      <section className="mt-14">
+        <h2 className="display text-2xl">Upcoming closures</h2>
+        {(closures?.length ?? 0) === 0 ? (
+          <p className="mt-4 text-sm text-[var(--color-muted)]">None scheduled.</p>
+        ) : (
+          <ul className="mt-6 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
+            {(closures ?? []).map((c) => (
+              <li key={c.id} className="flex justify-between gap-4 py-3 text-sm">
+                <span className="tabular-nums">
+                  {new Date(`${c.closure_date}T00:00:00`).toLocaleDateString('en-US', {
+                    weekday: 'short',
+                    month: 'long',
+                    day: 'numeric',
+                  })}
+                </span>
+                <span className="text-[var(--color-muted)]">{c.reason}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
+  )
+}

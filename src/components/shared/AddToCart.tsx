@@ -1,0 +1,62 @@
+'use client'
+
+import { useState } from 'react'
+import { toast } from 'sonner'
+import { Minus, Plus } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { useCart } from '@/store/cart'
+
+export function AddToCart({
+  productId,
+  disabled,
+}: {
+  productId: number
+  disabled?: boolean
+}) {
+  const [qty, setQty] = useState(1)
+  const add = useCart((s) => s.add)
+
+  if (disabled) {
+    return (
+      <Button disabled size="lg" className="w-full sm:w-auto">
+        Out of stock
+      </Button>
+    )
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-4">
+      <div className="flex items-center border border-[var(--color-border)]">
+        <button
+          type="button"
+          onClick={() => setQty((q) => Math.max(1, q - 1))}
+          className="px-3 py-3 transition-colors hover:text-[var(--color-accent)]"
+          aria-label="Decrease quantity"
+        >
+          <Minus className="h-3.5 w-3.5" strokeWidth={2} />
+        </button>
+        <span className="w-8 text-center text-sm tabular-nums" aria-live="polite">
+          {qty}
+        </span>
+        <button
+          type="button"
+          onClick={() => setQty((q) => Math.min(99, q + 1))}
+          className="px-3 py-3 transition-colors hover:text-[var(--color-accent)]"
+          aria-label="Increase quantity"
+        >
+          <Plus className="h-3.5 w-3.5" strokeWidth={2} />
+        </button>
+      </div>
+
+      <Button
+        size="lg"
+        onClick={() => {
+          add(productId, qty)
+          toast.success('Added to your bag.')
+        }}
+      >
+        Add to bag
+      </Button>
+    </div>
+  )
+}

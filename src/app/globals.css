@@ -1,26 +1,157 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
+@import "tw-animate-css";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* ============================================================
+   559 Flawless — design tokens
+   Editorial minimalism: generous whitespace, full-bleed imagery,
+   uppercase wide-tracked labels, warm neutral (not clinical) palette.
+   ============================================================ */
+
+@theme {
+  /* Neutrals — warm, porcelain-to-espresso */
+  --color-porcelain: #faf7f4;
+  --color-linen: #f1eae4;
+  --color-shell: #e8ded6;
+  --color-line: #e0d5cc;
+  --color-stone: #7d716a;
+  --color-espresso: #241c18;
+  --color-ink: #17110e;
+
+  /* Brand — rose clay */
+  --color-clay: #b48a78;
+  --color-clay-deep: #8d6553;
+  --color-clay-soft: #f3e7e1;
+
+  /* Support */
+  --color-sage: #8a9a86;
+  --color-gold: #c2a15f;
+
+  /* Semantic — light mode defaults, overridden under .dark */
+  --color-background: #faf7f4;
+  --color-surface: #ffffff;
+  --color-foreground: #241c18;
+  --color-muted: #7d716a;
+  --color-border: #e0d5cc;
+  --color-accent: #b48a78;
+  --color-accent-fg: #ffffff;
+
+  --font-display: var(--font-cormorant), ui-serif, Georgia, serif;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+
+  --radius-card: 2px;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+@layer base {
+  .dark {
+    --color-background: #171110;
+    --color-surface: #201917;
+    --color-foreground: #f2ebe6;
+    --color-muted: #a2938b;
+    --color-border: #332823;
+    --color-accent: #c79c89;
+    --color-accent-fg: #1a1210;
+  }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  * {
+    border-color: var(--color-border);
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    font-feature-settings: "kern", "liga";
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background-color: #b48a78;
+    color: #fff;
+  }
+
+  /* Focus ring — visible, on-brand, never removed */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* ============================================================
+   Chart tokens
+   Both modes are *selected*, not flipped. Each set was validated against its
+   own surface with the dataviz validator (lightness band, chroma floor, CVD
+   separation, normal-vision floor, contrast):
+     light on #faf7f4 — #a63d17 / #1b6ca8, worst CVD ΔE 21.3, normal 26.0
+     dark  on #171110 — #c95a2e / #3f92d4, worst CVD ΔE 23.2, normal 27.7
+   Changing a value here means re-running the validator, not eyeballing it.
+   ============================================================ */
+.viz-root {
+  --chart-surface: #faf7f4;
+  --chart-grid: #e0d5cc;
+  --chart-axis: #7d716a;
+  --series-1: #a63d17;
+  --series-2: #1b6ca8;
+  /* Single-hue sequential, for the one-series funnel */
+  --seq-1: #a63d17;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme='light'])) .viz-root {
+    --chart-surface: #171110;
+    --chart-grid: #332823;
+    --chart-axis: #a2938b;
+    --series-1: #c95a2e;
+    --series-2: #3f92d4;
+    --seq-1: #c95a2e;
+  }
+}
+
+:root[data-theme='dark'] .viz-root {
+  --chart-surface: #171110;
+  --chart-grid: #332823;
+  --chart-axis: #a2938b;
+  --series-1: #c95a2e;
+  --series-2: #3f92d4;
+  --seq-1: #c95a2e;
+}
+
+@layer components {
+  /* The uppercase wide-tracked label used for eyebrows, nav, and buttons */
+  .label-caps {
+    font-size: 0.6875rem;
+    line-height: 1;
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+  }
+
+  .display {
+    font-family: var(--font-display);
+    font-weight: 300;
+    letter-spacing: -0.01em;
+    line-height: 1.05;
+  }
+
+  .rule {
+    height: 1px;
+    background-color: var(--color-border);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
