@@ -37,10 +37,20 @@ export function ContactForm({ presetSubject }: { presetSubject?: string }) {
 
     const supabase = createClient()
 
+    // A signed-in client must own the thread and sign their message, or RLS
+    // rejects the insert: the anonymous "guest posts first message" policy only
+    // applies to the `anon` role, and the client policy requires
+    // sender_id = auth.uid(). Anonymous visitors leave both null and are matched
+    // to a client record by the SECURITY DEFINER trigger instead.
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
     const { data: thread, error: threadError } = await supabase
       .from('message_threads')
       .insert({
         subject: form.subject,
+        client_id: user?.id ?? null,
         guest_name: form.name.trim(),
         guest_email: form.email.trim().toLowerCase(),
         guest_phone: form.phone.trim() || null,
@@ -56,6 +66,7 @@ export function ContactForm({ presetSubject }: { presetSubject?: string }) {
 
     const { error: messageError } = await supabase.from('messages').insert({
       thread_id: thread.id,
+      sender_id: user?.id ?? null,
       sender_name: form.name.trim(),
       body: form.message.trim(),
     })
