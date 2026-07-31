@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
-import { Badge } from '@/components/ui/badge'
 import { TestimonialModeration } from '@/components/shared/TestimonialModeration'
+import { AnnouncementManager } from '@/components/shared/AnnouncementManager'
 
 export const dynamic = 'force-dynamic'
 
@@ -26,9 +26,8 @@ export default async function MarketingPage() {
         .eq('status', 'active'),
       supabase
         .from('announcements')
-        .select('id, title, variant, is_active, starts_at, ends_at')
-        .order('created_at', { ascending: false })
-        .limit(10),
+        .select('id, title, body, link_url, link_label, variant, starts_at, ends_at, is_active, created_at')
+        .order('created_at', { ascending: false }),
     ])
 
   return (
@@ -63,26 +62,12 @@ export default async function MarketingPage() {
       <section className="mt-14">
         <h2 className="display text-2xl">Announcements</h2>
         <p className="mt-2 text-sm text-[var(--color-muted)]">
-          The bar above the site header. Only the most recent active one shows.
+          The bar above the site header. Only the most recent live one shows.
         </p>
 
-        {(announcements?.length ?? 0) === 0 ? (
-          <p className="mt-6 text-sm text-[var(--color-muted)]">None created.</p>
-        ) : (
-          <ul className="mt-6 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
-            {(announcements ?? []).map((a) => (
-              <li key={a.id} className="flex items-center justify-between gap-4 py-4">
-                <span className="text-sm">{a.title}</span>
-                <span className="flex gap-2">
-                  <Badge tone="neutral">{a.variant}</Badge>
-                  <Badge tone={a.is_active ? 'success' : 'neutral'}>
-                    {a.is_active ? 'Live' : 'Off'}
-                  </Badge>
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
+        <div className="mt-6">
+          <AnnouncementManager announcements={announcements ?? []} />
+        </div>
       </section>
     </div>
   )

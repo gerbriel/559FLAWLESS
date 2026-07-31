@@ -114,7 +114,7 @@ export default async function ProductPage({ params }: Props) {
                 rel="noreferrer noopener"
                 size="lg"
               >
-                Buy on {brand?.name ?? 'the brand store'}
+                Add to cart
                 <ArrowUpRight className="h-4 w-4" strokeWidth={2} />
               </ButtonLink>
             ) : (
