@@ -9,7 +9,13 @@ const MAX_BODY_BYTES = 16_384
 
 const BookingSchema = z.object({
   provider_id: z.string().uuid(),
-  service_id: z.number().int().positive(),
+  // A list, so a client can book several services as one appointment. A bare
+  // number is still accepted so an older client build keeps working.
+  service_ids: z
+    .union([
+      z.number().int().positive().transform((n) => [n]),
+      z.array(z.number().int().positive()).min(1).max(6),
+    ]),
   addon_ids: z.array(z.number().int().positive()).max(MAX_ADDONS).default([]),
   starts_at: z.string().min(1).max(40),
   first_name: z.string().trim().min(1).max(80),
@@ -52,7 +58,7 @@ export async function POST(request: NextRequest) {
   const body = result.data
   const outcome = await createBooking({
     providerId: body.provider_id,
-    serviceId: body.service_id,
+    serviceIds: body.service_ids,
     addonIds: body.addon_ids,
     startsAt: body.starts_at,
     firstName: body.first_name,

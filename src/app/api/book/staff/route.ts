@@ -11,7 +11,12 @@ const MAX_BODY_BYTES = 16_384
 const StaffBookingSchema = z.object({
   clientId: z.string().uuid(),
   providerId: z.string().uuid(),
-  serviceId: z.number().int().positive(),
+  // A list, so staff can book several services as one appointment. A bare
+  // number is still accepted so an older client build keeps working.
+  serviceIds: z.union([
+    z.number().int().positive().transform((n) => [n]),
+    z.array(z.number().int().positive()).min(1).max(6),
+  ]),
   addonIds: z.array(z.number().int().positive()).max(MAX_ADDONS).default([]),
   startsAt: z.string().min(1).max(40),
   notes: z.string().trim().max(2000).nullish(),
@@ -74,7 +79,7 @@ export async function POST(request: NextRequest) {
   const outcome = await createStaffBooking({
     clientId: body.clientId,
     providerId: body.providerId,
-    serviceId: body.serviceId,
+    serviceIds: body.serviceIds,
     addonIds: body.addonIds,
     startsAt: body.startsAt,
     notes: body.notes ?? null,

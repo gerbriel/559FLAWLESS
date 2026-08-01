@@ -51,7 +51,8 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
   const [searchTerm, setSearchTerm] = useState('')
   const [searchResults, setSearchResults] = useState<ClientProfile[]>([])
   const [selectedClient, setSelectedClient] = useState<ClientProfile | null>(preselectedClient ?? null)
-  const [serviceId, setServiceId] = useState<number | null>(null)
+  // Staff can book several services as one visit, the same as a client can.
+  const [serviceIds, setServiceIds] = useState<number[]>([])
   const [providerId, setProviderId] = useState<string | null>(null)
   const [selectedAddonIds, setSelectedAddonIds] = useState<number[]>([])
   const [selectedDate, setSelectedDate] = useState('')
@@ -90,20 +91,20 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
 
   // Check form requirements when client and service are selected
   useEffect(() => {
-    if (!selectedClient || !serviceId) {
+    if (!selectedClient || serviceIds.length === 0) {
       setFormWarnings([])
       return
     }
 
     const checkRequirements = async () => {
       const supabase = createClient()
-      const service = services.find(s => s.id === serviceId)
-      if (!service) return
+      const chosen = services.filter(s => serviceIds.includes(s.id))
+      if (chosen.length === 0) return
 
       const warnings: string[] = []
 
-      // Check age verification
-      if (service.requires_age_verification) {
+      // The strictest service sets the rule for the whole visit.
+      if (chosen.some(s => s.requires_age_verification)) {
         const { data: profile } = await supabase
           .from('profiles')
           .select('age_verified_at')
@@ -131,7 +132,7 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
       }
 
       // Check for consultation requirement
-      if (service.requires_consultation) {
+      if (chosen.some(s => s.requires_consultation)) {
         const { data: prevAppointments, count } = await supabase
           .from('appointments')
           .select('id', { count: 'exact', head: true })
@@ -147,11 +148,11 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
     }
 
     checkRequirements()
-  }, [selectedClient, serviceId, services])
+  }, [selectedClient, serviceIds, services])
 
   // Fetch available slots when service, provider, and date are selected
   useEffect(() => {
-    if (!serviceId || !providerId || !selectedDate) {
+    if (serviceIds.length === 0 || !providerId || !selectedDate) {
       setAvailableSlots([])
       return
     }
@@ -159,15 +160,14 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
     const fetchSlots = async () => {
       setLoadingSlots(true)
       try {
-        const service = services.find(s => s.id === serviceId)
-        if (!service) return
+        if (serviceIds.length === 0) return
 
         // The route takes provider/service/from/days — not
         // providerId/serviceId/date. With the wrong names it 400'd every time,
         // so no slots ever appeared and staff could not pick a time at all.
         const params = new URLSearchParams({
           provider: providerId,
-          service: String(serviceId),
+          service: serviceIds.join(','),
           from: selectedDate,
           days: '1',
         })
@@ -192,12 +192,12 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
     }
 
     fetchSlots()
-  }, [serviceId, providerId, selectedDate, services])
+  }, [serviceIds, providerId, selectedDate, services])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     
-    if (!selectedClient || !serviceId || !providerId || !selectedSlot) {
+    if (!selectedClient || serviceIds.length === 0 || !providerId || !selectedSlot) {
       setError('Please complete all required fields')
       return
     }
@@ -211,7 +211,7 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           clientId: selectedClient.id,
-          serviceId,
+          serviceIds,
           providerId,
           startsAt: selectedSlot,
           addonIds: selectedAddonIds,
@@ -233,7 +233,10 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
     }
   }
 
-  const selectedService = services.find(s => s.id === serviceId)
+  const chosenServices = services.filter(s => serviceIds.includes(s.id))
+  // Totals for the visit — additive in time and money.
+  const totalPriceCents = chosenServices.reduce((n, s) => n + s.price_cents, 0)
+  const totalMinutes = chosenServices.reduce((n, s) => n + s.duration_minutes, 0)
   const selectedProvider = providers.find(p => p.id === providerId)
 
   // Generate next 30 days for date selection
@@ -352,19 +355,35 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
         </CardHeader>
         <CardContent className="space-y-4">
           <Field label="Service" htmlFor="service">
-            <Select
-              id="service"
-              value={serviceId?.toString() ?? ''}
-              onChange={(e) => setServiceId(e.target.value ? Number(e.target.value) : null)}
-              required
-            >
-              <option value="">Select a service...</option>
-              {services.map((service) => (
-                <option key={service.id} value={service.id}>
-                  {service.name} — {formatMoney(service.price_cents)} · {formatDuration(service.duration_minutes)}
-                </option>
-              ))}
-            </Select>
+            <div className="max-h-64 space-y-1 overflow-y-auto border border-[var(--color-border)] p-2">
+              {services.map((service) => {
+                const on = serviceIds.includes(service.id)
+                return (
+                  <label
+                    key={service.id}
+                    className="flex cursor-pointer items-center gap-3 p-2 text-sm hover:bg-[var(--color-linen)] dark:hover:bg-[var(--color-surface)]"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      onChange={() =>
+                        setServiceIds((cur) =>
+                          on ? cur.filter((id) => id !== service.id) : [...cur, service.id]
+                        )
+                      }
+                      className="h-4 w-4 accent-[var(--color-accent)]"
+                    />
+                    <span className="flex-1">
+                      {service.name}
+                      <span className="ml-2 text-xs text-[var(--color-muted)]">
+                        {formatMoney(service.price_cents)} ·{' '}
+                        {formatDuration(service.duration_minutes)}
+                      </span>
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
           </Field>
 
           <Field label="Provider" htmlFor="provider">
@@ -383,12 +402,18 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
             </Select>
           </Field>
 
-          {selectedService && (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {selectedService.requires_age_verification && (
+          {chosenServices.length > 0 && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Badge tone="neutral">
+                {chosenServices.length}{' '}
+                {chosenServices.length === 1 ? 'service' : 'services'} ·{' '}
+                {formatDuration(totalMinutes)} · {formatMoney(totalPriceCents)}
+              </Badge>
+              {/* One gated service gates the visit. */}
+              {chosenServices.some((s) => s.requires_age_verification) && (
                 <Badge tone="info">Requires age verification</Badge>
               )}
-              {selectedService.requires_consultation && (
+              {chosenServices.some((s) => s.requires_consultation) && (
                 <Badge tone="info">Requires consultation</Badge>
               )}
             </div>
@@ -397,7 +422,7 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
       </Card>
 
       {/* Date & Time Selection */}
-      {serviceId && providerId && (
+      {serviceIds.length > 0 && providerId && (
         <Card>
           <CardHeader>
             <CardTitle>3. Select Date & Time</CardTitle>

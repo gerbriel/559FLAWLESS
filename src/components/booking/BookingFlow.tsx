@@ -85,7 +85,9 @@ export function BookingFlow({
     // An age-gated service still has to show its gate, so stay on step one.
     deepLinked && !deepLinked.requires_age_verification ? 'provider' : 'service'
   )
-  const [service, setService] = useState<BookableService | null>(deepLinked)
+  // A visit can be several services — a facial and a wax booked as one
+  // appointment occupying one continuous block, not two bookings side by side.
+  const [selected, setSelected] = useState<BookableService[]>(deepLinked ? [deepLinked] : [])
   const [addonIds, setAddonIds] = useState<number[]>([])
   const [provider, setProvider] = useState<BookableProvider | null>(null)
   const [ageConfirmed, setAgeConfirmed] = useState(false)
@@ -112,22 +114,70 @@ export function BookingFlow({
     totalCents: number
   } | null>(null)
 
+  /**
+   * The first service chosen, used wherever a single one is still meaningful —
+   * the deep link, the category for form requirements. Aggregates below are
+   * what the booking actually costs and takes.
+   */
+  const service = selected[0] ?? null
+  const hasSelection = selected.length > 0
+
+  // Only providers who offer EVERY chosen service. Booking a facial and a wax
+  // with someone who only does one of them is not a bookable appointment.
   const eligibleProviders = useMemo(
-    () => (service ? providers.filter((p) => p.service_ids.includes(service.id)) : []),
-    [providers, service]
+    () =>
+      hasSelection
+        ? providers.filter((p) => selected.every((s) => p.service_ids.includes(s.id)))
+        : [],
+    [providers, selected, hasSelection]
   )
 
+  // Add-ons offered by any chosen service, de-duplicated.
+  const availableAddons = useMemo(() => {
+    const byId = new Map<number, BookableService['addons'][number]>()
+    for (const s of selected) for (const a of s.addons) byId.set(a.id, a)
+    return [...byId.values()]
+  }, [selected])
+
   const selectedAddons = useMemo(
-    () => service?.addons.filter((a) => addonIds.includes(a.id)) ?? [],
-    [service, addonIds]
+    () => availableAddons.filter((a) => addonIds.includes(a.id)),
+    [availableAddons, addonIds]
   )
 
   const totalCents =
-    (service?.price_cents ?? 0) + selectedAddons.reduce((n, a) => n + a.price_cents, 0)
+    selected.reduce((n, s) => n + s.price_cents, 0) +
+    selectedAddons.reduce((n, a) => n + a.price_cents, 0)
   const totalMinutes =
-    (service?.duration_minutes ?? 0) + selectedAddons.reduce((n, a) => n + a.duration_minutes, 0)
+    selected.reduce((n, s) => n + s.duration_minutes, 0) +
+    selectedAddons.reduce((n, a) => n + a.duration_minutes, 0)
 
-  const ageGateSatisfied = !service?.requires_age_verification || ageConfirmed
+  // The strictest service sets the rule for the whole visit.
+  const requiresAge = selected.some((s) => s.requires_age_verification)
+  const minAge = Math.max(0, ...selected.map((s) => s.min_age))
+  const patchTestHours = Math.max(0, ...selected.map((s) => s.patch_test_hours))
+  const depositCents = selected.reduce((n, s) => n + s.deposit_cents, 0)
+
+  const ageGateSatisfied = !requiresAge || ageConfirmed
+
+  /** Add or remove a service, keeping selection order. */
+  function toggleService(s: BookableService) {
+    setSelected((cur) => {
+      const next = cur.some((x) => x.id === s.id)
+        ? cur.filter((x) => x.id !== s.id)
+        : [...cur, s]
+
+      // A provider or add-on chosen for the old set may not apply to the new
+      // one, so both are cleared rather than silently carried into an
+      // impossible booking.
+      setProvider(null)
+      setSelectedSlot(null)
+      setAddonIds((ids) => {
+        const stillOffered = new Set(next.flatMap((x) => x.addons.map((a) => a.id)))
+        return ids.filter((id) => stillOffered.has(id))
+      })
+      return next
+    })
+  }
 
   // ── Slot loading ─────────────────────────────────────────
   // The spinner is turned ON by whichever interaction starts a load (choosing a
@@ -135,11 +185,11 @@ export function BookingFlow({
   // keeps the effect a pure fetch with no synchronous setState of its own.
   const loadSlots = useCallback(
     async (from: string) => {
-      if (!service || !provider) return
+      if (!hasSelection || !provider) return
       try {
         const qs = new URLSearchParams({
           provider: provider.id,
-          service: String(service.id),
+          service: selected.map((x) => x.id).join(','),
           from,
           days: '7',
         })
@@ -170,7 +220,7 @@ export function BookingFlow({
   // ── Submit ───────────────────────────────────────────────
   async function submit(e: React.FormEvent) {
     e.preventDefault()
-    if (!service || !provider || !selectedSlot) return
+    if (!hasSelection || !provider || !selectedSlot) return
 
     setSubmitting(true)
     setError(null)
@@ -181,7 +231,7 @@ export function BookingFlow({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           provider_id: provider.id,
-          service_id: service.id,
+          service_ids: selected.map((x) => x.id),
           addon_ids: addonIds,
           starts_at: selectedSlot,
           first_name: form.first_name,
@@ -207,7 +257,7 @@ export function BookingFlow({
       }
 
       void trackEvent('booking_completed', {
-        service_id: service.id,
+        service_ids: selected.map((x) => x.id),
         provider_id: provider.id,
       })
 
@@ -333,7 +383,11 @@ export function BookingFlow({
         {/* ── Step 1: service ──────────────────────────── */}
         {step === 'service' && (
           <div>
-            <h2 className="display text-3xl">Choose a service</h2>
+            <h2 className="display text-3xl">Choose your services</h2>
+            <p className="mt-3 text-sm text-[var(--color-muted)]">
+              Pick as many as you would like in one visit — we will book them back to
+              back as a single appointment.
+            </p>
 
             <div className="mt-8 space-y-10">
               {groupByCategory(services).map(([catName, group]) => (
@@ -347,24 +401,39 @@ export function BookingFlow({
                       <button
                         key={s.id}
                         type="button"
+                        aria-pressed={selected.some((x) => x.id === s.id)}
                         onClick={() => {
-                          setService(s)
-                          setAddonIds([])
-                          setProvider(null)
-                          setSelectedSlot(null)
+                          toggleService(s)
+                          // Re-confirm age whenever the set changes: what was
+                          // attested to was a different booking.
                           setAgeConfirmed(false)
                           void trackEvent('service_selected', { service_id: s.id })
                         }}
                         className={cn(
-                          'flex flex-col items-start gap-2 p-5 text-left transition-colors',
-                          service?.id === s.id
+                          'flex items-start justify-between gap-3 p-5 text-left transition-colors',
+                          selected.some((x) => x.id === s.id)
                             ? 'bg-[var(--color-clay-soft)] dark:bg-[var(--color-surface)]'
                             : 'bg-[var(--color-background)] hover:bg-[var(--color-linen)] dark:hover:bg-[var(--color-surface)]'
                         )}
                       >
-                        <span className="text-base">{s.name}</span>
-                        <span className="text-xs text-[var(--color-muted)]">
-                          {formatDuration(s.duration_minutes)} · {formatMoney(s.price_cents)}
+                        <span className="flex flex-col gap-2">
+                          <span className="text-base">{s.name}</span>
+                          <span className="text-xs text-[var(--color-muted)]">
+                            {formatDuration(s.duration_minutes)} · {formatMoney(s.price_cents)}
+                          </span>
+                        </span>
+                        <span
+                          aria-hidden
+                          className={cn(
+                            'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center border',
+                            selected.some((x) => x.id === s.id)
+                              ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-white'
+                              : 'border-[var(--color-border)]'
+                          )}
+                        >
+                          {selected.some((x) => x.id === s.id) && (
+                            <Check className="h-3 w-3" strokeWidth={3} />
+                          )}
                         </span>
                       </button>
                     ))}
@@ -373,16 +442,25 @@ export function BookingFlow({
               ))}
             </div>
 
-            {/* Add-ons + age gate for the chosen service */}
-            {service && (
+            {/* Add-ons + gates for everything chosen */}
+            {hasSelection && (
               <div className="mt-12 border-t border-[var(--color-border)] pt-10">
-                {service.addons.length > 0 && (
+                {/* What the visit adds up to, before they commit to a time. */}
+                <div className="mb-8 flex flex-wrap items-baseline justify-between gap-3 border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+                  <span className="text-sm">
+                    {selected.length} {selected.length === 1 ? 'service' : 'services'} ·{' '}
+                    {formatDuration(totalMinutes)}
+                  </span>
+                  <span className="tabular-nums">{formatMoney(totalCents)}</span>
+                </div>
+
+                {availableAddons.length > 0 && (
                   <>
                     <h3 className="label-caps mb-5 text-[var(--color-accent)]">
                       Add to your service
                     </h3>
                     <div className="grid gap-px border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-2">
-                      {service.addons.map((a) => {
+                      {availableAddons.map((a) => {
                         const on = addonIds.includes(a.id)
                         return (
                           <button
@@ -423,7 +501,7 @@ export function BookingFlow({
                   </>
                 )}
 
-                {service.requires_age_verification && (
+                {requiresAge && (
                   <div className="mt-8 border-l-2 border-[var(--color-accent)] bg-[var(--color-clay-soft)] p-5 dark:bg-[var(--color-surface)]">
                     <p className="label-caps mb-3 text-[var(--color-clay-deep)] dark:text-[var(--color-accent)]">
                       Age confirmation required
@@ -442,15 +520,15 @@ export function BookingFlow({
                         className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
                       />
                       <span>
-                        I confirm I am {service.min_age} years of age or older.
+                        I confirm I am {minAge} years of age or older.
                       </span>
                     </label>
                   </div>
                 )}
 
-                {service.patch_test_hours > 0 && (
+                {patchTestHours > 0 && (
                   <p className="mt-6 text-sm text-[var(--color-muted)]">
-                    This treatment needs a patch test at least {service.patch_test_hours}{' '}
+                    This treatment needs a patch test at least {patchTestHours}{' '}
                     hours beforehand. If you have not had one with us, we will contact you
                     to arrange it before your appointment.
                   </p>
@@ -462,9 +540,11 @@ export function BookingFlow({
               <Button
                 onClick={() => {
                   setStep('provider')
-                  void trackEvent('booking_started', { service_id: service?.id })
+                  void trackEvent('booking_started', {
+                    service_ids: selected.map((x) => x.id),
+                  })
                 }}
-                disabled={!service || !ageGateSatisfied}
+                disabled={!hasSelection || !ageGateSatisfied}
                 size="lg"
               >
                 Continue
@@ -754,8 +834,8 @@ export function BookingFlow({
                     <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
                     Booking…
                   </>
-                ) : service && service.deposit_cents > 0 ? (
-                  `Book · ${formatMoney(service.deposit_cents)} deposit`
+                ) : depositCents > 0 ? (
+                  `Book · ${formatMoney(depositCents)} deposit`
                 ) : (
                   'Confirm booking'
                 )}
@@ -770,13 +850,28 @@ export function BookingFlow({
         <div className="border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
           <p className="label-caps mb-5 text-[var(--color-accent)]">Your booking</p>
 
-          {!service ? (
+          {!hasSelection ? (
             <p className="text-sm text-[var(--color-muted)]">Choose a service to begin.</p>
           ) : (
             <dl className="space-y-4 text-sm">
               <div>
-                <dt className="text-[var(--color-muted)]">Service</dt>
-                <dd className="mt-0.5">{service.name}</dd>
+                <dt className="text-[var(--color-muted)]">
+                  {selected.length === 1 ? 'Service' : 'Services'}
+                </dt>
+                <dd className="mt-0.5">
+                  {/* Listed rather than joined, so a two-service visit reads as
+                      two lines with their own prices. */}
+                  <ul className="space-y-1">
+                    {selected.map((x) => (
+                      <li key={x.id} className="flex justify-between gap-3">
+                        <span>{x.name}</span>
+                        <span className="shrink-0 tabular-nums text-[var(--color-muted)]">
+                          {formatMoney(x.price_cents)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </dd>
               </div>
 
               {selectedAddons.length > 0 && (
@@ -810,10 +905,10 @@ export function BookingFlow({
                 <dd className="tabular-nums">{formatMoney(totalCents)}</dd>
               </div>
 
-              {service.deposit_cents > 0 && (
+              {depositCents > 0 && (
                 <div className="flex justify-between border-t border-[var(--color-border)] pt-4">
                   <dt>Due now</dt>
-                  <dd className="tabular-nums">{formatMoney(service.deposit_cents)}</dd>
+                  <dd className="tabular-nums">{formatMoney(depositCents)}</dd>
                 </div>
               )}
             </dl>

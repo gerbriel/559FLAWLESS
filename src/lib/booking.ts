@@ -52,7 +52,8 @@ export type BookingError =
 
 export interface BookingRequest {
   providerId: string
-  serviceId: number
+  /** One or more services, booked as a single continuous appointment. */
+  serviceIds: number[]
   addonIds: number[]
   startsAt: string
   firstName: string
@@ -184,20 +185,28 @@ export async function loadAvailability(opts: {
   }
 }
 
+export interface PricedLine {
+  id: number
+  name: string
+  price_cents: number
+  duration_minutes: number
+}
+
 export interface PricedService {
-  service: {
-    id: number
-    name: string
-    deposit_cents: number
-    requires_age_verification: boolean
-    requires_consultation: boolean
-  }
-  addons: { id: number; name: string; price_cents: number; duration_minutes: number }[]
-  baseDuration: number
-  basePrice: number
+  /**
+   * Every service in the booking, in the order chosen. A client can book a
+   * facial and a wax in one visit, which is one appointment occupying one
+   * continuous block — not two bookings that happen to be adjacent.
+   */
+  services: PricedLine[]
+  addons: PricedLine[]
   durationMinutes: number
   bufferMinutes: number
   totalCents: number
+  depositCents: number
+  /** True if ANY service needs it — the strictest service sets the rule. */
+  requiresAgeVerification: boolean
+  requiresConsultation: boolean
 }
 
 export type PriceOutcome =
@@ -209,14 +218,31 @@ export type PriceOutcome =
  * provider, including add-ons. This is where the numbers come from — never the
  * request body.
  */
+/**
+ * Price one or more services for a provider, plus any add-ons.
+ *
+ * Prices and durations are read here and never taken from the client — the
+ * booking request names WHICH services, never what they cost. A per-provider
+ * override on `provider_services` wins over the catalogue price.
+ *
+ * Combining services is additive in time and money, but the gates are not:
+ * age verification and consultation apply if ANY service requires them, and the
+ * turnaround buffer is the largest any of them needs rather than the sum, since
+ * the room is reset once at the end.
+ */
 export async function priceService(
   providerId: string,
-  serviceId: number,
+  serviceIds: number[],
   addonIds: number[]
 ): Promise<PriceOutcome> {
   const supabase = createAdminClient()
 
-  const [{ data: service }, { data: link }] = await Promise.all([
+  // De-duplicate: booking the same service twice is a mis-click, not an intent
+  // to sit through it twice, and it would silently double the price.
+  const wanted = [...new Set(serviceIds)]
+  if (wanted.length === 0) return { ok: false, error: 'unknown_service' }
+
+  const [{ data: services }, { data: links }] = await Promise.all([
     supabase
       // One string literal: postgrest-js parses the select at the type level,
       // and `'a' + 'b'` widens to `string`, collapsing the result type.
@@ -224,20 +250,36 @@ export async function priceService(
       .select(
         'id, name, price_cents, duration_minutes, buffer_minutes, deposit_cents, is_active, requires_age_verification, requires_consultation'
       )
-      .eq('id', serviceId)
-      .maybeSingle(),
+      .in('id', wanted),
     supabase
       .from('provider_services')
-      .select('price_cents, duration_minutes, is_active')
+      .select('service_id, price_cents, duration_minutes, is_active')
       .eq('provider_id', providerId)
-      .eq('service_id', serviceId)
-      .maybeSingle(),
+      .in('service_id', wanted),
   ])
 
-  if (!service?.is_active) return { ok: false, error: 'unknown_service' }
-  if (!link?.is_active) return { ok: false, error: 'service_not_offered_by_provider' }
+  const active = (services ?? []).filter((s) => s.is_active)
+  if (active.length !== wanted.length) return { ok: false, error: 'unknown_service' }
 
-  let addons: PricedService['addons'] = []
+  const linkFor = new Map((links ?? []).filter((l) => l.is_active).map((l) => [l.service_id, l]))
+  if (linkFor.size !== wanted.length) {
+    return { ok: false, error: 'service_not_offered_by_provider' }
+  }
+
+  // Keep the caller's order so the appointment reads the way it was booked.
+  const ordered = wanted.map((id) => active.find((s) => s.id === id)!)
+
+  const priced: PricedLine[] = ordered.map((svc) => {
+    const link = linkFor.get(svc.id)!
+    return {
+      id: svc.id,
+      name: svc.name,
+      price_cents: link.price_cents ?? svc.price_cents,
+      duration_minutes: link.duration_minutes ?? svc.duration_minutes,
+    }
+  })
+
+  let addons: PricedLine[] = []
 
   if (addonIds.length > 0) {
     const [{ data: addonRows }, { data: allowed }] = await Promise.all([
@@ -246,39 +288,39 @@ export async function priceService(
         .select('id, name, price_cents, duration_minutes')
         .in('id', addonIds)
         .eq('is_active', true),
+      // An add-on has to be offered by at least one of the booked services.
       supabase
         .from('service_addon_links')
         .select('addon_id')
-        .eq('service_id', serviceId)
+        .in('service_id', wanted)
         .in('addon_id', addonIds),
     ])
 
     addons = addonRows ?? []
     if (addons.length !== addonIds.length) return { ok: false, error: 'unknown_addon' }
-    if ((allowed?.length ?? 0) !== addonIds.length) {
+
+    const permitted = new Set((allowed ?? []).map((a) => a.addon_id))
+    if (addonIds.some((id) => !permitted.has(id))) {
       return { ok: false, error: 'addon_not_available_for_service' }
     }
   }
 
-  const baseDuration = link.duration_minutes ?? service.duration_minutes
-  const basePrice = link.price_cents ?? service.price_cents
+  const sum = (rows: PricedLine[], key: 'price_cents' | 'duration_minutes') =>
+    rows.reduce((n, r) => n + r[key], 0)
 
   return {
     ok: true,
     priced: {
-      service: {
-        id: service.id,
-        name: service.name,
-        deposit_cents: service.deposit_cents,
-        requires_age_verification: service.requires_age_verification,
-        requires_consultation: service.requires_consultation,
-      },
+      services: priced,
       addons,
-      baseDuration,
-      basePrice,
-      durationMinutes: baseDuration + addons.reduce((n, a) => n + a.duration_minutes, 0),
-      bufferMinutes: service.buffer_minutes,
-      totalCents: basePrice + addons.reduce((n, a) => n + a.price_cents, 0),
+      durationMinutes:
+        sum(priced, 'duration_minutes') + sum(addons, 'duration_minutes'),
+      // One reset at the end of the visit, not one per service.
+      bufferMinutes: Math.max(...ordered.map((s) => s.buffer_minutes)),
+      totalCents: sum(priced, 'price_cents') + sum(addons, 'price_cents'),
+      depositCents: ordered.reduce((n, s) => n + s.deposit_cents, 0),
+      requiresAgeVerification: ordered.some((s) => s.requires_age_verification),
+      requiresConsultation: ordered.some((s) => s.requires_consultation),
     },
   }
 }
@@ -301,19 +343,19 @@ export async function createBooking(req: BookingRequest): Promise<BookingOutcome
   if ((count ?? 0) >= RATE_LIMIT_MAX) return failure('rate_limited', 429)
 
   // ── Price and duration, from the database ──────────────────
-  const outcome = await priceService(req.providerId, req.serviceId, req.addonIds)
+  const outcome = await priceService(req.providerId, req.serviceIds, req.addonIds)
   if (!outcome.ok) {
     return failure(outcome.error, outcome.error === 'unknown_service' ? 404 : 409)
   }
 
   const priced = outcome.priced
-  const { service, addons, baseDuration, basePrice, durationMinutes, bufferMinutes } = priced
+  const { services, addons, durationMinutes, bufferMinutes } = priced
 
-  if (service.requires_consultation) return failure('consultation_required', 409)
+  if (priced.requiresConsultation) return failure('consultation_required', 409)
 
   // The client's attestation is necessary but never sufficient — the service's
-  // own flag is what makes it required.
-  if (service.requires_age_verification && !req.ageAttested) {
+  // own flag is what makes it required, and one gated service gates the visit.
+  if (priced.requiresAgeVerification && !req.ageAttested) {
     return failure('age_verification_required', 403)
   }
 
@@ -350,7 +392,9 @@ export async function createBooking(req: BookingRequest): Promise<BookingOutcome
     .eq('id', 1)
     .maybeSingle()
 
-  const depositCents = service.deposit_cents || settings?.default_deposit_cents || 0
+  // Deposits add up across services; the studio-wide default only applies when
+  // none of the booked services set one of their own.
+  const depositCents = priced.depositCents || settings?.default_deposit_cents || 0
   const endsAt = new Date(requested.getTime() + durationMinutes * MINUTE_MS)
 
   const { data: appointment, error: insertError } = await supabase
@@ -383,21 +427,22 @@ export async function createBooking(req: BookingRequest): Promise<BookingOutcome
   }
 
   const lines = [
-    {
+    ...services.map((svc, i) => ({
       appointment_id: appointment.id,
-      service_id: service.id,
-      name_snapshot: service.name,
-      price_cents: basePrice,
-      duration_minutes: baseDuration,
-      sort_order: 0,
-    },
+      service_id: svc.id,
+      name_snapshot: svc.name,
+      price_cents: svc.price_cents,
+      duration_minutes: svc.duration_minutes,
+      sort_order: i,
+    })),
+    // Add-ons sort after every service, so the receipt reads services first.
     ...addons.map((a, i) => ({
       appointment_id: appointment.id,
       addon_id: a.id,
       name_snapshot: a.name,
       price_cents: a.price_cents,
       duration_minutes: a.duration_minutes,
-      sort_order: i + 1,
+      sort_order: services.length + i,
     })),
   ]
 
@@ -452,7 +497,8 @@ export const BOOKING_ERROR_MESSAGES: Record<BookingError, string> = {
 export interface StaffBookingRequest {
   clientId: string
   providerId: string
-  serviceId: number
+  /** One or more services, booked as a single continuous appointment. */
+  serviceIds: number[]
   addonIds: number[]
   startsAt: string
   notes: string | null
@@ -499,12 +545,11 @@ export async function createStaffBooking(req: StaffBookingRequest): Promise<Book
 
   // Same server-side pricing as a public booking: the caller names the service,
   // never what it costs.
-  const outcome = await priceService(req.providerId, req.serviceId, req.addonIds)
+  const outcome = await priceService(req.providerId, req.serviceIds, req.addonIds)
   if (!outcome.ok) {
     return failure(outcome.error, outcome.error === 'unknown_service' ? 404 : 409)
   }
-  const { service, addons, baseDuration, basePrice, durationMinutes, bufferMinutes } =
-    outcome.priced
+  const { services, addons, durationMinutes, bufferMinutes } = outcome.priced
 
   const { data: provider } = await supabase
     .from('profiles')
@@ -561,21 +606,22 @@ export async function createStaffBooking(req: StaffBookingRequest): Promise<Book
   }
 
   const lines = [
-    {
+    ...services.map((svc, i) => ({
       appointment_id: appointment.id,
-      service_id: service.id,
-      name_snapshot: service.name,
-      price_cents: basePrice,
-      duration_minutes: baseDuration,
-      sort_order: 0,
-    },
+      service_id: svc.id,
+      name_snapshot: svc.name,
+      price_cents: svc.price_cents,
+      duration_minutes: svc.duration_minutes,
+      sort_order: i,
+    })),
+    // Add-ons sort after every service, so the receipt reads services first.
     ...addons.map((a, i) => ({
       appointment_id: appointment.id,
       addon_id: a.id,
       name_snapshot: a.name,
       price_cents: a.price_cents,
       duration_minutes: a.duration_minutes,
-      sort_order: i + 1,
+      sort_order: services.length + i,
     })),
   ]
 
