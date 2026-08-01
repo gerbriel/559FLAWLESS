@@ -204,11 +204,15 @@ export async function POST(request: NextRequest) {
   }
 
   // The item trigger has recomputed subtotal and total from the lines; it reads
-  // tax_cents off the order, which was set at insert. Moving to `paid` assigns
-  // the order number and decrements stock.
+  // tax_cents off the order, which was set at insert. Moving out of `cart`
+  // assigns the order number and decrements stock.
+  //
+  // `completed`, not `paid`: the customer is holding the bottle. `paid` is what
+  // the Orders page treats as "still to fulfil", which is right for an online
+  // order waiting to be packed and wrong for a sale handed over at the counter.
   const { data: paid, error: payError } = await admin
     .from('orders')
-    .update({ status: 'paid', paid_at: new Date().toISOString() })
+    .update({ status: 'completed', paid_at: new Date().toISOString() })
     .eq('id', order.id)
     .select('id, order_number, subtotal_cents, tax_cents, total_cents')
     .single()
@@ -219,6 +223,25 @@ export async function POST(request: NextRequest) {
       { error: 'sale_failed', message: 'The sale was not completed. Nothing was charged.' },
       { status: 500 }
     )
+  }
+
+  // Record the money as well as the sale. Without this the order shows as
+  // fully outstanding on the ledger, because `payments` is what a balance is
+  // computed from — the Stripe webhook writes one for every online order and
+  // the counter has to do the same.
+  const { error: paymentError } = await admin.rpc('record_payment', {
+    p_amount_cents: paid.total_cents,
+    p_kind: 'product',
+    p_method: paymentMethod,
+    p_order: paid.id,
+    p_note: notes ?? null,
+  })
+
+  if (paymentError) {
+    // The sale itself stands — the customer has paid and has the product. A
+    // missing ledger row is a reconciliation problem, not a reason to fail the
+    // transaction in front of them.
+    console.error('pos payment record failed', paymentError, { orderId: paid.id })
   }
 
   return NextResponse.json({ ok: true, order: paid }, { status: 201 })

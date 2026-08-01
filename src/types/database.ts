@@ -1253,6 +1253,31 @@ export type Database = {
         }
         Returns: number
       }
+      /**
+       * Record money taken outside Stripe — cash, the studio's own card
+       * terminal, a gift card. Writes the same `payments` row the webhook
+       * does, so a balance is the arithmetic across both. Added in 025.
+       */
+      record_payment: {
+        Args: {
+          p_amount_cents: number
+          p_kind: 'deposit' | 'service' | 'product' | 'gift_card' | 'package' | 'refund'
+          p_method?: 'card' | 'cash' | 'gift_card' | 'package' | 'other'
+          /** Exactly one of p_appointment / p_order. */
+          p_appointment?: string | null
+          p_order?: number | null
+          p_note?: string | null
+        }
+        Returns: number
+      }
+      appointment_balance_cents: {
+        Args: { p_appointment: string }
+        Returns: number
+      }
+      order_balance_cents: {
+        Args: { p_order: number }
+        Returns: number
+      }
       gift_card_balance: {
         Args: { p_code: string }
         Returns: { balance_cents: number; is_active: boolean; expires_at: string | null }[]

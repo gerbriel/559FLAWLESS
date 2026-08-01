@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
 import { AppointmentStatusControl } from '@/components/shared/AppointmentStatusControl'
 import { ClientNoteForm } from '@/components/shared/ClientNoteForm'
+import { TakePayment, type PaymentRecord } from '@/components/shared/TakePayment'
 import { formatMoney, formatDuration } from '@/lib/utils'
 import { formatDateTimeInTimeZone } from '@/lib/time'
 import type { AppointmentStatus } from '@/types/database'
@@ -49,6 +50,21 @@ export default async function StaffAppointmentPage({ params }: Props) {
     duration_minutes: number
     sort_order: number
   }[]).sort((a, b) => a.sort_order - b.sort_order)
+
+  // Every payment against this appointment — the Stripe deposit and anything
+  // taken at the counter. The balance is the arithmetic, not a stored flag.
+  const { data: payments } = await supabase
+    .from('payments')
+    .select('id, amount_cents, method, kind, note, created_at, status')
+    .eq('appointment_id', id)
+    .eq('status', 'succeeded')
+    .order('created_at')
+
+  const takenCents = (payments ?? []).reduce((sum, p) => sum + p.amount_cents, 0)
+  // A treatment that did not happen is not billed; a forfeited deposit has
+  // already been taken and stays taken.
+  const notBilled = appointment.status === 'cancelled' || appointment.status === 'no_show'
+  const balanceCents = notBilled ? 0 : Math.max(appointment.total_cents - takenCents, 0)
 
   // Latest intake flags, if this booking is tied to an account.
   const { data: intake } = appointment.client_id
@@ -132,6 +148,16 @@ export default async function StaffAppointmentPage({ params }: Props) {
           </div>
           <span className="tabular-nums">{formatMoney(appointment.total_cents)}</span>
         </div>
+      </div>
+
+      <div className="mt-8">
+        <TakePayment
+          appointmentId={appointment.id}
+          totalCents={appointment.total_cents}
+          balanceCents={balanceCents}
+          payments={(payments ?? []) as PaymentRecord[]}
+          settled={notBilled}
+        />
       </div>
 
       {appointment.client_notes && (
