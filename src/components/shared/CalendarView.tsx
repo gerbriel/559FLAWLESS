@@ -11,6 +11,7 @@ import {
   formatTimeInTimeZone,
   dayOfWeekInTimeZone,
   monthLabelForDateKey,
+  dayLabelForDateKey,
 } from '@/lib/time'
 import type { AppointmentStatus } from '@/types/database'
 
@@ -321,7 +322,7 @@ function DayView({ date, appointments, providers, timezone, onAppointmentClick, 
   return (
     <div>
       <h2 className="display mb-4 text-2xl">
-        {DAY_NAMES_FULL[dow]}, {monthLabelForDateKey(date)} {d}
+        {dayLabelForDateKey(date)}
         {isToday && <Badge tone="neutral" className="ml-3">Today</Badge>}
       </h2>
 
@@ -510,7 +511,7 @@ function MonthView({ month, appointments, providers, timezone, todayKey, onAppoi
 
   return (
     <div>
-      <h2 className="display mb-4 text-2xl">{monthLabel} {year}</h2>
+      <h2 className="display mb-4 text-2xl">{monthLabel}</h2>
       
       {/* Day headers */}
       <div className="grid grid-cols-7 gap-px border border-[var(--color-border)] bg-[var(--color-border)]">

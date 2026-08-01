@@ -194,7 +194,25 @@ export function timeZoneAbbreviation(instant: Date, timeZone: string): string {
   return parts.find((p) => p.type === 'timeZoneName')?.value ?? timeZone
 }
 
-/** Human month label for a date key, e.g. 'March 2026'. */
+/**
+ * Full day label for a date key, e.g. 'Saturday, August 1, 2026'.
+ *
+ * Built from the key's own parts rather than a Date in some zone: a date key is
+ * already a calendar day, and reinterpreting it through a timezone is how you
+ * end up displaying the day before.
+ */
+export function dayLabelForDateKey(dateKey: string): string {
+  const [y, mo, d] = dateKey.split('-').map(Number)
+  return new Date(Date.UTC(y, mo - 1, d)).toLocaleDateString('en-US', {
+    timeZone: 'UTC',
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  })
+}
+
+/** Human month label for a date key, e.g. 'March 2026'. Includes the year. */
 export function monthLabelForDateKey(dateKey: string): string {
   const [y, mo] = dateKey.split('-').map(Number)
   return new Date(Date.UTC(y, mo - 1, 1)).toLocaleDateString('en-US', {
