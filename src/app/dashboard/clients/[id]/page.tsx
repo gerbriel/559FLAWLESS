@@ -32,6 +32,7 @@ export default async function ClientDetailPage({ params }: Props) {
     { data: signatures },
     { data: patchTests },
     { data: analytics },
+    { data: purchases },
   ] = await Promise.all([
     supabase
       .from('profiles')
@@ -76,6 +77,17 @@ export default async function ClientDetailPage({ params }: Props) {
       .eq('user_id', id)
       .order('created_at', { ascending: false })
       .limit(100),
+    // What they have bought — in the room and online — so the history is the
+    // whole relationship rather than only the treatments.
+    supabase
+      .from('orders')
+      .select(
+        'id, order_number, status, channel, payment_method, total_cents, paid_at, created_at, order_items(name_snapshot, qty, unit_price_cents)'
+      )
+      .eq('client_id', id)
+      .in('status', ['paid', 'fulfilling', 'ready_for_pickup', 'shipped', 'completed'])
+      .order('created_at', { ascending: false })
+      .limit(20),
   ])
 
   // No row means either the id is wrong or RLS filtered it out — either way
@@ -259,6 +271,75 @@ export default async function ClientDetailPage({ params }: Props) {
                     </Link>
                   </li>
                 ))}
+              </ul>
+            )}
+          </section>
+
+          {/* ── Purchases ─────────────────────────────── */}
+          <section>
+            <div className="flex flex-wrap items-baseline justify-between gap-4">
+              <h2 className="display text-2xl">Purchases</h2>
+              {(purchases?.length ?? 0) > 0 && (
+                <span className="text-sm tabular-nums text-[var(--color-muted)]">
+                  {formatMoney(
+                    (purchases ?? []).reduce((sum, o) => sum + o.total_cents, 0)
+                  )}{' '}
+                  in products
+                </span>
+              )}
+            </div>
+
+            {(purchases?.length ?? 0) === 0 ? (
+              <p className="mt-4 text-sm text-[var(--color-muted)]">
+                Nothing bought yet.
+              </p>
+            ) : (
+              <ul className="mt-6 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
+                {(purchases ?? []).map((o) => {
+                  const items = (o.order_items ?? []) as {
+                    name_snapshot: string
+                    qty: number
+                    unit_price_cents: number
+                  }[]
+
+                  return (
+                    <li key={o.id} className="py-4">
+                      <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 text-sm">
+                        <span>
+                          {new Date(o.paid_at ?? o.created_at).toLocaleDateString('en-US', {
+                            month: 'short',
+                            day: 'numeric',
+                            year: 'numeric',
+                          })}
+                        </span>
+
+                        <span className="flex items-center gap-2">
+                          <Badge tone={o.channel === 'in_store' ? 'accent' : 'neutral'}>
+                            {o.channel === 'in_store' ? 'In studio' : 'Online'}
+                          </Badge>
+                          {o.payment_method && (
+                            <span className="text-xs text-[var(--color-muted)]">
+                              {o.payment_method}
+                            </span>
+                          )}
+                          <span className="tabular-nums">{formatMoney(o.total_cents)}</span>
+                        </span>
+                      </div>
+
+                      <p className="mt-1 text-sm text-[var(--color-muted)]">
+                        {items
+                          .map((i) => (i.qty > 1 ? `${i.name_snapshot} ×${i.qty}` : i.name_snapshot))
+                          .join(', ')}
+                      </p>
+
+                      {o.order_number && (
+                        <p className="mt-0.5 text-xs tabular-nums text-[var(--color-muted)]">
+                          {o.order_number}
+                        </p>
+                      )}
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </section>

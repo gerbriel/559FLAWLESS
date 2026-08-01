@@ -96,6 +96,15 @@ export type Profile = {
   terms_version_accepted: number | null
   privacy_accepted_at: string | null
 
+  // ── Added in 023 ────────────────────────────────────────────
+  /**
+   * Set once the client has supplied what signing in cannot provide — a phone
+   * number and a date of birth. Null means the "finish your profile" step is
+   * still owed. Prefer deriving from the fields themselves; this is a marker,
+   * not the source of truth.
+   */
+  profile_completed_at: string | null
+
   created_at: string
   updated_at: string
 }
@@ -254,6 +263,16 @@ export type Appointment = {
   google_event_id: string | null
   reminder_sent_at: string | null
   created_by: string | null
+
+  // ── Intake tracking, added in 023 ───────────────────────────
+  /**
+   * When every form this appointment requires was submitted. Null while any are
+   * outstanding — the client is prompted right after booking and reminded
+   * before the visit.
+   */
+  intake_completed_at: string | null
+  intake_reminder_sent_at: string | null
+
   created_at: string
   updated_at: string
 }
@@ -537,6 +556,11 @@ export type Order = {
   sold_by: string | null
   appointment_id: string | null
   notes: string | null
+  /** 'online' = bought through Stripe; 'in_store' = rung up at the desk. */
+  channel: 'online' | 'in_store'
+  /** Only set for in_store sales — an online order pays through Stripe. */
+  payment_method: 'cash' | 'card' | 'other' | null
+  staff_notes: string | null
   created_at: string
   updated_at: string
 }
@@ -589,6 +613,11 @@ export type Announcement = {
   dismiss_scope: 'session' | 'persist' | 'never'
   /** Modal and corner only: seconds to wait before appearing. */
   delay_seconds: number
+
+  // ── Custom colours, added in 021 ────────────────────────────
+  /** #RRGGBB overriding the variant preset, or null to use the preset. */
+  background_color: string | null
+  text_color: string | null
 }
 
 // ── Added in 014–016 ──────────────────────────────────────────

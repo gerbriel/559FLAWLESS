@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 import { TestimonialModeration } from '@/components/shared/TestimonialModeration'
-import { AnnouncementManager } from '@/components/shared/AnnouncementManager'
+import { AdminAnnouncementSettings } from '@/components/shared/AdminAnnouncementSettings'
 
 export const dynamic = 'force-dynamic'
 
@@ -69,7 +69,7 @@ export default async function MarketingPage() {
         </p>
 
         <div className="mt-6">
-          <AnnouncementManager announcements={announcements ?? []} />
+          <AdminAnnouncementSettings announcements={announcements ?? []} />
         </div>
       </section>
     </div>

@@ -103,6 +103,27 @@ const TONE: Record<string, string> = {
   urgent: 'bg-red-800 text-white',
 }
 
+/**
+ * Inline style for an announcement that overrides its template's colours.
+ *
+ * Returns undefined when nothing is overridden, so the Tailwind class keeps
+ * working — including its dark-mode variants, which a hard-coded colour would
+ * otherwise silently defeat.
+ */
+function customStyle(a: LiveAnnouncement): React.CSSProperties | undefined {
+  if (!a.background_color && !a.text_color) return undefined
+  return {
+    ...(a.background_color ? { background: a.background_color } : {}),
+    ...(a.text_color ? { color: a.text_color } : {}),
+  }
+}
+
+/** Drop the template's colour classes when a custom one replaces them. */
+function toneClass(a: LiveAnnouncement): string | undefined {
+  if (a.background_color && a.text_color) return undefined
+  return TONE[a.variant] ?? TONE.info
+}
+
 function Cta({ a, className }: { a: LiveAnnouncement; className?: string }) {
   if (!a.link_url) return null
   return (
@@ -116,7 +137,7 @@ function Cta({ a, className }: { a: LiveAnnouncement; className?: string }) {
 // ── Banner ──────────────────────────────────────────────────
 function Banner({ a, onDismiss }: Props) {
   return (
-    <div className={cn('relative', TONE[a.variant] ?? TONE.info)}>
+    <div className={cn('relative', toneClass(a))} style={customStyle(a)}>
       {/* Right padding clears the close button so long text never runs under it. */}
       <div className="flex min-h-11 flex-wrap items-center justify-center gap-x-3 gap-y-0.5 py-2 pl-4 pr-14 text-center sm:pr-16">
         {a.image_url && (
@@ -145,7 +166,13 @@ function Banner({ a, onDismiss }: Props) {
 function Inline({ a, onDismiss }: Props) {
   return (
     <div className="mx-auto w-full max-w-6xl px-6 pt-8 lg:px-10">
-      <div className="relative flex flex-wrap items-center gap-5 border-l-2 border-[var(--color-accent)] bg-[var(--color-clay-soft)] p-5 dark:bg-[var(--color-surface)]">
+      <div
+        className={cn(
+          'relative flex flex-wrap items-center gap-5 border-l-2 border-[var(--color-accent)] p-5',
+          a.background_color ? '' : 'bg-[var(--color-clay-soft)] dark:bg-[var(--color-surface)]'
+        )}
+        style={customStyle(a)}
+      >
         {a.image_url && (
           <span className="relative h-14 w-14 shrink-0 overflow-hidden">
             <Image src={a.image_url} alt="" fill sizes="56px" className="object-contain" />

@@ -19,18 +19,27 @@ type FormRequirement = {
 }
 
 /**
- * Checks form requirements for a service and displays status.
- * Used in the booking flow to ensure all required forms are completed
- * before allowing booking confirmation.
+ * The forms a service requires, and where each one stands.
+ *
+ * Shown after a booking is confirmed rather than before it: the slot is the
+ * commitment, and the paperwork is a condition of being treated on the day —
+ * a different deadline. `returnTo` is where each form sends the client back to,
+ * so the prompt can be reused anywhere the forms are owed.
  */
 export function FormRequirementChecker({
   serviceId,
   categoryId,
   onRequirementsChecked,
+  returnTo = '/book',
+  heading,
+  intro,
 }: {
   serviceId: number
   categoryId: number
   onRequirementsChecked?: (allComplete: boolean) => void
+  returnTo?: string
+  heading?: string
+  intro?: string
 }) {
   const [requirements, setRequirements] = useState<FormRequirement[]>([])
   const [loading, setLoading] = useState(true)
@@ -86,8 +95,8 @@ export function FormRequirementChecker({
                 .maybeSingle()
 
               let status: FormRequirement['status'] = 'required'
-              let expiresAt = signature?.expires_at
-              let lastCompletedAt = signature?.signed_at
+              const expiresAt = signature?.expires_at
+              const lastCompletedAt = signature?.signed_at
 
               if (signature) {
                 if (signature.expires_at) {
@@ -217,12 +226,15 @@ export function FormRequirementChecker({
 
         <div className="flex-1">
           <p className="label-caps mb-3 text-[var(--color-foreground)]">
-            {hasRequired
-              ? 'Required forms'
-              : hasExpiring
-                ? 'Forms expiring soon'
-                : 'All forms complete'}
+            {heading ??
+              (hasRequired
+                ? 'Required forms'
+                : hasExpiring
+                  ? 'Forms expiring soon'
+                  : 'All forms complete')}
           </p>
+
+          {intro && <p className="mb-4 text-sm text-[var(--color-muted)]">{intro}</p>}
 
           <ul className="space-y-3">
             {requirements.map((req) => (
@@ -258,7 +270,7 @@ export function FormRequirementChecker({
                 </div>
 
                 {(req.status === 'required' || req.status === 'expires_soon') && (
-                  <Link href={`/account/forms?form=${req.slug}&return=/book`}>
+                  <Link href={`/account/forms?form=${req.slug}&return=${encodeURIComponent(returnTo)}`}>
                     <Button size="sm" variant="subtle">
                       {req.status === 'required' ? 'Complete' : 'Renew'}
                     </Button>
@@ -268,10 +280,10 @@ export function FormRequirementChecker({
             ))}
           </ul>
 
-          {hasRequired && (
+          {hasRequired && !intro && (
             <p className="mt-4 text-sm text-[var(--color-muted)]">
-              Please complete all required forms before confirming your appointment.
-              You&apos;ll be able to return to this booking after submitting each form.
+              Please complete these before your visit. You will be brought back here
+              after each one.
             </p>
           )}
         </div>

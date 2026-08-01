@@ -33,23 +33,18 @@ export default async function DashboardLayout({
 
   const role = profile.role as UserRole
 
-  const [{ count: unreadNotifications }, { count: unreadThreads }, { count: pendingApprovals }] =
-    await Promise.all([
-      supabase
-        .from('notifications')
-        .select('id', { count: 'exact', head: true })
-        .eq('user_id', user.id)
-        .is('read_at', null),
-      supabase
-        .from('message_threads')
-        .select('id', { count: 'exact', head: true })
-        .eq('staff_unread', true)
-        .neq('status', 'archived'),
-      supabase
-        .from('inventory_change_requests')
-        .select('id', { count: 'exact', head: true })
-        .eq('status', 'pending'),
-    ])
+  const [{ count: unreadNotifications }, { count: unreadThreads }] = await Promise.all([
+    supabase
+      .from('notifications')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+      .is('read_at', null),
+    supabase
+      .from('message_threads')
+      .select('id', { count: 'exact', head: true })
+      .eq('staff_unread', true)
+      .neq('status', 'archived'),
+  ])
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -81,11 +76,7 @@ export default async function DashboardLayout({
       </header>
 
       <div className="flex flex-1 flex-col lg:flex-row">
-        <DashboardNav
-          role={role}
-          unreadThreads={unreadThreads ?? 0}
-          pendingApprovals={pendingApprovals ?? 0}
-        />
+        <DashboardNav role={role} unreadThreads={unreadThreads ?? 0} />
         <main className="min-w-0 flex-1 px-6 py-10 lg:px-10">{children}</main>
       </div>
     </div>

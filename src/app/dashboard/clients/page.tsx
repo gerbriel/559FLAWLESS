@@ -110,7 +110,25 @@ export default async function ClientsPage({ searchParams }: Props) {
         <NewClientForm />
       </div>
 
-      <form className="mt-8 max-w-md">
+      {/* View switcher — clients and newsletter signups are the same audience
+          seen two ways, so they live side by side rather than in separate
+          sections of the dashboard. */}
+      <nav className="mt-8 flex flex-wrap gap-x-7 gap-y-2" aria-label="View">
+        <Link
+          href="/dashboard/clients"
+          className="label-caps border-b border-[var(--color-foreground)] pb-1"
+        >
+          Clients
+        </Link>
+        <Link
+          href="/dashboard/clients/newsletter"
+          className="label-caps pb-1 text-[var(--color-muted)]"
+        >
+          Newsletter
+        </Link>
+      </nav>
+
+      <form className="mt-6 max-w-md">
         <Input
           type="search"
           name="q"

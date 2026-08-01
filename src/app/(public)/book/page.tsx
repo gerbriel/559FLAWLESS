@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { Container, Section } from '@/components/ui/section'
 import { BookingFlow, type BookableService, type BookableProvider } from '@/components/booking/BookingFlow'
@@ -50,7 +51,7 @@ export default async function BookPage({ searchParams }: Props) {
       user
         ? supabase
             .from('profiles')
-            .select('first_name, last_name, email')
+            .select('role, first_name, last_name, email, phone, date_of_birth')
             .eq('id', user.id)
             .maybeSingle()
         : Promise.resolve({ data: null }),
@@ -129,8 +130,32 @@ export default async function BookPage({ searchParams }: Props) {
   }))
 
   const profile = profileRes?.data as
-    | { first_name: string | null; last_name: string | null; email: string | null }
+    | {
+        role: string
+        first_name: string | null
+        last_name: string | null
+        email: string | null
+        phone: string | null
+        date_of_birth: string | null
+      }
     | null
+
+  // Booking requires an account. The studio holds treatment history, consent
+  // signatures and health answers against a person, and a guest booking has
+  // nowhere to put any of it — the record would start over every visit.
+  const bookingUrl = `/book${serviceSlug ? `?service=${encodeURIComponent(serviceSlug)}` : ''}`
+  if (!user) {
+    redirect(`/login?next=${encodeURIComponent(bookingUrl)}`)
+  }
+
+  // Signed in but missing the details a booking needs. Same reasoning as the
+  // auth callback; this catches the account made before that step existed.
+  if (
+    profile?.role === 'client' &&
+    (!profile.first_name?.trim() || !profile.phone?.trim() || !profile.date_of_birth)
+  ) {
+    redirect(`/account/complete?next=${encodeURIComponent(bookingUrl)}`)
+  }
 
   return (
     <Section>

@@ -99,6 +99,46 @@ export default async function SettingsPage() {
         )}
       </section>
 
+      {userIsAdmin && (
+        <section className="mt-14">
+          <h2 className="display text-2xl">Site and legal</h2>
+          <p className="mt-2 text-sm text-[var(--color-muted)]">
+            The pages clients are asked to agree to, and what appears across the site.
+          </p>
+
+          <ul className="mt-6 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
+            <li className="flex flex-wrap items-center justify-between gap-4 py-4">
+              <div>
+                <p className="text-sm">Privacy Policy and Terms of Service</p>
+                <p className="text-xs text-[var(--color-muted)]">
+                  Editing either one publishes a new version and keeps the old one, so
+                  what a client agreed to on the day stays on the record.
+                </p>
+              </div>
+              <Link href="/dashboard/settings/legal">
+                <Button variant="outline" size="sm">
+                  Edit
+                </Button>
+              </Link>
+            </li>
+
+            <li className="flex flex-wrap items-center justify-between gap-4 py-4">
+              <div>
+                <p className="text-sm">Announcements, banners and tracking</p>
+                <p className="text-xs text-[var(--color-muted)]">
+                  Also reachable from Marketing.
+                </p>
+              </div>
+              <Link href="/dashboard/settings/admin">
+                <Button variant="outline" size="sm">
+                  Open
+                </Button>
+              </Link>
+            </li>
+          </ul>
+        </section>
+      )}
+
       <section className="mt-14">
         <h2 className="display text-2xl">Upcoming closures</h2>
         {(closures?.length ?? 0) === 0 ? (

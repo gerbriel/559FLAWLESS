@@ -9,7 +9,8 @@ import {
   MessageSquare,
   BarChart3,
   Package,
-  ClipboardCheck,
+  Scissors,
+  ScanLine,
   ShoppingBag,
   Megaphone,
   Settings,
@@ -24,7 +25,7 @@ interface NavItem {
   icon: typeof LayoutDashboard
   /** Lowest role that may see this item. */
   visible: (role: UserRole) => boolean
-  badge?: 'threads' | 'approvals'
+  badge?: 'threads'
 }
 
 const ITEMS: NavItem[] = [
@@ -45,17 +46,22 @@ const ITEMS: NavItem[] = [
     badge: 'threads',
   },
   {
+    href: '/dashboard/sell',
+    label: 'Sell',
+    icon: ScanLine,
+    visible: (r) => isFrontDesk(r),
+  },
+  {
+    href: '/dashboard/services',
+    label: 'Services',
+    icon: Scissors,
+    visible: (r) => isFrontDesk(r),
+  },
+  {
     href: '/dashboard/inventory',
     label: 'Inventory',
     icon: Package,
     visible: () => true,
-  },
-  {
-    href: '/dashboard/inventory/approvals',
-    label: 'Approvals',
-    icon: ClipboardCheck,
-    visible: (r) => isManager(r),
-    badge: 'approvals',
   },
   {
     href: '/dashboard/orders',
@@ -86,11 +92,9 @@ const ITEMS: NavItem[] = [
 export function DashboardNav({
   role,
   unreadThreads,
-  pendingApprovals,
 }: {
   role: UserRole
   unreadThreads: number
-  pendingApprovals: number
 }) {
   const pathname = usePathname()
   const items = ITEMS.filter((i) => i.visible(role))
@@ -108,7 +112,8 @@ export function DashboardNav({
               ? pathname === '/dashboard'
               : pathname === item.href ||
                 (pathname.startsWith(`${item.href}/`) &&
-                  // Keep "Inventory" from lighting up on the approvals page.
+                  // A parent must not light up when a more specific item owns
+                  // the current path.
                   !items.some(
                     (other) =>
                       other !== item &&
@@ -116,12 +121,7 @@ export function DashboardNav({
                       pathname.startsWith(other.href)
                   ))
 
-          const count =
-            item.badge === 'threads'
-              ? unreadThreads
-              : item.badge === 'approvals'
-                ? pendingApprovals
-                : 0
+          const count = item.badge === 'threads' ? unreadThreads : 0
 
           const Icon = item.icon
 

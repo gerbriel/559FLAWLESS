@@ -1,6 +1,8 @@
 import Link from 'next/link'
+import { Suspense } from 'react'
 import type { Metadata } from 'next'
 import { LoginForm } from '@/components/shared/LoginForm'
+import { GoogleSignIn } from '@/components/shared/GoogleSignIn'
 
 export const metadata: Metadata = {
   title: 'Sign In',
@@ -22,6 +24,10 @@ export default async function LoginPage({ searchParams }: Props) {
       </p>
 
       <div className="mt-10">
+        {/* Reads `next` from the URL, so it needs a boundary to prerender around. */}
+        <Suspense fallback={null}>
+          <GoogleSignIn label="Sign in with Google" />
+        </Suspense>
         <LoginForm next={next} />
       </div>
 
@@ -32,7 +38,7 @@ export default async function LoginPage({ searchParams }: Props) {
         </Link>
       </p>
       <p className="mt-3 text-sm text-[var(--color-muted)]">
-        You do not need an account to book — it just keeps everything in one place.
+        You will need an account to book, so we can keep your forms and history together.
       </p>
     </div>
   )

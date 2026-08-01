@@ -1,6 +1,6 @@
 'use client'
 
-import type { Announcement } from '@/types/database'
+import type { Announcement, AnnouncementAudience } from '@/types/database'
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
@@ -9,8 +9,61 @@ import { Button } from '@/components/ui/button'
 import { Input, Textarea, Field, Select } from '@/components/ui/field'
 import { Badge } from '@/components/ui/badge'
 import { createClient } from '@/lib/supabase/client'
+import { cn } from '@/lib/utils'
 import { Plus, Trash2, Edit2 } from 'lucide-react'
 
+type Variant = 'info' | 'promo' | 'urgent'
+
+/**
+ * The three presets, with the colours they actually render as.
+ *
+ * `swatch` and `ink` are duplicated from the announcement styles rather than
+ * imported, because these are what the *preview* paints — if the two ever
+ * diverge the preview would lie, and a wrong preview is worse than none.
+ */
+const TEMPLATES: { value: Variant; label: string; hint: string; swatch: string; ink: string }[] = [
+  {
+    value: 'info',
+    label: 'Quiet',
+    hint: 'Studio news, hours, notices.',
+    swatch: '#2b2320',
+    ink: '#faf7f5',
+  },
+  {
+    value: 'promo',
+    label: 'Offer',
+    hint: 'Specials and new-client pricing.',
+    swatch: '#efe7e1',
+    ink: '#2b2320',
+  },
+  {
+    value: 'urgent',
+    label: 'Urgent',
+    hint: 'Closures and same-day changes.',
+    swatch: '#b3261e',
+    ink: '#ffffff',
+  },
+]
+
+/** Relative luminance per WCAG 2.1, for the contrast check below. */
+function luminance(hex: string): number | null {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex.trim())
+  if (!m) return null
+  const channels = [0, 2, 4].map((i) => {
+    const v = parseInt(m[1].slice(i, i + 2), 16) / 255
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+}
+
+/** WCAG contrast ratio, 1–21. Null if either colour isn't a #RRGGBB. */
+function contrastRatio(a: string, b: string): number | null {
+  const la = luminance(a)
+  const lb = luminance(b)
+  if (la === null || lb === null) return null
+  const [hi, lo] = la > lb ? [la, lb] : [lb, la]
+  return (hi + 0.05) / (lo + 0.05)
+}
 
 interface Props {
   announcements: Announcement[]
@@ -26,6 +79,8 @@ export function AdminAnnouncementSettings({ announcements: initialAnnouncements 
     link_url: '',
     link_label: '',
     variant: 'info' as 'info' | 'promo' | 'urgent',
+    background_color: '',
+    text_color: '',
     starts_at: '',
     ends_at: '',
     is_active: true,
@@ -42,6 +97,20 @@ export function AdminAnnouncementSettings({ announcements: initialAnnouncements 
     priority: 0,
   })
   const [loading, setLoading] = useState(false)
+
+  const preset = TEMPLATES.find((t) => t.value === formData.variant) ?? TEMPLATES[0]
+
+  // A banner nobody can read is worse than no banner. Warn rather than block:
+  // the studio may be pairing a colour with an image where the rule doesn't
+  // apply, and it is their sign to hang.
+  const ratio = contrastRatio(
+    formData.background_color || preset.swatch,
+    formData.text_color || preset.ink
+  )
+  const contrastWarning =
+    ratio !== null && ratio < 4.5
+      ? `Those two colours only reach ${ratio.toFixed(1)}:1 contrast. Under about 4.5:1 the text gets hard to read — try a darker text or a lighter background.`
+      : null
   const [error, setError] = useState<string | null>(null)
 
   const resetForm = () => {
@@ -51,6 +120,8 @@ export function AdminAnnouncementSettings({ announcements: initialAnnouncements 
       link_url: '',
       link_label: '',
       variant: 'info',
+      background_color: '',
+      text_color: '',
       starts_at: '',
       ends_at: '',
       is_active: true,
@@ -75,6 +146,8 @@ export function AdminAnnouncementSettings({ announcements: initialAnnouncements 
       link_url: announcement.link_url ?? '',
       link_label: announcement.link_label ?? '',
       variant: announcement.variant,
+      background_color: announcement.background_color ?? '',
+      text_color: announcement.text_color ?? '',
       starts_at: announcement.starts_at ? announcement.starts_at.split('T')[0] : '',
       ends_at: announcement.ends_at ? announcement.ends_at.split('T')[0] : '',
       is_active: announcement.is_active,
@@ -106,12 +179,14 @@ export function AdminAnnouncementSettings({ announcements: initialAnnouncements 
     try {
       const supabase = createClient()
 
-      const data: any = {
+      const data: Partial<Announcement> = {
         title: formData.title.trim(),
         body: formData.body.trim() || null,
         link_url: formData.link_url.trim() || null,
         link_label: formData.link_label.trim() || null,
         variant: formData.variant,
+        background_color: formData.background_color || null,
+        text_color: formData.text_color || null,
         starts_at: formData.starts_at ? new Date(formData.starts_at).toISOString() : null,
         ends_at: formData.ends_at ? new Date(formData.ends_at).toISOString() : null,
         is_active: formData.is_active,
@@ -123,10 +198,9 @@ export function AdminAnnouncementSettings({ announcements: initialAnnouncements 
         dismiss_scope: formData.dismiss_scope,
         delay_seconds: Number(formData.delay_seconds) || 0,
 
-        target_audience:
-          formData.audience_type === 'role'
-            ? { type: 'role', roles: formData.audience_roles }
-            : { type: formData.audience_type },
+        target_audience: (formData.audience_type === 'role'
+          ? { type: 'role', roles: formData.audience_roles }
+          : { type: formData.audience_type }) as AnnouncementAudience,
         // One path per line, blanks ignored. Empty means every page.
         target_pages: formData.target_pages
           .split('\n')
@@ -352,17 +426,149 @@ export function AdminAnnouncementSettings({ announcements: initialAnnouncements 
               </Field>
             </div>
 
-            <Field label="Variant" htmlFor="variant">
-              <Select
-                id="variant"
-                value={formData.variant}
-                onChange={(e) => setFormData({ ...formData, variant: e.target.value as any })}
-              >
-                <option value="info">Info (Blue)</option>
-                <option value="promo">Promo (Green)</option>
-                <option value="urgent">Urgent (Red)</option>
-              </Select>
-            </Field>
+            {/* ── Template ─────────────────────────────────── */}
+            <div className="border-t border-[var(--color-border)] pt-5">
+              <p className="label-caps mb-1 text-[var(--color-accent)]">Template</p>
+              <p className="mb-4 text-sm text-[var(--color-muted)]">
+                A starting point for the colours. Override either one below if you want
+                something specific.
+              </p>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                {TEMPLATES.map((t) => {
+                  const active = formData.variant === t.value
+                  return (
+                    <button
+                      key={t.value}
+                      type="button"
+                      onClick={() =>
+                        setFormData({
+                          ...formData,
+                          variant: t.value,
+                          // Switching template clears a stale custom colour,
+                          // otherwise the swatch you picked silently wins and the
+                          // template appears not to work.
+                          background_color: '',
+                          text_color: '',
+                        })
+                      }
+                      aria-pressed={active}
+                      className={cn(
+                        'border p-3 text-left transition-colors',
+                        active
+                          ? 'border-[var(--color-foreground)]'
+                          : 'border-[var(--color-border)] hover:border-[var(--color-muted)]'
+                      )}
+                    >
+                      <span
+                        className="mb-2 block h-8 w-full border border-black/10"
+                        style={{ background: t.swatch, color: t.ink }}
+                      >
+                        <span className="label-caps px-2 leading-8">Aa</span>
+                      </span>
+                      <span className="text-sm">{t.label}</span>
+                      <span className="block text-xs text-[var(--color-muted)]">{t.hint}</span>
+                    </button>
+                  )
+                })}
+              </div>
+
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <Field
+                  label="Background colour"
+                  htmlFor="background_color"
+                  hint="Leave blank to use the template."
+                >
+                  <div className="flex items-center gap-2">
+                    <input
+                      id="background_color"
+                      type="color"
+                      value={formData.background_color || '#efe7e1'}
+                      onChange={(e) =>
+                        setFormData({ ...formData, background_color: e.target.value })
+                      }
+                      className="h-11 w-14 shrink-0 cursor-pointer border border-[var(--color-border)] bg-transparent p-1"
+                    />
+                    <Input
+                      aria-label="Background colour hex"
+                      value={formData.background_color}
+                      onChange={(e) =>
+                        setFormData({ ...formData, background_color: e.target.value })
+                      }
+                      placeholder="#EFE7E1"
+                      maxLength={7}
+                    />
+                    {formData.background_color && (
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, background_color: '' })}
+                        className="label-caps shrink-0 px-2 text-[var(--color-muted)] hover:text-[var(--color-foreground)]"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                </Field>
+
+                <Field
+                  label="Text colour"
+                  htmlFor="text_color"
+                  hint="Leave blank to use the template."
+                >
+                  <div className="flex items-center gap-2">
+                    <input
+                      id="text_color"
+                      type="color"
+                      value={formData.text_color || '#2b2320'}
+                      onChange={(e) => setFormData({ ...formData, text_color: e.target.value })}
+                      className="h-11 w-14 shrink-0 cursor-pointer border border-[var(--color-border)] bg-transparent p-1"
+                    />
+                    <Input
+                      aria-label="Text colour hex"
+                      value={formData.text_color}
+                      onChange={(e) => setFormData({ ...formData, text_color: e.target.value })}
+                      placeholder="#2B2320"
+                      maxLength={7}
+                    />
+                    {formData.text_color && (
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, text_color: '' })}
+                        className="label-caps shrink-0 px-2 text-[var(--color-muted)] hover:text-[var(--color-foreground)]"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                </Field>
+              </div>
+
+              {contrastWarning && (
+                <p className="mt-3 border-l-2 border-amber-500 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-transparent dark:text-amber-300">
+                  {contrastWarning}
+                </p>
+              )}
+
+              {/* What it will actually look like, rather than two hex codes. */}
+              <div className="mt-4">
+                <p className="label-caps mb-2 text-[var(--color-muted)]">Preview</p>
+                <div
+                  className="border border-[var(--color-border)] p-4"
+                  style={{
+                    background: formData.background_color || preset.swatch,
+                    color: formData.text_color || preset.ink,
+                  }}
+                >
+                  <p className="text-sm font-medium">{formData.title || 'Your headline'}</p>
+                  {formData.body && <p className="mt-1 text-sm opacity-90">{formData.body}</p>}
+                  {formData.link_label && (
+                    <p className="label-caps mt-2 underline underline-offset-4">
+                      {formData.link_label}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Start Date" htmlFor="starts_at" hint="Optional">

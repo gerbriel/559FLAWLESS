@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
+import { Lock, Send } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/field'
@@ -109,6 +110,34 @@ export function MessageThreadView({
       <ul className="space-y-5">
         {messages.map((m) => {
           const mine = m.sender_id === currentUserId
+          // An internal note is not part of the conversation, so it does not sit
+          // on either side of it. Dashed, full-width and off-axis, it reads as a
+          // margin annotation rather than something anyone was sent — which
+          // matters when the alternative is mistaking it for a sent reply.
+          if (m.is_internal) {
+            return (
+              <li key={m.id} className="flex justify-center">
+                <div className="w-full border border-dashed border-[var(--color-accent)] bg-[var(--color-clay-soft)]/40 px-5 py-4 dark:bg-[var(--color-surface)]">
+                  <p className="label-caps mb-2 flex flex-wrap items-center gap-x-2 text-[var(--color-accent)]">
+                    <Lock className="h-3 w-3" strokeWidth={2} />
+                    Internal note — not visible to the client
+                  </p>
+                  <p className="label-caps mb-2 text-[var(--color-muted)]">
+                    {mine ? 'You' : (m.sender_name ?? 'Staff')}
+                    {' · '}
+                    {new Date(m.created_at).toLocaleString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      hour: 'numeric',
+                      minute: '2-digit',
+                    })}
+                  </p>
+                  <p className="whitespace-pre-line text-sm leading-relaxed">{m.body}</p>
+                </div>
+              </li>
+            )
+          }
+
           return (
             <li
               key={m.id}
@@ -132,6 +161,12 @@ export function MessageThreadView({
                     minute: '2-digit',
                   })}
                 </p>
+                {asStaff && mine && (
+                  <p className="label-caps mb-2 flex items-center gap-1.5 text-[var(--color-muted)]">
+                    <Send className="h-3 w-3" strokeWidth={2} />
+                    Sent to client
+                  </p>
+                )}
                 <p className="whitespace-pre-line text-sm leading-relaxed">{m.body}</p>
               </div>
             </li>

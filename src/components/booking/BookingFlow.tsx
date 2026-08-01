@@ -105,7 +105,6 @@ export function BookingFlow({
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [formsComplete, setFormsComplete] = useState(false)
   const [confirmation, setConfirmation] = useState<{
     id: string
     startsAt: string
@@ -266,6 +265,24 @@ export function BookingFlow({
             {formatMoney(confirmation.depositCents)} deposit. Your slot is held until
             then.
           </p>
+        )}
+
+        {/*
+          The paperwork comes after the slot is secured, not in front of it.
+          Requiring two clinical forms before the Confirm button meant someone who
+          came to reserve a time left without one. The forms are still required
+          before treatment — this is a prompt with a deadline, not an optional extra.
+        */}
+        {service && (
+          <div className="mt-10 text-left">
+            <FormRequirementChecker
+              serviceId={service.id}
+              categoryId={service.category_id}
+              returnTo="/account/appointments"
+              heading="One more thing"
+              intro="Your appointment is confirmed. Please fill these in before your visit — it saves time in the room, and we need them to treat you."
+            />
+          </div>
         )}
 
         <div className="mt-10 flex justify-center gap-4">
@@ -627,38 +644,70 @@ export function BookingFlow({
         {/* ── Step 4: details ──────────────────────────── */}
         {step === 'details' && (
           <form onSubmit={submit}>
-            <h2 className="display text-3xl">Your details</h2>
+            <h2 className="display text-3xl">
+              {signedInEmail ? 'Anything we should know?' : 'Your details'}
+            </h2>
+
+            {signedInEmail ? (
+              // Booking requires an account, so the name and email are already
+              // ours. Re-asking would just be a chance to mistype them.
+              <div className="mt-6">
+                <p className="text-sm text-[var(--color-muted)]">
+                  Booking as{' '}
+                  <span className="text-[var(--color-foreground)]">
+                    {[form.first_name, form.last_name].filter(Boolean).join(' ') || signedInEmail}
+                  </span>{' '}
+                  · {signedInEmail}{' '}
+                  <Link
+                    href="/account/settings"
+                    className="underline underline-offset-4 hover:text-[var(--color-accent)]"
+                  >
+                    Not you?
+                  </Link>
+                </p>
+              </div>
+            ) : null}
 
             <div className="mt-8 grid gap-5 sm:grid-cols-2">
-              <Field label="First name" htmlFor="first_name">
-                <Input
-                  id="first_name"
-                  required
-                  maxLength={80}
-                  value={form.first_name}
-                  onChange={(e) => setForm({ ...form, first_name: e.target.value })}
-                />
-              </Field>
-              <Field label="Last name" htmlFor="last_name">
-                <Input
-                  id="last_name"
-                  required
-                  maxLength={80}
-                  value={form.last_name}
-                  onChange={(e) => setForm({ ...form, last_name: e.target.value })}
-                />
-              </Field>
-              <Field label="Email" htmlFor="email">
-                <Input
-                  id="email"
-                  type="email"
-                  required
-                  maxLength={254}
-                  value={form.email}
-                  onChange={(e) => setForm({ ...form, email: e.target.value })}
-                />
-              </Field>
-              <Field label="Phone" htmlFor="phone" hint="For appointment reminders.">
+              {!signedInEmail && (
+                <>
+                  <Field label="First name" htmlFor="first_name">
+                    <Input
+                      id="first_name"
+                      required
+                      maxLength={80}
+                      value={form.first_name}
+                      onChange={(e) => setForm({ ...form, first_name: e.target.value })}
+                    />
+                  </Field>
+                  <Field label="Last name" htmlFor="last_name">
+                    <Input
+                      id="last_name"
+                      required
+                      maxLength={80}
+                      value={form.last_name}
+                      onChange={(e) => setForm({ ...form, last_name: e.target.value })}
+                    />
+                  </Field>
+                  <Field label="Email" htmlFor="email">
+                    <Input
+                      id="email"
+                      type="email"
+                      required
+                      maxLength={254}
+                      value={form.email}
+                      onChange={(e) => setForm({ ...form, email: e.target.value })}
+                    />
+                  </Field>
+                </>
+              )}
+
+              <Field
+                label="Phone"
+                htmlFor="phone"
+                hint="For appointment reminders."
+                className={signedInEmail ? 'sm:col-span-2' : undefined}
+              >
                 <Input
                   id="phone"
                   type="tel"
@@ -667,11 +716,12 @@ export function BookingFlow({
                   onChange={(e) => setForm({ ...form, phone: e.target.value })}
                 />
               </Field>
+
               <Field
                 label="Anything we should know?"
                 htmlFor="notes"
                 className="sm:col-span-2"
-                hint="Allergies, sensitivities, what you would like to focus on. You will complete a full health form before your visit."
+                hint="Allergies, sensitivities, what you would like to focus on. Your health form comes next."
               >
                 <Textarea
                   id="notes"
@@ -680,16 +730,6 @@ export function BookingFlow({
                   onChange={(e) => setForm({ ...form, notes: e.target.value })}
                 />
               </Field>
-
-              {service && signedInEmail && (
-                <div className="mt-8">
-                  <FormRequirementChecker
-                    serviceId={service.id}
-                    categoryId={service.category_id}
-                    onRequirementsChecked={setFormsComplete}
-                  />
-                </div>
-              )}
             </div>
 
             {error && (
@@ -698,10 +738,6 @@ export function BookingFlow({
               </p>
             )}
 
-                type=&quot;submit&quot;
-                size=&quot;lg&quot;
-                disabled={submitting || (signedInEmail && !formsComplete)}
-              
             <div className="mt-10 flex items-center gap-4">
               <Button
                 type="button"

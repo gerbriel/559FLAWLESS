@@ -1,6 +1,8 @@
 import Link from 'next/link'
+import { Suspense } from 'react'
 import type { Metadata } from 'next'
 import { SignupForm } from '@/components/shared/SignupForm'
+import { GoogleSignIn } from '@/components/shared/GoogleSignIn'
 
 export const metadata: Metadata = {
   title: 'Create Account',
@@ -17,6 +19,9 @@ export default function SignupPage() {
       </p>
 
       <div className="mt-10">
+        <Suspense fallback={null}>
+          <GoogleSignIn label="Sign up with Google" />
+        </Suspense>
         <SignupForm />
       </div>
 

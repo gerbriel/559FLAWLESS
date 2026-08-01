@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation'
 import { AlertTriangle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
-import { StockAdjuster } from '@/components/shared/StockAdjuster'
+import { ProductEditor } from '@/components/shared/ProductEditor'
 import { formatMoney } from '@/lib/utils'
 import { isManager, type UserRole } from '@/types/database'
 
@@ -37,7 +37,9 @@ export default async function InventoryPage({ searchParams }: Props) {
     .maybeSingle()
 
   const role = (profile?.role ?? 'provider') as UserRole
-  const canWriteDirectly = isManager(role)
+  // Cost is margin information, so it stays with the managers. Counting stock
+  // is not — anyone working the room can do that.
+  const canSeeCost = isManager(role)
 
   let query = supabase
     .from('products')
@@ -90,12 +92,6 @@ export default async function InventoryPage({ searchParams }: Props) {
         ))}
       </nav>
 
-      {!canWriteDirectly && (
-        <p className="mt-8 border-l-2 border-[var(--color-accent)] bg-[var(--color-clay-soft)] p-4 text-sm text-[var(--color-muted)] dark:bg-[var(--color-surface)]">
-          Your stock changes go to a manager for approval before they take effect.
-        </p>
-      )}
-
       {rows.length === 0 ? (
         <p className="mt-10 border border-[var(--color-border)] bg-[var(--color-surface)] p-8 text-sm text-[var(--color-muted)]">
           Nothing here yet.
@@ -115,13 +111,13 @@ export default async function InventoryPage({ searchParams }: Props) {
                 <th className="label-caps px-3 py-3 text-right text-[var(--color-muted)]">
                   Price
                 </th>
-                {canWriteDirectly && (
+                {canSeeCost && (
                   <th className="label-caps px-3 py-3 text-right text-[var(--color-muted)]">
                     Cost
                   </th>
                 )}
                 <th className="label-caps px-3 py-3 text-right text-[var(--color-muted)]">
-                  Adjust
+                  <span className="sr-only">Edit</span>
                 </th>
               </tr>
             </thead>
@@ -153,18 +149,22 @@ export default async function InventoryPage({ searchParams }: Props) {
                     <td className="px-3 py-3 text-right tabular-nums">
                       {formatMoney(p.price_cents)}
                     </td>
-                    {canWriteDirectly && (
+                    {canSeeCost && (
                       <td className="px-3 py-3 text-right tabular-nums text-[var(--color-muted)]">
                         {formatMoney(p.cost_cents)}
                       </td>
                     )}
-                    <td className="px-3 py-3 text-right">
-                      <StockAdjuster
-                        productId={p.id}
-                        productName={p.name}
-                        currentQty={Number(p.stock_qty)}
-                        unit={p.unit}
-                        canWriteDirectly={canWriteDirectly}
+                    <td className="w-72 px-3 py-3 text-right align-top">
+                      <ProductEditor
+                        product={{
+                          id: p.id,
+                          name: p.name,
+                          unit: p.unit,
+                          stock_qty: Number(p.stock_qty),
+                          low_stock_threshold: Number(p.low_stock_threshold),
+                          is_retail: p.is_retail,
+                          is_professional: p.is_professional,
+                        }}
                       />
                     </td>
                   </tr>
