@@ -6,6 +6,8 @@ import { Check } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Field, Input, Textarea, Select } from '@/components/ui/field'
+import { SignedInAs, backfillProfile } from '@/components/shared/SignedInIdentity'
+import { cn } from '@/lib/utils'
 
 const SUBJECTS = [
   'General question',
@@ -16,20 +18,48 @@ const SUBJECTS = [
 ]
 
 /**
+ * Who we already know the sender to be. Built by the server parent, and only
+ * when there is an email to go with it — a signed-in account we cannot reach is
+ * no better than an anonymous one, so that case falls back to asking.
+ */
+export interface ContactIdentity {
+  userId: string
+  firstName: string | null
+  lastName: string | null
+  email: string
+  phone: string | null
+}
+
+/**
  * Opens a message thread. Anonymous visitors can insert a thread and its first
  * message under the public policies; the SECURITY DEFINER triggers then match
  * the thread to an existing client record and notify the front desk.
+ *
+ * This is also the client's own "new message" composer — /account/messages
+ * links here — so a signed-in client is not asked for a name and an email the
+ * studio already holds. The subject and the message stay: they are new every
+ * time, which is the whole point of writing in.
  */
-export function ContactForm({ presetSubject }: { presetSubject?: string }) {
+export function ContactForm({
+  presetSubject,
+  identity,
+}: {
+  presetSubject?: string
+  identity?: ContactIdentity | null
+}) {
   const [busy, setBusy] = useState(false)
   const [sent, setSent] = useState(false)
   const [form, setForm] = useState({
-    name: '',
-    email: '',
-    phone: '',
+    name: identity ? [identity.firstName, identity.lastName].filter(Boolean).join(' ').trim() : '',
+    email: identity?.email ?? '',
+    phone: identity?.phone ?? '',
     subject: presetSubject ? `Consultation request — ${presetSubject}` : SUBJECTS[0],
     message: '',
   })
+
+  // A number is how the studio calls someone back, so it is still collected —
+  // but only from people whose number we do not already have.
+  const askPhone = !identity?.phone
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -42,6 +72,9 @@ export function ContactForm({ presetSubject }: { presetSubject?: string }) {
     // applies to the `anon` role, and the client policy requires
     // sender_id = auth.uid(). Anonymous visitors leave both null and are matched
     // to a client record by the SECURITY DEFINER trigger instead.
+    //
+    // Read from the session rather than the `identity` prop: the prop is what we
+    // rendered with, the session is what the insert will actually be judged by.
     const {
       data: { user },
     } = await supabase.auth.getUser()
@@ -51,7 +84,11 @@ export function ContactForm({ presetSubject }: { presetSubject?: string }) {
       .insert({
         subject: form.subject,
         client_id: user?.id ?? null,
-        guest_name: form.name.trim(),
+        // Still denormalized onto the thread even when we know the client:
+        // it is what the inbox and the staff notification read. Null rather
+        // than empty when an account has no name on it yet — the trigger
+        // coalesces null to something readable, but not ''.
+        guest_name: form.name.trim() || null,
         guest_email: form.email.trim().toLowerCase(),
         guest_phone: form.phone.trim() || null,
       })
@@ -67,17 +104,23 @@ export function ContactForm({ presetSubject }: { presetSubject?: string }) {
     const { error: messageError } = await supabase.from('messages').insert({
       thread_id: thread.id,
       sender_id: user?.id ?? null,
-      sender_name: form.name.trim(),
+      sender_name: form.name.trim() || null,
       body: form.message.trim(),
     })
 
-    setBusy(false)
-
     if (messageError) {
+      setBusy(false)
       toast.error('We could not send that. Please try again or call us.')
       return
     }
 
+    // They gave us a number we did not hold — keep it, so the next form does
+    // not ask for it again.
+    if (identity && askPhone) {
+      await backfillProfile(identity.userId, { phone: form.phone })
+    }
+
+    setBusy(false)
     setSent(true)
   }
 
@@ -97,36 +140,65 @@ export function ContactForm({ presetSubject }: { presetSubject?: string }) {
 
   return (
     <form onSubmit={submit} className="space-y-5">
+      {identity && (
+        <SignedInAs
+          label="Sending as"
+          name={form.name}
+          email={identity.email}
+          href="/account/settings"
+        />
+      )}
+
       <div className="grid gap-5 sm:grid-cols-2">
-        <Field label="Name" htmlFor="name">
-          <Input
-            id="name"
-            required
-            maxLength={120}
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-          />
-        </Field>
-        <Field label="Email" htmlFor="email">
-          <Input
-            id="email"
-            type="email"
-            required
-            maxLength={254}
-            value={form.email}
-            onChange={(e) => setForm({ ...form, email: e.target.value })}
-          />
-        </Field>
-        <Field label="Phone" htmlFor="phone" hint="Optional.">
-          <Input
-            id="phone"
-            type="tel"
-            maxLength={40}
-            value={form.phone}
-            onChange={(e) => setForm({ ...form, phone: e.target.value })}
-          />
-        </Field>
-        <Field label="Subject" htmlFor="subject">
+        {!identity && (
+          <>
+            <Field label="Name" htmlFor="name">
+              <Input
+                id="name"
+                required
+                maxLength={120}
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+              />
+            </Field>
+            <Field label="Email" htmlFor="email">
+              <Input
+                id="email"
+                type="email"
+                required
+                maxLength={254}
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+              />
+            </Field>
+          </>
+        )}
+
+        {askPhone && (
+          <Field
+            label="Phone"
+            htmlFor="phone"
+            hint={
+              identity
+                ? 'Optional. We will keep it on your account so you are not asked again.'
+                : 'Optional.'
+            }
+          >
+            <Input
+              id="phone"
+              type="tel"
+              maxLength={40}
+              value={form.phone}
+              onChange={(e) => setForm({ ...form, phone: e.target.value })}
+            />
+          </Field>
+        )}
+
+        <Field
+          label="Subject"
+          htmlFor="subject"
+          className={cn(identity && !askPhone && 'sm:col-span-2')}
+        >
           <Select
             id="subject"
             value={form.subject}

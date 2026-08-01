@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import { Mail, Phone } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { Container, Section } from '@/components/ui/section'
-import { ContactForm } from '@/components/shared/ContactForm'
+import { ContactForm, type ContactIdentity } from '@/components/shared/ContactForm'
 import { DirectionsLink, type StudioLocation } from '@/components/shared/DirectionsLink'
 import { StudioMap } from '@/components/shared/StudioMap'
 
@@ -21,10 +21,24 @@ export default async function ContactPage({ searchParams }: Props) {
   const { service } = await searchParams
   const supabase = await createClient()
 
-  const [{ data: contactRow }, { data: serviceRow }] = await Promise.all([
+  // This page is already force-dynamic and already reads cookies, so the
+  // session costs nothing extra here. It is what lets a signed-in client write
+  // in without retyping the name and email we hold for them.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  const [{ data: contactRow }, { data: serviceRow }, profileRes] = await Promise.all([
     supabase.from('site_content').select('value').eq('key', 'contact').maybeSingle(),
     service
       ? supabase.from('services').select('name').eq('slug', service).maybeSingle()
+      : Promise.resolve({ data: null }),
+    user
+      ? supabase
+          .from('profiles')
+          .select('first_name, last_name, email, phone')
+          .eq('id', user.id)
+          .maybeSingle()
       : Promise.resolve({ data: null }),
   ])
 
@@ -33,6 +47,29 @@ export default async function ContactPage({ searchParams }: Props) {
     email?: string
     note?: string
   }
+
+  const profile = profileRes?.data as
+    | {
+        first_name: string | null
+        last_name: string | null
+        email: string | null
+        phone: string | null
+      }
+    | null
+
+  // An address is what makes the rest usable — without one we cannot reply, so
+  // there is nothing to prefill and the form asks as it always did.
+  const knownEmail = profile?.email ?? user?.email ?? null
+  const identity: ContactIdentity | null =
+    user && knownEmail
+      ? {
+          userId: user.id,
+          firstName: profile?.first_name ?? null,
+          lastName: profile?.last_name ?? null,
+          email: knownEmail,
+          phone: profile?.phone ?? null,
+        }
+      : null
 
   return (
     <Section>
@@ -46,7 +83,7 @@ export default async function ContactPage({ searchParams }: Props) {
           </p>
 
           <div className="mt-12">
-            <ContactForm presetSubject={serviceRow?.name} />
+            <ContactForm presetSubject={serviceRow?.name} identity={identity} />
           </div>
         </div>
 

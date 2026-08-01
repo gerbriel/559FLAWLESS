@@ -80,11 +80,18 @@ export function IntakeForm({
     if (error) {
       setBusy(false)
       toast.error('Could not save. Please try again.')
-      void trackFormEvent('intake', 'abandoned', { form_id: formId, error: error.message })
+      // The raw Postgres message can echo a submitted value, and this table is
+      // insert-open to anon. Record that it failed, not what was in it.
+      void trackFormEvent('intake', 'abandoned', { form_id: formId, failed: true })
       return
     }
 
-    void trackFormEvent('intake', 'completed', { form_id: formId, flags })
+    // Deliberately the COUNT, not the flags. `flags` is health information —
+    // accutane, pregnancy, blood thinners — and analytics_events is a table any
+    // visitor may insert into, sitting outside the clinical tables and their
+    // RLS. How many answers need review is the useful metric; which ones do is
+    // clinical data that belongs only in intake_submissions.
+    void trackFormEvent('intake', 'completed', { form_id: formId, flag_count: flags.length })
 
     toast.success(
       flags.length > 0

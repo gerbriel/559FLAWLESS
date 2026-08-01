@@ -977,6 +977,90 @@ export type CalendarConnection = {
   updated_at: string
 }
 
+// ── Added in 030 ──────────────────────────────────────────────
+/**
+ * Which records survive an account deletion.
+ *
+ * Every one of these is a legal call rather than a technical one, and every
+ * default is the conservative (retain) choice. Changing one is a decision for
+ * the studio and its insurer — see the comments in 030_account_deletion.sql.
+ */
+export type AccountDeletionPolicy = {
+  id: number
+  /** Signed name, drawn signature, and the IP/user agent captured at signing. */
+  scrub_consent_signature_identity: boolean
+  /** fitzpatrick, skin_type, concerns, allergies, medications, medical_notes. */
+  scrub_client_record_clinical: boolean
+  /** Provider SOAP notes tied to a visit. */
+  scrub_treatment_notes: boolean
+  /** Notes with no appointment attached — not treatment records. Default true. */
+  scrub_unlinked_notes: boolean
+  /** consent_audit_log.email, which is the evidence the log exists to hold. */
+  scrub_consent_audit_email: boolean
+  updated_at: string
+}
+
+/**
+ * One row per anonymised account, so "did someone delete their data?" is
+ * answerable without keeping the data. Deliberately holds no FK to `profiles`
+ * — it is meant to outlive the row it names.
+ */
+export type DeletedAccount = {
+  profile_id: string
+  deleted_at: string
+  requested_by: 'self' | 'admin'
+  /** The admin who actioned a phoned-in request; null when self-served. */
+  performed_by: string | null
+  /** Counts only, never content. */
+  kept: Json
+  removed: Json
+  /** False means the API route still has to scrub GoTrue through the admin API. */
+  auth_scrubbed: boolean
+  /** Private-bucket objects awaiting deletion; SQL cannot reach object storage. */
+  pending_storage_paths: string[]
+  storage_purged_at: string | null
+}
+
+/** What `anonymise_account()` hands back. */
+export type AnonymiseAccountResult = {
+  status: 'anonymised'
+  profile_id: string
+  requested_by: 'self' | 'admin'
+  /** Counts of the records the studio is keeping. */
+  kept: Record<string, number>
+  /** Counts of what was deleted or overwritten. */
+  removed: Record<string, number>
+  auth_scrubbed: boolean
+  /** Treatment-photo objects the caller must now remove from the bucket. */
+  storage_paths: string[]
+}
+
+// ── Added in 031 ──────────────────────────────────────────────
+/**
+ * A one-time bearer credential: whoever holds the link may claim exactly the
+ * account described here, once, before it expires.
+ *
+ * `token_hash` is sha256(token) as lowercase hex — the plaintext token is
+ * never stored, so this row cannot be turned back into a working link.
+ */
+export type Invitation = {
+  id: number
+  email: string
+  first_name: string | null
+  last_name: string | null
+  note: string | null
+  role: UserRole
+  invited_by: string
+  token_hash: string
+  expires_at: string
+  accepted_at: string | null
+  accepted_by: string | null
+  revoked_at: string | null
+  revoked_by: string | null
+  created_at: string
+  updated_at: string
+}
+
 // ── Supabase client contract ──────────────────────────────────
 /**
  * Columns Postgres fills in itself, so they're optional on insert. Keeping the
@@ -1275,6 +1359,22 @@ export type Database = {
         ]
       >
       broadcasts: TableDef<Broadcast, [ToProfile<'broadcasts', 'sent_by'>]>
+
+      // ── Added in 030 ────────────────────────────────────────
+      // No Relationships on deleted_accounts: it carries a bare uuid rather
+      // than a foreign key, precisely so it survives the row it names.
+      deleted_accounts: TableDef<DeletedAccount>
+      account_deletion_policy: TableDef<AccountDeletionPolicy>
+
+      // ── Added in 031 ────────────────────────────────────────
+      invitations: TableDef<
+        Invitation,
+        [
+          ToProfile<'invitations', 'invited_by'>,
+          ToProfile<'invitations', 'accepted_by'>,
+          ToProfile<'invitations', 'revoked_by'>,
+        ]
+      >
     }
     // `{ [_ in never]: never }`, not `Record<string, never>` — the latter is an
     // index signature that matches EVERY key, so the client's relation lookup
@@ -1422,6 +1522,42 @@ export type Database = {
       unsubscribe_newsletter: {
         Args: { p_token: string }
         Returns: Json
+      }
+
+      // ── Added in 030 ────────────────────────────────────────
+      /**
+       * Scrub every identifying field for one client while keeping the
+       * appointments, orders, payments, signed consent and clinical records
+       * the studio is obliged to retain.
+       *
+       * Call it with the CLIENT'S OWN session, not the service role — the
+       * self-or-admin guard lives inside the function, and handing it a
+       * service-role connection is what would turn that guard off. Idempotent.
+       */
+      anonymise_account: {
+        Args: { p_client: string }
+        Returns: AnonymiseAccountResult
+      }
+
+      // ── Added in 031 ────────────────────────────────────────
+      /** Read an invitation by its plaintext token without exposing the table. */
+      invitation_preview: {
+        Args: { p_token: string }
+        Returns: {
+          email: string
+          role: UserRole
+          first_name: string | null
+          last_name: string | null
+          note: string | null
+          invited_by_name: string | null
+          expires_at: string
+          status: string
+        }[]
+      }
+      /** Claim an invitation for `p_user`; returns the role granted. */
+      redeem_invitation: {
+        Args: { p_token: string; p_user: string }
+        Returns: UserRole
       }
     }
     Enums: {

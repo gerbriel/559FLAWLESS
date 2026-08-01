@@ -89,7 +89,8 @@ export function ConsentSigner({
     if (error) {
       setBusy(false)
       toast.error('Could not save. Please try again.')
-      void trackFormEvent('consent', 'abandoned', { form_id: formId, error: error.message })
+      // Same reasoning as IntakeForm: no raw error text into an anon-writable table.
+      void trackFormEvent('consent', 'abandoned', { form_id: formId, failed: true })
       return
     }
 

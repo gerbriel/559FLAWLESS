@@ -16,6 +16,7 @@ import {
 } from '@/lib/time'
 import { trackEvent } from '@/components/shared/AnalyticsTracker'
 import { FormRequirementChecker } from '@/components/shared/FormRequirementChecker'
+import { SignedInAs, backfillProfile } from '@/components/shared/SignedInIdentity'
 
 export interface BookableService {
   id: number
@@ -62,14 +63,19 @@ export function BookingFlow({
   services,
   providers,
   initialServiceSlug,
+  signedInUserId,
   signedInEmail,
   signedInName,
+  signedInPhone,
 }: {
   services: BookableService[]
   providers: BookableProvider[]
   initialServiceSlug?: string
+  /** Present when the profile can be written back to — see `submit`. */
+  signedInUserId?: string | null
   signedInEmail?: string | null
   signedInName?: { first: string; last: string } | null
+  signedInPhone?: string | null
 }) {
   const router = useRouter()
 
@@ -102,7 +108,7 @@ export function BookingFlow({
     first_name: signedInName?.first ?? '',
     last_name: signedInName?.last ?? '',
     email: signedInEmail ?? '',
-    phone: '',
+    phone: signedInPhone ?? '',
     notes: '',
   })
   const [submitting, setSubmitting] = useState(false)
@@ -159,6 +165,22 @@ export function BookingFlow({
 
   const ageGateSatisfied = !requiresAge || ageConfirmed
 
+  // ── What we already know about them ──────────────────────
+  // Booking requires an account, so the details step asks only for what the
+  // profile does not already hold. Every one of these is identity — it belongs
+  // to the person, not to this booking — so once it is on file we show it back
+  // rather than asking again. The notes field is the opposite: new every visit.
+  const signedIn = !!signedInEmail
+  const askFirst = !signedIn || !signedInName?.first?.trim()
+  // The booking API requires a last name, so a profile without one still has to
+  // be asked — once, and then it is kept.
+  const askLast = !signedIn || !signedInName?.last?.trim()
+  const askEmail = !signedIn
+  const askPhone = !signedIn || !signedInPhone?.trim()
+  const askedCount = [askFirst, askLast, askEmail, askPhone].filter(Boolean).length
+  // A lone field in a two-column grid reads as a mistake; let it span.
+  const soloSpan = askedCount === 1 ? 'sm:col-span-2' : undefined
+
   /** Add or remove a service, keeping selection order. */
   function toggleService(s: BookableService) {
     setSelected((cur) => {
@@ -207,7 +229,11 @@ export function BookingFlow({
         setLoadingSlots(false)
       }
     },
-    [service, provider, addonIds]
+    // `selected`, not `service`. `service` is selected[0], so adding a SECOND
+    // service left this callback un-recreated and holding a stale closure —
+    // slots were then fetched for the first service's duration alone, and a
+    // client booking a facial plus a wax could take a slot too short for both.
+    [selected, hasSelection, provider, addonIds]
   )
 
   // The effect only fetches. `weekStart` is seeded when a provider is picked,
@@ -268,6 +294,18 @@ export function BookingFlow({
         totalCents: data.booking.totalCents,
       })
       setStep('done')
+
+      // A detail they had to type because the profile lacked it is kept, so the
+      // next form does not ask for it. Awaited rather than fired off: the
+      // deposit redirect below navigates away, and an in-flight request would
+      // be cancelled with it.
+      if (signedInUserId) {
+        await backfillProfile(signedInUserId, {
+          first_name: askFirst ? form.first_name : undefined,
+          last_name: askLast ? form.last_name : undefined,
+          phone: askPhone ? form.phone : undefined,
+        })
+      }
 
       if (data.booking.depositCents > 0) {
         // Send them straight to Stripe to secure the slot.
@@ -725,77 +763,83 @@ export function BookingFlow({
         {step === 'details' && (
           <form onSubmit={submit}>
             <h2 className="display text-3xl">
-              {signedInEmail ? 'Anything we should know?' : 'Your details'}
+              {!signedIn
+                ? 'Your details'
+                : askedCount === 0
+                  ? 'Anything we should know?'
+                  : askedCount === 1
+                    ? 'One more detail'
+                    : 'A few more details'}
             </h2>
 
-            {signedInEmail ? (
-              // Booking requires an account, so the name and email are already
-              // ours. Re-asking would just be a chance to mistype them.
-              <div className="mt-6">
-                <p className="text-sm text-[var(--color-muted)]">
-                  Booking as{' '}
-                  <span className="text-[var(--color-foreground)]">
-                    {[form.first_name, form.last_name].filter(Boolean).join(' ') || signedInEmail}
-                  </span>{' '}
-                  · {signedInEmail}{' '}
-                  <Link
-                    href="/account/settings"
-                    className="underline underline-offset-4 hover:text-[var(--color-accent)]"
-                  >
-                    Not you?
-                  </Link>
-                </p>
-              </div>
+            {signedIn ? (
+              // Booking requires an account, so the name, email and number are
+              // already ours. Re-asking would just be a chance to mistype them.
+              <SignedInAs
+                label="Booking as"
+                name={[form.first_name, form.last_name].filter(Boolean).join(' ')}
+                email={signedInEmail}
+                href="/account/settings"
+                className="mt-6"
+              />
             ) : null}
 
             <div className="mt-8 grid gap-5 sm:grid-cols-2">
-              {!signedInEmail && (
-                <>
-                  <Field label="First name" htmlFor="first_name">
-                    <Input
-                      id="first_name"
-                      required
-                      maxLength={80}
-                      value={form.first_name}
-                      onChange={(e) => setForm({ ...form, first_name: e.target.value })}
-                    />
-                  </Field>
-                  <Field label="Last name" htmlFor="last_name">
-                    <Input
-                      id="last_name"
-                      required
-                      maxLength={80}
-                      value={form.last_name}
-                      onChange={(e) => setForm({ ...form, last_name: e.target.value })}
-                    />
-                  </Field>
-                  <Field label="Email" htmlFor="email">
-                    <Input
-                      id="email"
-                      type="email"
-                      required
-                      maxLength={254}
-                      value={form.email}
-                      onChange={(e) => setForm({ ...form, email: e.target.value })}
-                    />
-                  </Field>
-                </>
+              {askFirst && (
+                <Field label="First name" htmlFor="first_name" className={soloSpan}>
+                  <Input
+                    id="first_name"
+                    required
+                    maxLength={80}
+                    value={form.first_name}
+                    onChange={(e) => setForm({ ...form, first_name: e.target.value })}
+                  />
+                </Field>
+              )}
+              {askLast && (
+                <Field label="Last name" htmlFor="last_name" className={soloSpan}>
+                  <Input
+                    id="last_name"
+                    required
+                    maxLength={80}
+                    value={form.last_name}
+                    onChange={(e) => setForm({ ...form, last_name: e.target.value })}
+                  />
+                </Field>
+              )}
+              {askEmail && (
+                <Field label="Email" htmlFor="email" className={soloSpan}>
+                  <Input
+                    id="email"
+                    type="email"
+                    required
+                    maxLength={254}
+                    value={form.email}
+                    onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  />
+                </Field>
               )}
 
-              <Field
-                label="Phone"
-                htmlFor="phone"
-                hint="For appointment reminders."
-                className={signedInEmail ? 'sm:col-span-2' : undefined}
-              >
-                <Input
-                  id="phone"
-                  type="tel"
-                  maxLength={40}
-                  value={form.phone}
-                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                />
-              </Field>
+              {askPhone && (
+                <Field
+                  label="Phone"
+                  htmlFor="phone"
+                  hint={
+                    signedIn
+                      ? 'For appointment reminders. We will keep it on your account.'
+                      : 'For appointment reminders.'
+                  }
+                  className={soloSpan}
+                >
+                  <Input
+                    id="phone"
+                    type="tel"
+                    maxLength={40}
+                    value={form.phone}
+                    onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                  />
+                </Field>
+              )}
 
               <Field
                 label="Anything we should know?"

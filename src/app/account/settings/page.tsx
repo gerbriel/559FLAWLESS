@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { ProfileSettings } from '@/components/shared/ProfileSettings'
+import { DeleteAccountSection } from '@/components/shared/DeleteAccountSection'
 
 export const dynamic = 'force-dynamic'
 
@@ -47,6 +48,8 @@ export default async function SettingsPage() {
             !!record?.photo_release_at && !record?.photo_release_revoked_at
           }
         />
+
+        <DeleteAccountSection />
       </div>
     </div>
   )

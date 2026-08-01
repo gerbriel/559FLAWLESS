@@ -182,12 +182,17 @@ export default async function BookPage({ searchParams }: Props) {
             services={services}
             providers={providers}
             initialServiceSlug={serviceSlug}
+            // Everything the profile already holds, so the details step can ask
+            // for what is missing and nothing else — and write back whatever
+            // they end up supplying.
+            signedInUserId={user?.id ?? null}
             signedInEmail={profile?.email ?? user?.email ?? null}
             signedInName={
               profile?.first_name
                 ? { first: profile.first_name, last: profile.last_name ?? '' }
                 : null
             }
+            signedInPhone={profile?.phone ?? null}
           />
         )}
       </Container>

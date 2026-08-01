@@ -4,7 +4,6 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import type { Profile } from '@/types/database'
 import { Button } from '@/components/ui/button'
 import { Field, Input } from '@/components/ui/field'
 
@@ -42,13 +41,6 @@ export function SignupForm() {
     setBusy(true)
     const supabase = createClient()
 
-    // Capture consent evidence
-    const userAgent = navigator.userAgent
-    const ipAddress = await fetch('https://api.ipify.org?format=json')
-      .then((r) => r.json())
-      .then((d) => d.ip)
-      .catch(() => null)
-
     const { data, error: signUpError } = await supabase.auth.signUp({
       email: form.email.trim().toLowerCase(),
       password: form.password,
@@ -76,21 +68,18 @@ export function SignupForm() {
       return
     }
 
-    // Update profile with consent tracking
-    const now = new Date().toISOString()
-    const updates: Partial<Profile> = {
-      marketing_opt_in: form.marketing,
-      terms_accepted_at: now,
-      terms_version_accepted: 1,
-      privacy_accepted_at: now,
-    }
-
-    if (form.marketing) {
-      updates.marketing_consent_at = now
-      updates.marketing_consent_ip = ipAddress
-    }
-
-    await supabase.from('profiles').update(updates).eq('id', data.user!.id)
+    // Consent is stamped server-side, where the request's own IP is already
+    // available. The browser used to fetch it from api.ipify.org, which handed
+    // every new client's address to a third party to learn something we
+    // already knew — and made signing up depend on their uptime.
+    await fetch('/api/account/consent-evidence', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ marketing: form.marketing, terms: form.terms }),
+    }).catch(() => {
+      // The account exists and the checkboxes were ticked; a missing evidence
+      // stamp is not worth failing sign-up over.
+    })
 
     // If marketing opt-in, also create newsletter subscription
     if (form.marketing) {

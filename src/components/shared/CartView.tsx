@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { Minus, Plus, X, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
+import { SignedInAs, useSignedInContact, backfillProfile } from '@/components/shared/SignedInIdentity'
 import { useCart } from '@/store/cart'
 import { Button } from '@/components/ui/button'
 import { Field, Input, Select } from '@/components/ui/field'
@@ -21,6 +22,10 @@ interface CartProduct {
 
 export function CartView() {
   const { lines, setQty, remove } = useCart()
+  // Resolved in the browser: /cart is statically rendered, and a server-side
+  // session read would make the whole subtree dynamic for the sake of three
+  // prefilled fields.
+  const me = useSignedInContact()
   const [products, setProducts] = useState<CartProduct[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -31,6 +36,35 @@ export function CartView() {
     fulfillment: 'pickup' as 'pickup' | 'shipping',
     subscribeNewsletter: true,  // Pre-checked marketing consent
   })
+  // Set when the shopper chooses to type different details than we hold.
+  const [overrideIdentity, setOverrideIdentity] = useState(false)
+
+  // Known well enough to skip asking: we can name them and reach them.
+  const known =
+    !!me.userId &&
+    !!me.email &&
+    !!(me.firstName || me.lastName) &&
+    !overrideIdentity
+
+  /**
+   * What actually gets submitted.
+   *
+   * Derived at render rather than copied into state by an effect: the profile
+   * arrives asynchronously, and syncing it into `form` would both fight the
+   * React Compiler's purity rule and race someone who has already started
+   * typing. Anything typed wins; otherwise we fall back to what we hold.
+   *
+   * `overrideIdentity` deliberately does NOT fall back — someone who asked to
+   * use different details should get empty fields, not their own again.
+   */
+  const profileName = [me.firstName, me.lastName].filter(Boolean).join(' ')
+  const contact = overrideIdentity
+    ? { name: form.name, email: form.email, phone: form.phone }
+    : {
+        name: form.name || profileName,
+        email: form.email || me.email || '',
+        phone: form.phone || me.phone || '',
+      }
 
   // Prices are read fresh from the catalog every time the bag renders — the
   // stored cart holds ids and quantities only.
@@ -85,9 +119,15 @@ export function CartView() {
       // If user opted in to newsletter, subscribe them
       if (form.subscribeNewsletter) {
         await supabase.rpc('subscribe_newsletter', {
-          p_email: form.email.trim().toLowerCase(),
+          p_email: contact.email.trim().toLowerCase(),
           p_source: 'checkout',
         })
+      }
+
+      // Keep a phone number we had to ask for, so no later form asks again.
+      // Awaited: Stripe navigation follows immediately and would cancel it.
+      if (me.userId && contact.phone.trim() && !me.phone) {
+        await backfillProfile(me.userId, { phone: contact.phone })
       }
 
       const res = await fetch('/api/stripe/checkout', {
@@ -96,9 +136,9 @@ export function CartView() {
         body: JSON.stringify({
           lines: rows.map((r) => ({ productId: r.productId, qty: r.qty })),
           fulfillment: form.fulfillment,
-          email: form.email,
-          name: form.name,
-          phone: form.phone || null,
+          email: contact.email,
+          name: contact.name,
+          phone: contact.phone || null,
         }),
       })
 
@@ -207,34 +247,65 @@ export function CartView() {
           <p className="label-caps mb-6 text-[var(--color-accent)]">Order summary</p>
 
           <div className="space-y-4">
-            <Field label="Name" htmlFor="cart_name">
-              <Input
-                id="cart_name"
-                required
-                maxLength={120}
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-              />
-            </Field>
-            <Field label="Email" htmlFor="cart_email">
-              <Input
-                id="cart_email"
-                type="email"
-                required
-                maxLength={254}
-                value={form.email}
-                onChange={(e) => setForm({ ...form, email: e.target.value })}
-              />
-            </Field>
-            <Field label="Phone" htmlFor="cart_phone" hint="Optional.">
-              <Input
-                id="cart_phone"
-                type="tel"
-                maxLength={40}
-                value={form.phone}
-                onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              />
-            </Field>
+            {known ? (
+              <>
+                <SignedInAs
+                  label="Ordering as"
+                  name={[me.firstName, me.lastName].filter(Boolean).join(' ')}
+                  email={me.email}
+                  changeLabel="Use different details"
+                  onChange={() => setOverrideIdentity(true)}
+                />
+                {/* Only asked when we do not already hold one. Kept on the
+                    account afterwards so no later form asks again. */}
+                {!me.phone && (
+                  <Field
+                    label="Phone"
+                    htmlFor="cart_phone"
+                    hint="Optional. We will keep it on your account."
+                  >
+                    <Input
+                      id="cart_phone"
+                      type="tel"
+                      maxLength={40}
+                      value={form.phone}
+                      onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                    />
+                  </Field>
+                )}
+              </>
+            ) : (
+              <>
+                <Field label="Name" htmlFor="cart_name">
+                  <Input
+                    id="cart_name"
+                    required
+                    maxLength={120}
+                    value={contact.name}
+                    onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  />
+                </Field>
+                <Field label="Email" htmlFor="cart_email">
+                  <Input
+                    id="cart_email"
+                    type="email"
+                    required
+                    maxLength={254}
+                    value={contact.email}
+                    onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  />
+                </Field>
+                <Field label="Phone" htmlFor="cart_phone" hint="Optional.">
+                  <Input
+                    id="cart_phone"
+                    type="tel"
+                    maxLength={40}
+                    value={form.phone}
+                    onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                  />
+                </Field>
+              </>
+            )}
             <Field label="Fulfillment" htmlFor="cart_fulfillment">
               <Select
                 id="cart_fulfillment"
