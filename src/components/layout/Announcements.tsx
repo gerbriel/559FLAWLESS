@@ -6,6 +6,7 @@ import Image from 'next/image'
 import { usePathname } from 'next/navigation'
 import { X, ArrowRight } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { trackEvent } from '@/components/shared/AnalyticsTracker'
 import { cn } from '@/lib/utils'
 import {
   selectAnnouncements,
@@ -78,9 +79,19 @@ export function Announcements({ announcements }: { announcements: LiveAnnounceme
   )
 
   function dismiss(a: LiveAnnouncement) {
+    void trackEvent('announcement_dismiss', { announcement_id: String(a.id) })
     recordDismissal(a.id, a.dismiss_scope ?? 'session')
     setDismissed((d) => [...d, a.id])
   }
+
+  // Whatever survived targeting is what is actually on screen, so that is what
+  // counts as an impression.
+  useImpression(
+    useMemo(
+      () => Object.values(byStyle).filter(Boolean).map((a) => (a as LiveAnnouncement).id),
+      [byStyle]
+    )
+  )
 
   return (
     <>
@@ -127,11 +138,35 @@ function toneClass(a: LiveAnnouncement): string | undefined {
 function Cta({ a, className }: { a: LiveAnnouncement; className?: string }) {
   if (!a.link_url) return null
   return (
-    <Link href={a.link_url} className={cn('label-caps inline-flex items-center gap-1.5', className)}>
+    <Link
+      href={a.link_url}
+      onClick={() => void trackEvent('announcement_click', { announcement_id: String(a.id) })}
+      className={cn('label-caps inline-flex items-center gap-1.5', className)}
+    >
       {a.link_label ?? 'Learn more'}
       <ArrowRight className="h-3 w-3" strokeWidth={2.5} />
     </Link>
   )
+}
+
+/**
+ * Record that an announcement was actually on screen, once per session.
+ *
+ * Per session rather than per render: a header banner would otherwise log an
+ * impression on every navigation and read as wildly successful for doing
+ * nothing. `seen` is module-level so it survives re-renders and route changes
+ * within the same page load.
+ */
+const seen = new Set<number>()
+
+function useImpression(ids: number[]) {
+  useEffect(() => {
+    for (const id of ids) {
+      if (seen.has(id)) continue
+      seen.add(id)
+      void trackEvent('announcement_view', { announcement_id: String(id) })
+    }
+  }, [ids])
 }
 
 // ── Banner ──────────────────────────────────────────────────

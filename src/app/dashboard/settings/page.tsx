@@ -4,6 +4,10 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { BookingSettingsForm } from '@/components/shared/BookingSettingsForm'
 import { SalesTaxForm } from '@/components/shared/SalesTaxForm'
+import {
+  BusinessHoursForm,
+  type BusinessHourRow,
+} from '@/components/shared/BusinessHoursForm'
 import { ROLE_LABELS, type UserRole, isAdmin } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
@@ -17,6 +21,7 @@ export default async function SettingsPage() {
     { data: staff },
     { data: closures },
     { data: taxSetting },
+    { data: businessHours },
   ] = await Promise.all([
       supabase.auth.getUser(),
       supabase.from('booking_settings').select('*').eq('id', 1).maybeSingle(),
@@ -36,6 +41,10 @@ export default async function SettingsPage() {
         .eq('key', 'sales_tax_rate')
         .eq('is_active', true)
         .maybeSingle(),
+      supabase
+        .from('business_hours')
+        .select('day_of_week, opens_at, closes_at, is_closed')
+        .order('day_of_week'),
     ])
 
   // Fresno County's combined rate is the fallback when nothing has been set.
@@ -114,6 +123,22 @@ export default async function SettingsPage() {
             Only admins can change roles and suspensions.
           </p>
         )}
+      </section>
+
+      <section className="mt-14">
+        <h2 className="display text-2xl">Opening hours</h2>
+        <p className="mt-2 max-w-prose text-sm text-[var(--color-muted)]">
+          Shown in the footer of every page.
+        </p>
+        <div className="mt-6">
+          {(businessHours?.length ?? 0) > 0 ? (
+            <BusinessHoursForm hours={(businessHours ?? []) as BusinessHourRow[]} />
+          ) : (
+            <p className="text-sm text-[var(--color-muted)]">
+              No hours rows — run migration 010.
+            </p>
+          )}
+        </div>
       </section>
 
       <section className="mt-14">

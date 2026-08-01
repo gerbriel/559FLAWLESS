@@ -10,7 +10,7 @@ import { Input, Textarea, Field, Select } from '@/components/ui/field'
 import { Badge } from '@/components/ui/badge'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
-import { Plus, Trash2, Edit2 } from 'lucide-react'
+import { Plus, Trash2, Edit2, Eye, MousePointerClick, XCircle } from 'lucide-react'
 
 type Variant = 'info' | 'promo' | 'urgent'
 
@@ -65,11 +65,23 @@ function contrastRatio(a: string, b: string): number | null {
   return (hi + 0.05) / (lo + 0.05)
 }
 
-interface Props {
-  announcements: Announcement[]
+export interface AnnouncementStat {
+  announcement_id: number
+  views: number
+  clicks: number
+  dismissals: number
+  click_rate: number
 }
 
-export function AdminAnnouncementSettings({ announcements: initialAnnouncements }: Props) {
+interface Props {
+  announcements: Announcement[]
+  stats?: AnnouncementStat[]
+}
+
+export function AdminAnnouncementSettings({
+  announcements: initialAnnouncements,
+  stats = [],
+}: Props) {
   const router = useRouter()
   const [announcements, setAnnouncements] = useState(initialAnnouncements)
   const [editing, setEditing] = useState<number | 'new' | null>(null)
@@ -97,6 +109,8 @@ export function AdminAnnouncementSettings({ announcements: initialAnnouncements 
     priority: 0,
   })
   const [loading, setLoading] = useState(false)
+
+  const statFor = new Map(stats.map((s) => [s.announcement_id, s]))
 
   const preset = TEMPLATES.find((t) => t.value === formData.variant) ?? TEMPLATES[0]
 
@@ -333,6 +347,51 @@ export function AdminAnnouncementSettings({ announcements: initialAnnouncements 
                         Link: {announcement.link_label || announcement.link_url}
                       </p>
                     )}
+
+                    {/* How it actually performed. Views are counted once per
+                        session, so a header banner does not score an
+                        impression on every page a visitor opens. */}
+                    {(() => {
+                      const stat = statFor.get(announcement.id)
+                      if (!stat || stat.views === 0) {
+                        return (
+                          <p className="mt-2 text-xs text-[var(--color-muted)]">
+                            No views recorded yet.
+                          </p>
+                        )
+                      }
+                      return (
+                        <dl className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-[var(--color-muted)]">
+                          <div className="flex items-center gap-1.5">
+                            <Eye className="h-3 w-3" strokeWidth={1.75} />
+                            <dt className="sr-only">Views</dt>
+                            <dd className="tabular-nums">{stat.views} seen</dd>
+                          </div>
+                          {announcement.link_url && (
+                            <>
+                              <div className="flex items-center gap-1.5">
+                                <MousePointerClick className="h-3 w-3" strokeWidth={1.75} />
+                                <dt className="sr-only">Clicks</dt>
+                                <dd className="tabular-nums">{stat.clicks} clicked</dd>
+                              </div>
+                              <div>
+                                <dt className="sr-only">Click rate</dt>
+                                <dd className="tabular-nums text-[var(--color-accent)]">
+                                  {stat.click_rate}%
+                                </dd>
+                              </div>
+                            </>
+                          )}
+                          {stat.dismissals > 0 && (
+                            <div className="flex items-center gap-1.5">
+                              <XCircle className="h-3 w-3" strokeWidth={1.75} />
+                              <dt className="sr-only">Dismissed</dt>
+                              <dd className="tabular-nums">{stat.dismissals} closed it</dd>
+                            </div>
+                          )}
+                        </dl>
+                      )
+                    })()}
                     <div className="mt-2 text-xs text-[var(--color-muted)]">
                       {announcement.starts_at && (
                         <span>

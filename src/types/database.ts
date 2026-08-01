@@ -211,6 +211,24 @@ export type Closure = {
   created_at: string
 }
 
+/**
+ * A newsletter sent through the app's own inbox. Added in 028.
+ *
+ * `unreachable_count` is the people on the list with no account, who had to be
+ * emailed by hand — recorded so a send of "40" against a list of 200 is not
+ * mistaken for full coverage.
+ */
+export type Broadcast = {
+  id: number
+  subject: string
+  body: string
+  audience: 'clients' | 'subscribers' | 'staff'
+  sent_by: string | null
+  recipient_count: number
+  unreachable_count: number
+  created_at: string
+}
+
 export type CalendarBusy = {
   id: number
   provider_id: string
@@ -1256,6 +1274,7 @@ export type Database = {
           Rel<'payments_appointment_id_fkey', ['appointment_id'], 'appointments', ['id']>,
         ]
       >
+      broadcasts: TableDef<Broadcast, [ToProfile<'broadcasts', 'sent_by'>]>
     }
     // `{ [_ in never]: never }`, not `Record<string, never>` — the latter is an
     // index signature that matches EVERY key, so the client's relation lookup
@@ -1329,6 +1348,30 @@ export type Database = {
           p_events: { id: string; starts_at: string; ends_at: string; summary: string | null }[]
         }
         Returns: number
+      }
+      /**
+       * Send an in-app message to every reachable recipient — one thread each,
+       * so a reply is an ordinary conversation and nobody sees anyone else's.
+       * Returns { broadcast_id, sent, unreachable }. Added in 028.
+       */
+      send_broadcast: {
+        Args: {
+          p_subject: string
+          p_body: string
+          p_audience?: 'clients' | 'subscribers' | 'staff'
+        }
+        Returns: { broadcast_id: number; sent: number; unreachable: number }
+      }
+      /** Per-announcement views, clicks and dismissals. Manager only. Added in 028. */
+      announcement_stats: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          announcement_id: number
+          views: number
+          clicks: number
+          dismissals: number
+          click_rate: number
+        }[]
       }
       appointment_balance_cents: {
         Args: { p_appointment: string }

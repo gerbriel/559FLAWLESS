@@ -8,7 +8,13 @@ export const dynamic = 'force-dynamic'
 export default async function MarketingPage() {
   const supabase = await createClient()
 
-  const [{ data: pending }, { data: approved }, { count: subscribers }, { data: announcements }] =
+  const [
+    { data: pending },
+    { data: approved },
+    { count: subscribers },
+    { data: announcements },
+    { data: stats },
+  ] =
     await Promise.all([
       supabase
         .from('testimonials')
@@ -29,14 +35,17 @@ export default async function MarketingPage() {
         .from('announcements')
         .select('*')
         .order('created_at', { ascending: false }),
+      // Views, clicks and dismissals per announcement, so a promotion that
+      // worked is distinguishable from one nobody saw.
+      supabase.rpc('announcement_stats'),
     ])
 
   return (
-    <div className="max-w-3xl">
+    <div className="max-w-5xl">
       <h1 className="display text-3xl">Marketing</h1>
 
       <div className="mt-8 grid gap-px border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-3">
-        <Link href="/dashboard/marketing/newsletter" className="block hover:opacity-80">
+        <Link href="/dashboard/marketing/broadcast" className="block hover:opacity-80">
           <Stat label="Newsletter list" value={String(subscribers ?? 0)} />
         </Link>
         <Stat label="Reviews awaiting" value={String(pending?.length ?? 0)} />
@@ -69,7 +78,7 @@ export default async function MarketingPage() {
         </p>
 
         <div className="mt-6">
-          <AdminAnnouncementSettings announcements={announcements ?? []} />
+          <AdminAnnouncementSettings announcements={announcements ?? []} stats={stats ?? []} />
         </div>
       </section>
     </div>
