@@ -79,7 +79,8 @@ Two switches are available afterwards, both on by default:
      kicked off in the background. This is what actually protects slots in
      practice: by the time a client picks a time and presses book, the calendar
      has been re-read.
-  2. **Daily at 6am Pacific**, via the Vercel cron in `vercel.json`.
+  2. **Daily at 6am Pacific** (`0 13 * * *` UTC), via the Vercel cron in
+     `vercel.json` — before the studio opens.
   3. **On demand** — the *Sync now* button on My hours.
 
 > **Vercel Hobby only allows daily cron jobs.** The schedule is set to daily so

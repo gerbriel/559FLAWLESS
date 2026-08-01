@@ -3,7 +3,6 @@
   "crons": [
     {
       "path": "/api/calendar/sync",
-      "//": "Daily, because Vercel Hobby refuses anything more frequent. 13:00 UTC is 6am Pacific — before the studio opens. On Pro, change to '0 * * * *' for hourly. Either way the availability endpoint refreshes a stale calendar opportunistically, so slots are protected between sweeps.",
       "schedule": "0 13 * * *"
     }
   ]
