@@ -4,6 +4,12 @@ import type { CalendarAppointment } from '@/components/shared/CalendarView'
 
 import * as React from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import type {
+  ProviderSchedule,
+  AvailabilityBlockRow,
+  CalendarBusyRow,
+  ClosureRow,
+} from '@/lib/calendar-blocks'
 import { CalendarViewComponent, type CalendarView } from './CalendarView'
 import { AppointmentModal } from './AppointmentModal'
 interface Provider {
@@ -14,6 +20,10 @@ interface Provider {
 }
 
 interface CalendarClientProps {
+  schedules: ProviderSchedule[]
+  blocks: AvailabilityBlockRow[]
+  busy: CalendarBusyRow[]
+  closures: ClosureRow[]
   initialAppointments: CalendarAppointment[]
   providers: Provider[]
   timezone: string
@@ -25,6 +35,10 @@ export function CalendarClient({
   initialAppointments,
   providers,
   timezone,
+  schedules,
+  blocks,
+  busy,
+  closures,
   initialDate,
   initialView,
 }: CalendarClientProps) {
@@ -96,6 +110,10 @@ export function CalendarClient({
         appointments={initialAppointments}
         providers={providers}
         timezone={timezone}
+        schedules={schedules}
+        blocks={blocks}
+        busy={busy}
+        closures={closures}
         selectedProviders={selectedProviders}
         onViewChange={handleViewChange}
         onDateChange={handleDateChange}

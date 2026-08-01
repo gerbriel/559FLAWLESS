@@ -85,7 +85,9 @@ const ITEMS: NavItem[] = [
     href: '/dashboard/settings',
     label: 'Settings',
     icon: Settings,
-    visible: (r) => isAdmin(r),
+    // Managers need booking policy, hours and tax. The genuinely admin-only
+    // sections inside the page hide themselves.
+    visible: (r) => isManager(r),
   },
 ]
 

@@ -5,8 +5,26 @@ import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
-import { Field, Input, Textarea } from '@/components/ui/field'
+import { Field, Input, Textarea, Select } from '@/components/ui/field'
 import type { BookingSettings } from '@/types/database'
+
+/**
+ * The notice periods a studio actually chooses between.
+ *
+ * 24 hours is the default: enough to plan the day, not so much that a Friday
+ * cancellation cannot be refilled.
+ */
+const LEAD_PRESETS = [
+  { minutes: 0, label: 'None — same-day booking is fine' },
+  { minutes: 60, label: '1 hour' },
+  { minutes: 120, label: '2 hours' },
+  { minutes: 240, label: '4 hours' },
+  { minutes: 720, label: '12 hours' },
+  { minutes: 1440, label: '24 hours' },
+  { minutes: 2880, label: '2 days' },
+  { minutes: 4320, label: '3 days' },
+  { minutes: 10080, label: '1 week' },
+]
 
 export function BookingSettingsForm({ settings }: { settings: BookingSettings }) {
   const router = useRouter()
@@ -55,19 +73,36 @@ export function BookingSettingsForm({ settings }: { settings: BookingSettings })
       className="space-y-5 border border-[var(--color-border)] bg-[var(--color-surface)] p-6"
     >
       <div className="grid gap-5 sm:grid-cols-2">
+        {/* Offered in the units people actually think in. "1440 minutes" is
+            technically the same as "a day" and nobody reads it that way. */}
         <Field
-          label="Minimum notice (minutes)"
+          label="Notice required"
           htmlFor="min_lead"
-          hint="How soon before a slot someone can still book it."
+          hint="How far ahead a client has to book. You can still fit someone in yourself — this only limits online booking."
         >
-          <Input
+          <Select
             id="min_lead"
-            type="number"
-            min={0}
-            max={10080}
-            value={form.min_lead_minutes}
-            onChange={(e) => setForm({ ...form, min_lead_minutes: e.target.value })}
-          />
+            value={
+              LEAD_PRESETS.some((o) => String(o.minutes) === form.min_lead_minutes)
+                ? form.min_lead_minutes
+                : 'custom'
+            }
+            onChange={(e) => {
+              if (e.target.value === 'custom') return
+              setForm({ ...form, min_lead_minutes: e.target.value })
+            }}
+          >
+            {LEAD_PRESETS.map((o) => (
+              <option key={o.minutes} value={String(o.minutes)}>
+                {o.label}
+              </option>
+            ))}
+            {!LEAD_PRESETS.some((o) => String(o.minutes) === form.min_lead_minutes) && (
+              <option value="custom">
+                Custom — {form.min_lead_minutes} minutes
+              </option>
+            )}
+          </Select>
         </Field>
 
         <Field

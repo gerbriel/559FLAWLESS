@@ -4,12 +4,24 @@ import * as React from 'react'
 import { ChevronLeft, ChevronRight, Filter } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import {
+  blockedSpansForDay,
+  spansOverlappingHour,
+  formatSpan,
+  BLOCK_STYLES,
+  BLOCK_LABELS,
+  type ProviderSchedule,
+  type AvailabilityBlockRow,
+  type CalendarBusyRow,
+  type ClosureRow,
+  type BlockedSpan,
+} from '@/lib/calendar-blocks'
 import { formatMoney } from '@/lib/utils'
 import { 
   addDaysToDateKey, 
   dateKeyInTimeZone, 
   formatTimeInTimeZone,
-  dayOfWeekInTimeZone,
+  dayOfWeekForDateKey,
   monthLabelForDateKey,
   dayLabelForDateKey,
 } from '@/lib/time'
@@ -66,6 +78,10 @@ interface Provider {
 }
 
 interface CalendarViewProps {
+  schedules: ProviderSchedule[]
+  blocks: AvailabilityBlockRow[]
+  busy: CalendarBusyRow[]
+  closures: ClosureRow[]
   view: CalendarView
   currentDate: string // YYYY-MM-DD format
   appointments: CalendarAppointment[]
@@ -102,6 +118,10 @@ export function CalendarViewComponent({
   appointments,
   providers,
   timezone,
+  schedules,
+  blocks,
+  busy,
+  closures,
   selectedProviders,
   onViewChange,
   onDateChange,
@@ -249,6 +269,11 @@ export function CalendarViewComponent({
             appointments={filteredAppointments}
             providers={providers}
             timezone={timezone}
+            schedules={schedules}
+            blocks={blocks}
+            busy={busy}
+            closures={closures}
+            focusProvider={selectedProviders.length === 1 ? selectedProviders[0] : null}
             onAppointmentClick={onAppointmentClick}
             onSlotClick={onSlotClick}
             isToday={currentDate === todayKey}
@@ -260,6 +285,11 @@ export function CalendarViewComponent({
             appointments={filteredAppointments}
             providers={providers}
             timezone={timezone}
+            schedules={schedules}
+            blocks={blocks}
+            busy={busy}
+            closures={closures}
+            focusProvider={selectedProviders.length === 1 ? selectedProviders[0] : null}
             todayKey={todayKey}
             onAppointmentClick={onAppointmentClick}
             onSlotClick={onSlotClick}
@@ -297,6 +327,12 @@ export function CalendarViewComponent({
 
 // Day View Component
 interface DayViewProps {
+  schedules: ProviderSchedule[]
+  blocks: AvailabilityBlockRow[]
+  busy: CalendarBusyRow[]
+  closures: ClosureRow[]
+  /** Whose availability to shade. Null when several providers are shown. */
+  focusProvider: string | null
   date: string
   appointments: CalendarAppointment[]
   providers: Provider[]
@@ -306,11 +342,13 @@ interface DayViewProps {
   isToday: boolean
 }
 
-function DayView({ date, appointments, providers, timezone, onAppointmentClick, onSlotClick, isToday }: DayViewProps) {
-  const [y, m, d] = date.split('-').map(Number)
-  const dateObj = new Date(Date.UTC(y, m - 1, d))
-  const dow = dayOfWeekInTimeZone(dateObj, timezone)
-  
+function DayView({
+  date, appointments, providers, timezone,
+  schedules, blocks, busy, closures, focusProvider,
+  onAppointmentClick, onSlotClick, isToday,
+}: DayViewProps) {
+  const dow = dayOfWeekForDateKey(date)
+
   const dayAppointments = appointments.filter(a => {
     const apptDate = dateKeyInTimeZone(new Date(a.starts_at), timezone)
     return apptDate === date
@@ -319,12 +357,48 @@ function DayView({ date, appointments, providers, timezone, onAppointmentClick, 
   // Generate hourly slots from 8 AM to 8 PM
   const hours = Array.from({ length: 13 }, (_, i) => i + 8)
 
+  // Everything making this day unbookable, so it can be shown rather than left
+  // as an unexplained gap.
+  const spans = blockedSpansForDay(date, timezone, {
+    providerId: focusProvider,
+    schedules,
+    blocks,
+    busy,
+    closures,
+  })
+
+  // Whole-day reasons belong at the top, not smeared across every hour row.
+  const allDay = spans.filter((s) => s.startMinutes === 0 && s.endMinutes === 1440)
+  const partial = spans.filter((s) => !(s.startMinutes === 0 && s.endMinutes === 1440))
+
   return (
     <div>
       <h2 className="display mb-4 text-2xl">
         {dayLabelForDateKey(date)}
         {isToday && <Badge tone="neutral" className="ml-3">Today</Badge>}
       </h2>
+
+      {allDay.length > 0 && (
+        <ul className="mb-4 space-y-2">
+          {allDay.map((s, i) => (
+            <li
+              key={`${s.kind}-${i}`}
+              className={`border-l-2 px-4 py-3 text-sm ${BLOCK_STYLES[s.kind]}`}
+            >
+              <span className="label-caps mr-2 text-[var(--color-muted)]">
+                {BLOCK_LABELS[s.kind]}
+              </span>
+              {s.label !== BLOCK_LABELS[s.kind] && s.label}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {!focusProvider && (
+        <p className="mb-4 text-xs text-[var(--color-muted)]">
+          Filter to one provider to see their working hours and time off shaded in.
+        </p>
+      )}
 
       <div className="space-y-1 border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
         {hours.map(hour => {
@@ -335,10 +409,16 @@ function DayView({ date, appointments, providers, timezone, onAppointmentClick, 
             return apptHour === hour
           })
 
+          const hourSpans = spansOverlappingHour(partial, hour)
+          const cover = hourSpans[0]
+
           return (
             <div
               key={hour}
-              className="flex min-h-16 gap-4 border-t border-[var(--color-border)] py-2 first:border-t-0"
+              className={`flex min-h-16 gap-4 border-t border-[var(--color-border)] py-2 first:border-t-0 ${
+                cover ? BLOCK_STYLES[cover.kind] : ''
+              }`}
+              title={cover ? `${cover.label} · ${formatSpan(cover)}` : undefined}
             >
               <div className="w-20 pt-1 text-sm text-[var(--color-muted)] tabular-nums">
                 {timeString}
@@ -398,6 +478,11 @@ function DayView({ date, appointments, providers, timezone, onAppointmentClick, 
 
 // Week View Component
 interface WeekViewProps {
+  schedules: ProviderSchedule[]
+  blocks: AvailabilityBlockRow[]
+  busy: CalendarBusyRow[]
+  closures: ClosureRow[]
+  focusProvider: string | null
   startDate: string
   appointments: CalendarAppointment[]
   providers: Provider[]
@@ -407,7 +492,19 @@ interface WeekViewProps {
   onSlotClick?: (date: string, time: string) => void
 }
 
-function WeekView({ startDate, appointments, providers, timezone, todayKey, onAppointmentClick }: WeekViewProps) {
+function WeekView({
+  startDate,
+  appointments,
+  providers,
+  timezone,
+  todayKey,
+  schedules,
+  blocks,
+  busy,
+  closures,
+  focusProvider,
+  onAppointmentClick,
+}: WeekViewProps) {
   const days = Array.from({ length: 7 }, (_, i) => addDaysToDateKey(startDate, i))
 
   const byDay = new Map<string, CalendarAppointment[]>()
@@ -420,13 +517,30 @@ function WeekView({ startDate, appointments, providers, timezone, todayKey, onAp
     <div className="grid gap-px border border-[var(--color-border)] bg-[var(--color-border)] md:grid-cols-2 xl:grid-cols-7">
       {days.map(key => {
         const list = byDay.get(key) ?? []
-        const [y, m, d] = key.split('-').map(Number)
-        const dateObj = new Date(Date.UTC(y, m - 1, d))
-        const dow = dayOfWeekInTimeZone(dateObj, timezone)
+        const [, , d] = key.split('-').map(Number)
+        const dow = dayOfWeekForDateKey(key)
         const isToday = key === todayKey
 
+        // Why this day is (partly) unavailable, summarised in a line.
+        const daySpans = blockedSpansForDay(key, timezone, {
+          providerId: focusProvider,
+          schedules,
+          blocks,
+          busy,
+          closures,
+        })
+        const notable = daySpans.filter((s) => s.kind !== 'off_hours')
+        const fullyOff = daySpans.some(
+          (s) => s.startMinutes === 0 && s.endMinutes === 1440
+        )
+
         return (
-          <div key={key} className="min-h-48 bg-[var(--color-background)] p-3">
+          <div
+            key={key}
+            className={`min-h-48 p-3 ${
+              fullyOff ? 'bg-[var(--color-linen)] dark:bg-[var(--color-surface)]' : 'bg-[var(--color-background)]'
+            }`}
+          >
             <p
               className={`label-caps mb-3 flex items-baseline justify-between ${
                 isToday ? 'text-[var(--color-accent)]' : 'text-[var(--color-muted)]'
@@ -436,8 +550,27 @@ function WeekView({ startDate, appointments, providers, timezone, todayKey, onAp
               <span className="text-sm tracking-normal">{d}</span>
             </p>
 
+            {/* Time that is off, so an empty day reads as a reason rather than
+                just an absence. */}
+            {notable.length > 0 && (
+              <ul className="mb-2 space-y-1">
+                {notable.map((sp, i) => (
+                  <li
+                    key={`${sp.kind}-${i}`}
+                    className={`border-l-2 px-2 py-1 text-[0.6875rem] leading-tight ${BLOCK_STYLES[sp.kind]}`}
+                    title={`${sp.label} · ${formatSpan(sp)}`}
+                  >
+                    <span className="block truncate">{sp.label}</span>
+                    <span className="block text-[var(--color-muted)]">{formatSpan(sp)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
             {list.length === 0 ? (
-              <p className="text-xs text-[var(--color-muted)]">—</p>
+              <p className="text-xs text-[var(--color-muted)]">
+                {notable.length > 0 ? '' : '—'}
+              </p>
             ) : (
               <ul className="space-y-2">
                 {list.map(appt => {
@@ -494,8 +627,11 @@ function MonthView({ month, appointments, providers, timezone, todayKey, onAppoi
   const lastDay = new Date(Date.UTC(year, monthNum, 0))
   const daysInMonth = lastDay.getUTCDate()
   
-  // Get day of week for first day (0 = Sunday)
-  const startDow = dayOfWeekInTimeZone(firstDay, timezone)
+  // Which column the 1st sits in. Derived from the date KEY, not from an
+  // instant: Date.UTC(2026, 7, 1) is midnight UTC, which in Pacific is
+  // 31 July at 5pm — a Friday — so converting it through the timezone put
+  // every day of the month one column to the left.
+  const startDow = dayOfWeekForDateKey(`${month}-01`)
   
   // Calculate total cells needed
   const totalCells = startDow + daysInMonth

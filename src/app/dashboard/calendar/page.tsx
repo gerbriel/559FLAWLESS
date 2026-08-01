@@ -82,6 +82,35 @@ export default async function CalendarPage({ searchParams }: Props) {
     .is('suspended_at', null)
     .order('display_name')
 
+  // Everything that makes a time unbookable, so the calendar can SHOW it rather
+  // than just silently omitting the slot. Working hours are included because
+  // "why is nothing bookable on Sunday" should be answerable by looking.
+  const rangeStart = zonedTimeToUtc(startKey, '00:00', tz).toISOString()
+  const rangeEnd = zonedTimeToUtc(endKey, '00:00', tz).toISOString()
+
+  const [{ data: schedules }, { data: blocks }, { data: busy }, { data: closures }] =
+    await Promise.all([
+      supabase
+        .from('provider_schedules')
+        .select('provider_id, day_of_week, start_time, end_time, is_active')
+        .eq('is_active', true),
+      supabase
+        .from('availability_blocks')
+        .select('id, provider_id, block_date, start_time, end_time, reason')
+        .gte('block_date', startKey)
+        .lt('block_date', endKey),
+      supabase
+        .from('calendar_busy')
+        .select('id, provider_id, starts_at, ends_at, summary')
+        .lt('starts_at', rangeEnd)
+        .gt('ends_at', rangeStart),
+      supabase
+        .from('closures')
+        .select('closure_date, reason')
+        .gte('closure_date', startKey)
+        .lt('closure_date', endKey),
+    ])
+
   // Format appointments data for the client component
   const formattedAppointments = (appointments || []).map(appt => ({
     ...appt,
@@ -97,6 +126,10 @@ export default async function CalendarPage({ searchParams }: Props) {
         initialAppointments={formattedAppointments}
         providers={(providers || []) as any}
         timezone={tz}
+        schedules={schedules ?? []}
+        blocks={blocks ?? []}
+        busy={busy ?? []}
+        closures={closures ?? []}
         initialDate={startKey}
         initialView={view}
       />
