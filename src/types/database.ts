@@ -1015,7 +1015,15 @@ export type Database = {
           ToProfile<'appointment_events', 'actor_id'>,
         ]
       >
-      client_records: TableDef<ClientRecord, [ToProfile<'client_records', 'client_id'>]>
+      // Two FKs to profiles — any embed of this table MUST name the one it
+      // means, e.g. `client_records!client_records_client_id_fkey(...)`.
+      client_records: TableDef<
+        ClientRecord,
+        [
+          ToProfile<'client_records', 'client_id'>,
+          ToProfile<'client_records', 'preferred_provider_id'>,
+        ]
+      >
       client_notes: TableDef<
         ClientNote,
         [

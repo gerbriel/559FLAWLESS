@@ -6,9 +6,14 @@ const nextConfig: NextConfig = {
   devIndicators: false,
 
   images: {
-    // Product and treatment imagery served from Supabase storage.
     remotePatterns: [
+      // Studio-uploaded imagery.
       { protocol: 'https', hostname: '*.supabase.co', pathname: '/storage/v1/object/public/**' },
+      // Official Rhonda Allison product photography. Retail is fulfilled by
+      // their marketplace, so the product shots are served from the brand's CDN
+      // rather than copied into this project.
+      { protocol: 'https', hostname: 'cdn.shopify.com' },
+      { protocol: 'https', hostname: 'ramarketplace.com' },
     ],
     formats: ['image/avif', 'image/webp'],
   },

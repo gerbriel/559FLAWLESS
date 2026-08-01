@@ -17,8 +17,13 @@ export default async function ClientsPage({ searchParams }: Props) {
 
   let query = supabase
     .from('profiles')
+    // The FK must be named. `client_records` points at `profiles` twice —
+    // `client_id` and `preferred_provider_id` — so a bare `client_records(...)`
+    // embed is ambiguous. PostgREST answers that with an error rather than
+    // rows, which silently rendered this page as "no clients" even when
+    // clients existed.
     .select(
-      'id, first_name, last_name, email, phone, created_at, client_records(visit_count, last_visit_at, no_show_count, lifetime_value_cents)'
+      'id, first_name, last_name, email, phone, created_at, client_records!client_records_client_id_fkey(visit_count, last_visit_at, no_show_count, lifetime_value_cents)'
     )
     .eq('role', 'client')
     .order('created_at', { ascending: false })
@@ -65,11 +70,24 @@ export default async function ClientsPage({ searchParams }: Props) {
   })
 
   const flaggedIntakesMap = new Map<string, number>()
+  // Presence, not just problems. A submitted intake with no flags is the
+  // normal case and previously rendered nothing at all, which is
+  // indistinguishable from "never filled anything in".
+  const hasIntakeSet = new Set<string>()
+  const intakeNeedsReviewSet = new Set<string>()
   intakes?.forEach(i => {
-    if (i.flags && i.flags.length > 0 && !i.reviewed_at) {
-      flaggedIntakesMap.set(i.client_id, (flaggedIntakesMap.get(i.client_id) ?? 0) + 1)
+    hasIntakeSet.add(i.client_id)
+    if (i.flags && i.flags.length > 0) {
+      if (!i.reviewed_at) {
+        flaggedIntakesMap.set(i.client_id, (flaggedIntakesMap.get(i.client_id) ?? 0) + 1)
+      }
+    } else if (!i.reviewed_at) {
+      intakeNeedsReviewSet.add(i.client_id)
     }
   })
+
+  const hasConsentSet = new Set<string>()
+  consents?.forEach(c => hasConsentSet.add(c.client_id))
 
   const bookingAbandonedMap = new Map<string, number>()
   analytics?.forEach(e => {
@@ -115,6 +133,9 @@ export default async function ClientsPage({ searchParams }: Props) {
             const expiredConsents = expiredConsentsMap.get(c.id) ?? 0
             const flaggedIntakes = flaggedIntakesMap.get(c.id) ?? 0
             const abandonedBookings = bookingAbandonedMap.get(c.id) ?? 0
+            const hasIntake = hasIntakeSet.has(c.id)
+            const intakeUnreviewed = intakeNeedsReviewSet.has(c.id)
+            const hasConsent = hasConsentSet.has(c.id)
 
             return (
               <li key={c.id}>
@@ -135,6 +156,19 @@ export default async function ClientsPage({ searchParams }: Props) {
                       {c.phone && ` · ${c.phone}`}
                     </p>
                     <div className="mt-2 flex flex-wrap gap-2">
+                      {/* Forms status, always shown — a client with nothing on
+                          file is the one you most need to spot. */}
+                      {!hasIntake ? (
+                        <Badge tone="neutral">No intake on file</Badge>
+                      ) : intakeUnreviewed ? (
+                        <Badge tone="info">Intake awaiting review</Badge>
+                      ) : (
+                        <Badge tone="success">
+                          <CheckCircle2 className="mr-1 h-3 w-3" />
+                          Intake complete
+                        </Badge>
+                      )}
+                      {!hasConsent && <Badge tone="neutral">No consent signed</Badge>}
                       {expiredConsents > 0 && (
                         <Badge tone="warning">
                           <AlertTriangle className="mr-1 h-3 w-3" />

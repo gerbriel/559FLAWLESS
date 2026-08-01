@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import Image from 'next/image'
 import { notFound } from 'next/navigation'
 import type { Metadata } from 'next'
 import { ArrowUpRight } from 'lucide-react'
@@ -68,7 +69,18 @@ export default async function ProductPage({ params }: Props) {
     <Section>
       <Container className="grid gap-16 lg:grid-cols-2">
         <div>
-          <div className="aspect-square w-full bg-[var(--color-linen)] dark:bg-[var(--color-surface)]" />
+          <div className="relative aspect-square w-full overflow-hidden bg-[var(--color-linen)] dark:bg-[var(--color-surface)]">
+            {product.image_url && (
+              <Image
+                src={product.image_url}
+                alt={product.name}
+                fill
+                priority
+                sizes="(max-width: 1024px) 100vw, 45vw"
+                className="object-contain p-10"
+              />
+            )}
+          </div>
         </div>
 
         <div>

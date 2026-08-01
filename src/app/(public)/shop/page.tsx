@@ -150,7 +150,18 @@ export default async function ShopPage({ searchParams }: Props) {
 
               const body = (
                 <>
-                  <div className="relative mb-6 aspect-square w-full bg-[var(--color-linen)] dark:bg-[var(--color-surface)]">
+                  <div className="relative mb-6 aspect-square w-full overflow-hidden bg-[var(--color-linen)] dark:bg-[var(--color-surface)]">
+                    {p.image_url && (
+                      <Image
+                        src={p.image_url}
+                        alt={p.name}
+                        fill
+                        sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+                        // Product shots are transparent PNGs of a bottle, so
+                        // `contain` with padding rather than a cropping `cover`.
+                        className="object-contain p-6 transition-transform duration-500 group-hover:scale-105"
+                      />
+                    )}
                     {outOfStock && (
                       <span className="absolute left-3 top-3">
                         <Badge tone="neutral">Out of stock</Badge>
