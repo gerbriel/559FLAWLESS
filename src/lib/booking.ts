@@ -23,6 +23,7 @@
 
 import 'server-only'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { syncAppointmentToCalendar } from '@/lib/calendar-push'
 import { generateSlots, type AvailabilityInput } from '@/lib/availability'
 import { dateKeyInTimeZone, isValidTimeZone, MINUTE_MS } from '@/lib/time'
 
@@ -408,6 +409,12 @@ export async function createBooking(req: BookingRequest): Promise<BookingOutcome
     return failure('booking_failed', 500)
   }
 
+  // Mirror it into the provider's Google Calendar. Deliberately not awaited
+  // into the response path: the booking is already committed and the client is
+  // waiting. If Google is slow or down, the next sync reconciles rather than
+  // the client seeing an error for a slot they successfully took.
+  void syncAppointmentToCalendar(appointment.id)
+
   return {
     ok: true,
     booking: {
@@ -578,6 +585,8 @@ export async function createStaffBooking(req: StaffBookingRequest): Promise<Book
     console.error('staff booking line items failed', lineError)
     return failure('booking_failed', 500)
   }
+
+  void syncAppointmentToCalendar(appointment.id)
 
   // No notification is written here: the appointment_notify trigger already
   // tells the client and the provider. Doing it again sent two.

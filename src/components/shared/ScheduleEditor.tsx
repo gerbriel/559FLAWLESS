@@ -94,31 +94,70 @@ export function ScheduleEditor({
     if (!newBlock.block_date) return
 
     setBusy(true)
-    const { error } = await createClient().from('availability_blocks').insert({
-      provider_id: providerId,
-      block_date: newBlock.block_date,
-      start_time: newBlock.all_day ? null : newBlock.start_time,
-      end_time: newBlock.all_day ? null : newBlock.end_time,
-      // Visible to anyone reading availability — keep it non-personal.
-      reason: newBlock.reason.trim() || null,
-    })
+    const { data: created, error } = await createClient()
+      .from('availability_blocks')
+      .insert({
+        provider_id: providerId,
+        block_date: newBlock.block_date,
+        start_time: newBlock.all_day ? null : newBlock.start_time,
+        end_time: newBlock.all_day ? null : newBlock.end_time,
+        // Visible to anyone reading availability — keep it non-personal.
+        reason: newBlock.reason.trim() || null,
+      })
+      .select('id')
+      .single()
     setBusy(false)
 
     if (error) {
       toast.error('Could not add that block.')
       return
     }
+
+    // Mirror it into Google if a calendar is connected. Not awaited into the
+    // success path — the block is already blocking bookings, which is the part
+    // that matters; the calendar entry is convenience.
+    if (created) {
+      void fetch('/api/calendar/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: 'block', id: created.id }),
+      }).catch(() => {})
+    }
+
     setNewBlock({ ...newBlock, block_date: '', reason: '' })
     toast.success('Time blocked.')
     router.refresh()
   }
 
   async function removeBlock(id: number) {
-    const { error } = await createClient().from('availability_blocks').delete().eq('id', id)
+    const supabase = createClient()
+
+    // Read the Google id before deleting, or there is nothing left to tidy up
+    // with and the calendar keeps an entry for time that is free again.
+    const { data: existing } = await supabase
+      .from('availability_blocks')
+      .select('google_event_id, provider_id')
+      .eq('id', id)
+      .maybeSingle()
+
+    const { error } = await supabase.from('availability_blocks').delete().eq('id', id)
     if (error) {
       toast.error('Could not remove that.')
       return
     }
+
+    if (existing?.google_event_id) {
+      void fetch('/api/calendar/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'block_removed',
+          providerId: existing.provider_id,
+          googleEventId: existing.google_event_id,
+        }),
+      }).catch(() => {})
+    }
+
     router.refresh()
   }
 

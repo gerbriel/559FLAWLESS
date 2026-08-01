@@ -199,6 +199,8 @@ export type AvailabilityBlock = {
   end_time: string | null
   reason: string | null
   created_by: string | null
+  /** The Google event this became, so an edit updates rather than duplicates. */
+  google_event_id: string | null
   created_at: string
 }
 
@@ -216,6 +218,10 @@ export type CalendarBusy = {
   ends_at: string
   source: string
   synced_at: string
+  /** Google's event id — unique per provider, so a re-sync updates in place. */
+  external_id: string | null
+  /** Event title. Shown to staff so an unexplained block is not a mystery. */
+  summary: string | null
 }
 
 export type BookingSettings = {
@@ -931,10 +937,24 @@ export type CalendarConnection = {
   provider_id: string
   google_email: string | null
   calendar_id: string
+  /**
+   * AES-256-GCM, encrypted in the route handler before it ever reaches the
+   * database. Nothing reads these through PostgREST — only the service-role
+   * client in src/lib/google-calendar.ts, which decrypts them there.
+   */
   access_token_enc: string | null
   refresh_token_enc: string | null
   expires_at: string | null
   revoked_at: string | null
+
+  // ── Added in 027 ────────────────────────────────────────────
+  last_synced_at: string | null
+  last_sync_error: string | null
+  /** Put this studio's bookings into the provider's Google Calendar. */
+  push_appointments: boolean
+  /** Let the provider's own calendar entries block bookable slots. */
+  pull_busy: boolean
+
   created_at: string
   updated_at: string
 }
@@ -1294,6 +1314,20 @@ export type Database = {
       }
       sales_tax_rate: {
         Args: Record<PropertyKey, never>
+        Returns: number
+      }
+      /**
+       * Replace a provider's cached busy intervals for one window with what
+       * Google just reported. Windowed, so syncing next month leaves this
+       * month alone. Added in 027.
+       */
+      replace_calendar_busy: {
+        Args: {
+          p_provider: string
+          p_from: string
+          p_to: string
+          p_events: { id: string; starts_at: string; ends_at: string; summary: string | null }[]
+        }
         Returns: number
       }
       appointment_balance_cents: {
