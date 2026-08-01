@@ -114,6 +114,19 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       )
     }
+    // The Rhonda Allison catalogue was seeded without prices — the marketplace
+    // owned them. Selling at the counter needs the studio's own figure, and
+    // ringing up $0 is worse than refusing.
+    if (p.price_cents <= 0) {
+      return NextResponse.json(
+        {
+          error: 'no_price',
+          message: `${p.name} has no price yet. Set one under Inventory before selling it.`,
+          productId,
+        },
+        { status: 409 }
+      )
+    }
     if (Number(p.stock_qty) < qty) {
       return NextResponse.json(
         {

@@ -62,8 +62,12 @@ export default async function ProductPage({ params }: Props) {
 
   const brand = product.brands as { name: string } | null
   const category = product.product_categories as { name: string; slug: string } | null
-  const external = !!product.external_url
-  const inStock = Number(product.stock_qty) > 0
+  // Stock decides where this is bought. The studio keeps these on the shelf and
+  // sells them in the room; the marketplace link is the fallback when she is
+  // out, not a statement that she never holds any.
+  const inStock = Number(product.stock_qty) > 0 && product.price_cents > 0
+  const canShip = !!product.external_url
+  const external = !inStock && canShip
 
   return (
     <Section>
@@ -93,22 +97,28 @@ export default async function ProductPage({ params }: Props) {
           )}
           <h1 className="display mt-3 text-4xl">{product.name}</h1>
 
-          {/* Price and stock are only ours to state for what we hold in the
-              salon. An externally fulfilled product is priced and shipped by
-              the marketplace, so we send the client there rather than quote a
-              figure we cannot honour. */}
-          {external ? (
+          {/* Only the studio's own price is quoted. Once she is out and the
+              client is sent to the marketplace, the price is theirs and may
+              differ, so we do not put a figure we cannot honour on it. */}
+          {inStock ? (
+            <>
+              <p className="mt-6 text-2xl tabular-nums">{formatMoney(product.price_cents)}</p>
+              {canShip && (
+                <div className="mt-4">
+                  <Badge tone="success">In the studio now</Badge>
+                </div>
+              )}
+            </>
+          ) : external ? (
             <div className="mt-4">
               <Badge tone="accent">Ships direct from {brand?.name ?? 'the brand'}</Badge>
             </div>
           ) : (
             <>
               <p className="mt-6 text-2xl tabular-nums">{formatMoney(product.price_cents)}</p>
-              {!inStock && (
-                <div className="mt-4">
-                  <Badge tone="neutral">Out of stock</Badge>
-                </div>
-              )}
+              <div className="mt-4">
+                <Badge tone="neutral">Out of stock</Badge>
+              </div>
             </>
           )}
 
@@ -120,17 +130,30 @@ export default async function ProductPage({ params }: Props) {
 
           <div className="mt-8">
             {external ? (
-              <ButtonLink
-                href={product.external_url!}
-                target="_blank"
-                rel="noreferrer noopener"
-                size="lg"
-              >
-                Add to cart
-                <ArrowUpRight className="h-4 w-4" strokeWidth={2} />
-              </ButtonLink>
+              <>
+                <ButtonLink
+                  href={product.external_url!}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  size="lg"
+                >
+                  Order it shipped
+                  <ArrowUpRight className="h-4 w-4" strokeWidth={2} />
+                </ButtonLink>
+                <p className="mt-3 text-sm text-[var(--color-muted)]">
+                  We are out of this one at the moment. {brand?.name ?? 'The brand'} will
+                  take payment and ship it to you directly.
+                </p>
+              </>
             ) : (
-              <AddToCart productId={product.id} disabled={!inStock} />
+              <>
+                <AddToCart productId={product.id} disabled={!inStock} />
+                {!inStock && !canShip && (
+                  <p className="mt-3 text-sm text-[var(--color-muted)]">
+                    Ask us at your next visit — we can order it in.
+                  </p>
+                )}
+              </>
             )}
           </div>
 

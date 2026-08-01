@@ -43,7 +43,7 @@ export default async function InventoryPage({ searchParams }: Props) {
 
   let query = supabase
     .from('products')
-    .select('id, sku, name, unit, stock_qty, low_stock_threshold, price_cents, cost_cents, is_retail, is_professional, is_active, brands(name)')
+    .select('id, sku, name, unit, stock_qty, low_stock_threshold, price_cents, cost_cents, is_retail, is_professional, is_active, external_url, brands(name)')
     .eq('is_active', true)
     .is('archived_at', null)
     .order('name')
@@ -147,7 +147,11 @@ export default async function InventoryPage({ searchParams }: Props) {
                       </span>
                     </td>
                     <td className="px-3 py-3 text-right tabular-nums">
-                      {formatMoney(p.price_cents)}
+                      {p.price_cents > 0 ? (
+                        formatMoney(p.price_cents)
+                      ) : (
+                        <Badge tone="warning">No price</Badge>
+                      )}
                     </td>
                     {canSeeCost && (
                       <td className="px-3 py-3 text-right tabular-nums text-[var(--color-muted)]">
@@ -164,6 +168,9 @@ export default async function InventoryPage({ searchParams }: Props) {
                           low_stock_threshold: Number(p.low_stock_threshold),
                           is_retail: p.is_retail,
                           is_professional: p.is_professional,
+                          price_cents: p.price_cents,
+                          cost_cents: p.cost_cents,
+                          external_url: p.external_url,
                         }}
                       />
                     </td>

@@ -84,8 +84,11 @@ on conflict (slug) do update set
   image_url    = coalesce(excluded.image_url, public.products.image_url),
   external_url = excluded.external_url,
   is_retail    = true,
-  price_cents  = 0,
-  stock_qty    = 0,
+  -- Price and stock are the STUDIO's, not the catalogue's. This clause used to
+  -- reset both to 0, which contradicted the header above and meant a re-run to
+  -- refresh a photo would silently wipe every price and count in the room.
+  -- They are left alone now; a fresh insert still starts at 0 (see the column
+  -- list), so nothing is invented for a product that has never been priced.
   sort_order   = excluded.sort_order,
   archived_at  = null,
   is_active    = true;

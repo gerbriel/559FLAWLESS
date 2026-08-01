@@ -145,8 +145,13 @@ export default async function ShopPage({ searchParams }: Props) {
           <div className="mt-12 grid gap-px border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-2 lg:grid-cols-3">
             {visible.map((p) => {
               const brand = p.brands as { name: string } | null
-              const external = !!p.external_url
-              const outOfStock = !external && Number(p.stock_qty) <= 0
+              // Stock decides where a product is bought, not whether it has a
+              // marketplace link. The studio keeps these on the shelf and sells
+              // them in the room; the link is what happens when she runs out.
+              const inStock = Number(p.stock_qty) > 0 && p.price_cents > 0
+              const canShip = !!p.external_url
+              const external = !inStock && canShip
+              const outOfStock = !inStock && !canShip
 
               const body = (
                 <>
@@ -172,6 +177,11 @@ export default async function ShopPage({ searchParams }: Props) {
                         <Badge tone="accent">Ships direct</Badge>
                       </span>
                     )}
+                    {inStock && canShip && (
+                      <span className="absolute left-3 top-3">
+                        <Badge tone="success">In studio</Badge>
+                      </span>
+                    )}
                   </div>
                   {brand && (
                     <p className="label-caps mb-2 text-[var(--color-muted)]">{brand.name}</p>
@@ -190,11 +200,16 @@ export default async function ShopPage({ searchParams }: Props) {
                       {p.description}
                     </p>
                   )}
-                  {/* An externally fulfilled product's price lives on the
-                      marketplace, so we don't quote one we can't guarantee. */}
-                  {!external && (
+                  {/* Only the studio's own price is quoted. When it is out and
+                      the client is sent to the marketplace, that price is
+                      theirs and may differ, so we do not put a figure on it. */}
+                  {inStock ? (
                     <p className="mt-4 tabular-nums">{formatMoney(p.price_cents)}</p>
-                  )}
+                  ) : external ? (
+                    <p className="label-caps mt-4 text-[var(--color-muted)]">
+                      Order direct
+                    </p>
+                  ) : null}
                 </>
               )
 

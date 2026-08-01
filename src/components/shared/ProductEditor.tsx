@@ -26,7 +26,20 @@ export interface EditableProduct {
   low_stock_threshold: number
   is_retail: boolean
   is_professional: boolean
+  price_cents: number
+  cost_cents: number
+  /** Where clients are sent when there is none left, if anywhere. */
+  external_url: string | null
 }
+
+/** "$42.00" → 4200. Null if it isn't a number. */
+function toCents(dollars: string): number | null {
+  const n = Number(dollars.replace(/[$,\s]/g, ''))
+  if (!Number.isFinite(n) || n < 0) return null
+  return Math.round(n * 100)
+}
+
+const money = (cents: number) => (cents / 100).toFixed(2)
 
 /**
  * Stock and shelf settings for one product.
@@ -48,6 +61,8 @@ export function ProductEditor({ product }: { product: EditableProduct }) {
   const [retail, setRetail] = useState(product.is_retail)
   const [backBar, setBackBar] = useState(product.is_professional)
   const [threshold, setThreshold] = useState(String(product.low_stock_threshold))
+  const [price, setPrice] = useState(money(product.price_cents))
+  const [cost, setCost] = useState(money(product.cost_cents))
 
   async function applyStock(e: React.FormEvent) {
     e.preventDefault()
@@ -92,10 +107,31 @@ export function ProductEditor({ product }: { product: EditableProduct }) {
       return
     }
 
+    const priceCents = toCents(price)
+    const costCents = toCents(cost)
+    if (priceCents === null) {
+      toast.error('That price is not a number.')
+      return
+    }
+    if (costCents === null) {
+      toast.error('That cost is not a number.')
+      return
+    }
+    if (retail && priceCents === 0) {
+      toast.error('A retail product needs a price before it can be sold.')
+      return
+    }
+
     setBusy(true)
     const { error } = await createClient()
       .from('products')
-      .update({ is_retail: retail, is_professional: backBar, low_stock_threshold: t })
+      .update({
+        is_retail: retail,
+        is_professional: backBar,
+        low_stock_threshold: t,
+        price_cents: priceCents,
+        cost_cents: costCents,
+      })
       .eq('id', product.id)
     setBusy(false)
 
@@ -173,6 +209,52 @@ export function ProductEditor({ product }: { product: EditableProduct }) {
           {busy ? 'Saving…' : 'Apply'}
         </Button>
       </form>
+
+      <div className="space-y-3 border-t border-[var(--color-border)] pt-5">
+        <p className="label-caps text-[var(--color-muted)]">Price</p>
+
+        {product.price_cents === 0 && (
+          <p className="border-l-2 border-[var(--color-accent)] bg-[var(--color-clay-soft)] p-3 text-sm text-[var(--color-muted)] dark:bg-[var(--color-background)]">
+            No price set yet, so this cannot be sold at the counter. The catalogue was
+            imported without prices — these are yours to set.
+          </p>
+        )}
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field
+            label="You charge"
+            htmlFor={`price_${product.id}`}
+            hint="In dollars, e.g. 42 or 42.00"
+          >
+            <Input
+              id={`price_${product.id}`}
+              inputMode="decimal"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+            />
+          </Field>
+
+          <Field
+            label="It costs you"
+            htmlFor={`cost_${product.id}`}
+            hint="Optional. Used for margin in Analytics."
+          >
+            <Input
+              id={`cost_${product.id}`}
+              inputMode="decimal"
+              value={cost}
+              onChange={(e) => setCost(e.target.value)}
+            />
+          </Field>
+        </div>
+
+        {product.external_url && (
+          <p className="text-xs text-[var(--color-muted)]">
+            When this runs out, clients are sent to the Rhonda Allison store to have it
+            shipped. That price is theirs and is not shown here.
+          </p>
+        )}
+      </div>
 
       <div className="space-y-3 border-t border-[var(--color-border)] pt-5">
         <p className="label-caps text-[var(--color-muted)]">Where it lives</p>
