@@ -1,5 +1,10 @@
 import { createAdminClient } from '@/lib/supabase/admin'
-import { pushEvent, deleteEvent, calendarSyncConfigured } from '@/lib/google-calendar'
+import {
+  pushEvent,
+  deleteEvent,
+  fetchBusy,
+  calendarSyncConfigured,
+} from '@/lib/google-calendar'
 import { zonedTimeToUtc } from '@/lib/time'
 
 /**
@@ -181,5 +186,59 @@ export async function removeBlockFromCalendar(
     await deleteEvent(providerId, target.calendarId, googleEventId)
   } catch (err) {
     console.error('block calendar removal failed', googleEventId, err)
+  }
+}
+
+/**
+ * Refresh a provider's cached busy time if it has gone stale, without making
+ * anyone wait for it.
+ *
+ * The scheduled sweep runs daily on Vercel's Hobby plan, which is far too coarse
+ * to protect a slot: an appointment added to Google this morning would not block
+ * anything until tomorrow. So the availability endpoint nudges a refresh
+ * whenever the cache is older than the threshold. The current request answers
+ * from slightly stale data — by the time a client has picked a time and pressed
+ * book, the next read is fresh.
+ *
+ * Throttled by `last_synced_at`, so a busy booking page does not hammer Google.
+ */
+const STALE_AFTER_MS = 10 * 60_000
+
+export async function refreshBusyIfStale(providerId: string): Promise<void> {
+  try {
+    if (!calendarSyncConfigured()) return
+
+    const admin = createAdminClient()
+    const { data: conn } = await admin
+      .from('calendar_connections')
+      .select('calendar_id, last_synced_at, pull_busy, revoked_at')
+      .eq('provider_id', providerId)
+      .maybeSingle()
+
+    if (!conn || conn.revoked_at || !conn.pull_busy) return
+
+    const age = conn.last_synced_at ? Date.now() - new Date(conn.last_synced_at).getTime() : Infinity
+    if (age < STALE_AFTER_MS) return
+
+    // Claim the refresh before doing the work, so two concurrent requests do
+    // not both call Google.
+    await admin
+      .from('calendar_connections')
+      .update({ last_synced_at: new Date().toISOString() })
+      .eq('provider_id', providerId)
+
+    const from = new Date(Date.now() - 86_400_000)
+    const to = new Date(Date.now() + 90 * 86_400_000)
+    const events = await fetchBusy(providerId, conn.calendar_id ?? 'primary', from, to)
+
+    await admin.rpc('replace_calendar_busy', {
+      p_provider: providerId,
+      p_from: from.toISOString(),
+      p_to: to.toISOString(),
+      p_events: events,
+    })
+  } catch (err) {
+    // Never surfaces to a client looking at available times.
+    console.error('opportunistic calendar refresh failed', providerId, err)
   }
 }

@@ -73,13 +73,19 @@ Two switches are available afterwards, both on by default:
 
 - **Pushing is immediate.** A booking, a cancellation, or a time-off block
   reaches Google within a second or two of being made.
-- **Pulling runs hourly**, via the Vercel cron in `vercel.json`, plus whenever
-  you press **Sync now**.
+- **Pulling happens three ways:**
+  1. **Opportunistically** — whenever someone loads the booking page for a
+     provider whose cached calendar is more than 10 minutes old, a refresh is
+     kicked off in the background. This is what actually protects slots in
+     practice: by the time a client picks a time and presses book, the calendar
+     has been re-read.
+  2. **Daily at 6am Pacific**, via the Vercel cron in `vercel.json`.
+  3. **On demand** — the *Sync now* button on My hours.
 
-> **Vercel Hobby only runs cron jobs once a day.** If you're on Hobby, the
-> hourly schedule silently becomes daily — meaning an appointment you add to
-> Google this morning may not block a slot until tomorrow. Either upgrade to
-> Pro, or press *Sync now* after changing your calendar. Pushing is unaffected.
+> **Vercel Hobby only allows daily cron jobs.** The schedule is set to daily so
+> the deployment is accepted. That is coarse on its own, which is exactly why
+> the opportunistic refresh above exists. If you upgrade to Pro, change the
+> schedule in `vercel.json` to `"0 * * * *"` for an hourly sweep as well.
 
 ---
 

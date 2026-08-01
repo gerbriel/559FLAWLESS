@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { loadAvailability, priceService } from '@/lib/booking'
 import { generateSlots } from '@/lib/availability'
 import { dateKeyInTimeZone } from '@/lib/time'
+import { refreshBusyIfStale } from '@/lib/calendar-push'
 
 export const dynamic = 'force-dynamic'
 
@@ -38,6 +39,11 @@ export async function GET(request: NextRequest) {
   if (from && !DATE_KEY_RE.test(from)) {
     return NextResponse.json({ error: 'invalid_from' }, { status: 400 })
   }
+
+  // Nudge a calendar refresh if the cache has gone stale. Deliberately not
+  // awaited — the scheduled sweep is only daily on this plan, and a client
+  // should never wait on Google to see what times are open.
+  void refreshBusyIfStale(providerId)
 
   const outcome = await priceService(providerId, serviceId, addonIds)
   if (!outcome.ok) {
