@@ -1,7 +1,8 @@
 import Link from 'next/link'
-import { Mail, Phone, MapPin } from 'lucide-react'
+import { Mail, Phone } from 'lucide-react'
 import { Container } from '@/components/ui/section'
 import { NewsletterForm } from '@/components/shared/NewsletterForm'
+import { DirectionsLink, type StudioLocation } from '@/components/shared/DirectionsLink'
 
 /** Lucide v1 dropped brand marks, so the Instagram glyph is inlined. */
 function InstagramIcon({ className }: { className?: string }) {
@@ -33,12 +34,9 @@ function formatHour(time: string | null): string {
   return m === 0 ? `${hour12}${suffix}` : `${hour12}:${String(m).padStart(2, '0')}${suffix}`
 }
 
-export interface FooterContact {
+export type FooterContact = StudioLocation & {
   phone?: string
   email?: string
-  address?: string
-  city?: string
-  state?: string
   instagram?: string
 }
 
@@ -69,7 +67,7 @@ export function SiteFooter({
                 href={`https://instagram.com/${contact.instagram.replace('@', '')}`}
                 target="_blank"
                 rel="noreferrer noopener"
-                className="mt-6 inline-flex items-center gap-2 text-sm text-[var(--color-muted)] transition-colors hover:text-[var(--color-accent)]"
+                className="mt-5 inline-flex min-h-11 items-center gap-2 text-sm text-[var(--color-muted)] transition-colors hover:text-[var(--color-accent)]"
               >
                 <InstagramIcon className="h-4 w-4" />
                 {contact.instagram}
@@ -84,7 +82,7 @@ export function SiteFooter({
                 <li key={c.slug}>
                   <Link
                     href={`/services/${c.slug}`}
-                    className="text-sm text-[var(--color-muted)] transition-colors hover:text-[var(--color-foreground)]"
+                    className="flex min-h-11 items-center text-sm text-[var(--color-muted)] transition-colors hover:text-[var(--color-foreground)] sm:min-h-0"
                   >
                     {c.name}
                   </Link>
@@ -93,7 +91,7 @@ export function SiteFooter({
               <li>
                 <Link
                   href="/shop"
-                  className="text-sm text-[var(--color-muted)] transition-colors hover:text-[var(--color-foreground)]"
+                  className="flex min-h-11 items-center text-sm text-[var(--color-muted)] transition-colors hover:text-[var(--color-foreground)] sm:min-h-0"
                 >
                   Shop products
                 </Link>
@@ -101,7 +99,7 @@ export function SiteFooter({
               <li>
                 <Link
                   href="/gift-cards"
-                  className="text-sm text-[var(--color-muted)] transition-colors hover:text-[var(--color-foreground)]"
+                  className="flex min-h-11 items-center text-sm text-[var(--color-muted)] transition-colors hover:text-[var(--color-foreground)] sm:min-h-0"
                 >
                   Gift cards
                 </Link>
@@ -132,28 +130,22 @@ export function SiteFooter({
             <p className="label-caps mb-5 text-[var(--color-accent)]">Visit</p>
             <ul className="space-y-3 text-sm text-[var(--color-muted)]">
               {(contact.address || contact.city) && (
-                <li className="flex gap-2.5">
-                  <MapPin className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.5} />
-                  <span>
-                    {contact.address}
-                    {contact.address && <br />}
-                    {contact.city}
-                    {contact.city && contact.state ? `, ${contact.state}` : contact.state}
-                  </span>
+                <li>
+                  <DirectionsLink location={contact} />
                 </li>
               )}
               {contact.phone && (
-                <li className="flex gap-2.5">
+                <li className="flex min-h-11 items-center gap-2.5 sm:min-h-0">
                   <Phone className="h-4 w-4 shrink-0" strokeWidth={1.5} />
-                  <a href={`tel:${contact.phone.replace(/\D/g, '')}`} className="hover:text-[var(--color-foreground)]">
+                  <a href={`tel:${contact.phone.replace(/\D/g, '')}`} className="flex min-h-11 items-center hover:text-[var(--color-foreground)] sm:min-h-0">
                     {contact.phone}
                   </a>
                 </li>
               )}
               {contact.email && (
-                <li className="flex gap-2.5">
+                <li className="flex min-h-11 items-center gap-2.5 sm:min-h-0">
                   <Mail className="h-4 w-4 shrink-0" strokeWidth={1.5} />
-                  <a href={`mailto:${contact.email}`} className="hover:text-[var(--color-foreground)]">
+                  <a href={`mailto:${contact.email}`} className="flex min-h-11 items-center hover:text-[var(--color-foreground)] sm:min-h-0">
                     {contact.email}
                   </a>
                 </li>
@@ -169,14 +161,14 @@ export function SiteFooter({
 
         <div className="mt-14 flex flex-col gap-4 border-t border-[var(--color-border)] pt-8 text-xs text-[var(--color-muted)] sm:flex-row sm:items-center sm:justify-between">
           <p>© {year} 559 Flawless. All rights reserved.</p>
-          <div className="flex gap-6">
-            <Link href="/policies" className="hover:text-[var(--color-foreground)]">
+          <div className="flex flex-wrap gap-x-6">
+            <Link href="/policies" className="flex min-h-11 items-center hover:text-[var(--color-foreground)] sm:min-h-0">
               Policies
             </Link>
-            <Link href="/privacy" className="hover:text-[var(--color-foreground)]">
+            <Link href="/privacy" className="flex min-h-11 items-center hover:text-[var(--color-foreground)] sm:min-h-0">
               Privacy
             </Link>
-            <Link href="/terms" className="hover:text-[var(--color-foreground)]">
+            <Link href="/terms" className="flex min-h-11 items-center hover:text-[var(--color-foreground)] sm:min-h-0">
               Terms
             </Link>
           </div>

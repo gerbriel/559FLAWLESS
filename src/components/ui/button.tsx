@@ -22,10 +22,10 @@ const buttonVariants = cva(
         danger: 'bg-red-700 text-white hover:bg-red-800',
       },
       size: {
-        sm: 'h-9 px-4',
+        sm: 'h-11 px-4 sm:h-9',
         md: 'h-11 px-7',
         lg: 'h-14 px-10',
-        icon: 'h-9 w-9 px-0',
+        icon: 'h-11 w-11 px-0 sm:h-9 sm:w-9',
       },
     },
     defaultVariants: { variant: 'primary', size: 'md' },

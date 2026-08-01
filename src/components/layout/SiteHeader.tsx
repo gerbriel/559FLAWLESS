@@ -30,7 +30,7 @@ export function SiteHeader({ categories }: { categories: NavCategory[] }) {
     <header className="sticky top-0 z-40 border-b border-[var(--color-border)] bg-[var(--color-background)]/95 backdrop-blur">
       <Container>
         <div className="flex h-20 items-center justify-between gap-6">
-          <Link href="/" className="shrink-0">
+          <Link href="/" className="flex min-h-11 shrink-0 flex-col justify-center">
             <span className="display block text-2xl leading-none tracking-tight">559</span>
             <span className="label-caps block text-[0.625rem] text-[var(--color-accent)]">
               Flawless
@@ -108,18 +108,18 @@ export function SiteHeader({ categories }: { categories: NavCategory[] }) {
                 which would make every public page render dynamically. */}
             <Link
               href="/account"
-              className="hidden p-2 transition-colors hover:text-[var(--color-accent)] sm:block"
+              className="hidden h-11 w-11 items-center justify-center transition-colors hover:text-[var(--color-accent)] sm:flex"
               aria-label="Your account"
             >
               <User className="h-5 w-5" strokeWidth={1.5} />
             </Link>
 
-            <ButtonLink href="/book" size="sm" className="hidden sm:inline-flex">
+            <ButtonLink href="/book" size="sm" className="hidden h-11 sm:inline-flex">
               Book now
             </ButtonLink>
 
             <button
-              className="p-2 lg:hidden"
+              className="-mr-2 flex h-11 w-11 items-center justify-center lg:hidden"
               onClick={() => setMobileOpen((o) => !o)}
               aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
               aria-expanded={mobileOpen}
@@ -147,7 +147,7 @@ export function SiteHeader({ categories }: { categories: NavCategory[] }) {
                       <Link
                         href={`/services/${cat.slug}`}
                         onClick={() => setMobileOpen(false)}
-                        className="text-sm text-[var(--color-muted)]"
+                        className="flex min-h-11 items-center text-sm text-[var(--color-muted)]"
                       >
                         {cat.name}
                       </Link>
@@ -160,7 +160,7 @@ export function SiteHeader({ categories }: { categories: NavCategory[] }) {
                   key={l.href}
                   href={l.href}
                   onClick={() => setMobileOpen(false)}
-                  className="label-caps block"
+                  className="label-caps flex min-h-11 items-center"
                 >
                   {l.label}
                 </Link>
@@ -168,7 +168,7 @@ export function SiteHeader({ categories }: { categories: NavCategory[] }) {
               <Link
                 href="/account"
                 onClick={() => setMobileOpen(false)}
-                className="label-caps block"
+                className="label-caps flex min-h-11 items-center"
               >
                 My account
               </Link>

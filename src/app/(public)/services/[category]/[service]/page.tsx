@@ -84,7 +84,7 @@ export default async function ServiceDetailPage({ params }: Props) {
     <Section>
       <Container className="grid gap-16 lg:grid-cols-[1.4fr_1fr]">
         <div>
-          <Link href={`/services/${cat.slug}`} className="label-caps text-[var(--color-muted)]">
+          <Link href={`/services/${cat.slug}`} className="label-caps -my-2 inline-flex min-h-11 items-center py-2 text-[var(--color-muted)]">
             ← {cat.name}
           </Link>
 

@@ -5,7 +5,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
     <div className="flex min-h-screen flex-col">
       <header className="border-b border-[var(--color-border)]">
         <div className="mx-auto flex h-20 max-w-6xl items-center px-6 lg:px-10">
-          <Link href="/">
+          <Link href="/" className="flex min-h-11 flex-col justify-center">
             <span className="display block text-2xl leading-none">559</span>
             <span className="label-caps block text-[0.625rem] text-[var(--color-accent)]">
               Flawless

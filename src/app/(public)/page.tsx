@@ -48,7 +48,7 @@ export default async function HomePage() {
     <>
       {/* ── Hero ─────────────────────────────────────────── */}
       <section className="relative overflow-hidden border-b border-[var(--color-border)]">
-        <Container className="grid items-center gap-14 py-24 lg:grid-cols-[1.1fr_1fr] lg:py-32">
+        <Container className="grid items-center gap-10 py-12 sm:gap-14 sm:py-20 lg:grid-cols-[1.1fr_1fr] lg:py-32">
           <div>
             {hero.eyebrow && (
               <p className="label-caps mb-6 text-[var(--color-accent)]">{hero.eyebrow}</p>
@@ -59,11 +59,11 @@ export default async function HomePage() {
             <p className="mt-7 max-w-xl text-lg leading-relaxed text-[var(--color-muted)]">
               {hero.sub}
             </p>
-            <div className="mt-10 flex flex-wrap items-center gap-4">
-              <ButtonLink href="/book" size="lg">
+            <div className="mt-8 flex flex-col gap-3 sm:mt-10 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
+              <ButtonLink href="/book" size="lg" className="w-full sm:w-auto">
                 {hero.cta ?? 'Book an appointment'}
               </ButtonLink>
-              <ButtonLink href="/services" variant="outline" size="lg">
+              <ButtonLink href="/services" variant="outline" size="lg" className="w-full sm:w-auto">
                 View the menu
               </ButtonLink>
             </div>
@@ -141,7 +141,7 @@ export default async function HomePage() {
             <SectionHeading eyebrow="Popular" title="Where most people start" />
             <Link
               href="/services"
-              className="label-caps border-b border-[var(--color-foreground)] pb-1"
+              className="label-caps -my-2 inline-flex min-h-11 items-center border-b border-[var(--color-foreground)] py-2"
             >
               Full menu
             </Link>

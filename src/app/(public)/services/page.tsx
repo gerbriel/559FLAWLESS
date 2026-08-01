@@ -68,7 +68,7 @@ export default async function ServicesPage() {
                     <li key={s.id}>
                       <Link
                         href={`/services/${cat.slug}/${s.slug}`}
-                        className="group flex flex-wrap items-baseline justify-between gap-x-8 gap-y-2 py-6 transition-colors hover:text-[var(--color-accent)]"
+                        className="group flex flex-wrap items-baseline justify-between gap-x-8 gap-y-2 py-5 transition-colors sm:py-6 hover:text-[var(--color-accent)]"
                       >
                         <div className="min-w-0 flex-1">
                           <h3 className="flex flex-wrap items-center gap-3 text-lg">

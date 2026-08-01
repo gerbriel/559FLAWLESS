@@ -13,7 +13,9 @@ export function Section({
   className,
   ...props
 }: React.HTMLAttributes<HTMLElement>) {
-  return <section className={cn('py-20 lg:py-28', className)} {...props} />
+  // 5rem of air above the fold eats a whole phone screen; the editorial
+  // spacing starts at sm and builds from there.
+  return <section className={cn('py-12 sm:py-20 lg:py-28', className)} {...props} />
 }
 
 /** The uppercase eyebrow + serif heading pair used at the top of each section. */

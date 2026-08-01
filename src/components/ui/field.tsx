@@ -1,8 +1,11 @@
 import * as React from 'react'
 import { cn } from '@/lib/utils'
 
+// min-h-11 keeps every input a comfortable touch target; text-base stops
+// iOS Safari zooming the viewport when a field is focused (it does that for
+// anything under 16px).
 const control =
-  'w-full border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5 text-sm ' +
+  'w-full min-h-11 border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5 text-base sm:text-sm ' +
   'text-[var(--color-foreground)] placeholder:text-[var(--color-muted)] ' +
   'focus:border-[var(--color-accent)] focus:outline-none disabled:opacity-50'
 

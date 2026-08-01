@@ -106,7 +106,7 @@ export default async function ShopPage({ searchParams }: Props) {
           <nav className="mt-14 flex flex-wrap gap-x-7 gap-y-3" aria-label="Product categories">
             <Link
               href="/shop"
-              className={`label-caps pb-1 ${
+              className={`label-caps -my-2 inline-flex min-h-11 items-center py-2 ${
                 !activeCategory
                   ? 'border-b border-[var(--color-foreground)]'
                   : 'text-[var(--color-muted)]'
@@ -118,7 +118,7 @@ export default async function ShopPage({ searchParams }: Props) {
               <Link
                 key={c.slug}
                 href={`/shop?category=${c.slug}`}
-                className={`label-caps pb-1 ${
+                className={`label-caps -my-2 inline-flex min-h-11 items-center py-2 ${
                   activeCategory?.slug === c.slug
                     ? 'border-b border-[var(--color-foreground)]'
                     : 'text-[var(--color-muted)]'

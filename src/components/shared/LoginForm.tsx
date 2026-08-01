@@ -98,7 +98,7 @@ export function LoginForm({ next }: { next?: string }) {
       <button
         type="button"
         onClick={sendMagicLink}
-        className="label-caps w-full text-center text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+        className="label-caps min-h-11 w-full text-center text-[var(--color-muted)] hover:text-[var(--color-accent)]"
       >
         Email me a sign-in link instead
       </button>

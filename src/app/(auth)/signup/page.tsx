@@ -22,7 +22,7 @@ export default function SignupPage() {
 
       <p className="mt-8 text-sm text-[var(--color-muted)]">
         Already have one?{' '}
-        <Link href="/login" className="text-[var(--color-foreground)] underline underline-offset-4">
+        <Link href="/login" className="inline-flex min-h-11 items-center text-[var(--color-foreground)] underline underline-offset-4">
           Sign in
         </Link>
       </p>

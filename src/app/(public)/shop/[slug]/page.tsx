@@ -84,7 +84,7 @@ export default async function ProductPage({ params }: Props) {
         </div>
 
         <div>
-          <Link href="/shop" className="label-caps text-[var(--color-muted)]">
+          <Link href="/shop" className="label-caps -my-2 inline-flex min-h-11 items-center py-2 text-[var(--color-muted)]">
             ← Shop
           </Link>
 

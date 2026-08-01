@@ -27,7 +27,7 @@ export default async function LoginPage({ searchParams }: Props) {
 
       <p className="mt-8 text-sm text-[var(--color-muted)]">
         No account?{' '}
-        <Link href="/signup" className="text-[var(--color-foreground)] underline underline-offset-4">
+        <Link href="/signup" className="inline-flex min-h-11 items-center text-[var(--color-foreground)] underline underline-offset-4">
           Create one
         </Link>
       </p>

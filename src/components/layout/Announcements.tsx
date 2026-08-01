@@ -116,23 +116,25 @@ function Cta({ a, className }: { a: LiveAnnouncement; className?: string }) {
 // ── Banner ──────────────────────────────────────────────────
 function Banner({ a, onDismiss }: Props) {
   return (
-    <div className={cn('relative px-6 py-2.5 text-center', TONE[a.variant] ?? TONE.info)}>
-      <p className="label-caps inline-flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
+    <div className={cn('relative', TONE[a.variant] ?? TONE.info)}>
+      {/* Right padding clears the close button so long text never runs under it. */}
+      <div className="flex min-h-11 flex-wrap items-center justify-center gap-x-3 gap-y-0.5 py-2 pl-4 pr-14 text-center sm:pr-16">
         {a.image_url && (
-          <span className="relative mr-1 inline-block h-5 w-5 shrink-0 overflow-hidden align-middle">
+          <span className="relative h-5 w-5 shrink-0 overflow-hidden">
             <Image src={a.image_url} alt="" fill sizes="20px" className="object-contain" />
           </span>
         )}
-        <span>{a.title}</span>
-        <Cta a={a} className="underline underline-offset-4" />
-      </p>
+        <span className="label-caps">{a.title}</span>
+        {/* py-2 gives the link a 40px-tall hit area without changing how it looks. */}
+        <Cta a={a} className="-my-2 inline-flex min-h-11 items-center py-2 underline underline-offset-4" />
+      </div>
       {(a.dismissible ?? true) && (
         <button
           onClick={() => onDismiss(a)}
-          className="absolute right-3 top-1/2 -translate-y-1/2 p-1 opacity-70 hover:opacity-100"
+          className="absolute right-0 top-0 flex h-full w-12 items-center justify-center opacity-70 hover:opacity-100"
           aria-label={`Dismiss announcement: ${a.title}`}
         >
-          <X className="h-3.5 w-3.5" strokeWidth={2} />
+          <X className="h-4 w-4" strokeWidth={2} />
         </button>
       )}
     </div>
