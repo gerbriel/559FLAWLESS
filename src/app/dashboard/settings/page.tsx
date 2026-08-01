@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { BookingSettingsForm } from '@/components/shared/BookingSettingsForm'
+import { SalesTaxForm } from '@/components/shared/SalesTaxForm'
 import { ROLE_LABELS, type UserRole, isAdmin } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
@@ -10,8 +11,13 @@ export const dynamic = 'force-dynamic'
 export default async function SettingsPage() {
   const supabase = await createClient()
 
-  const [{ data: { user } }, { data: settings }, { data: staff }, { data: closures }] =
-    await Promise.all([
+  const [
+    { data: { user } },
+    { data: settings },
+    { data: staff },
+    { data: closures },
+    { data: taxSetting },
+  ] = await Promise.all([
       supabase.auth.getUser(),
       supabase.from('booking_settings').select('*').eq('id', 1).maybeSingle(),
       supabase
@@ -24,7 +30,18 @@ export default async function SettingsPage() {
         .select('id, closure_date, reason')
         .gte('closure_date', new Date().toISOString().slice(0, 10))
         .order('closure_date'),
+      supabase
+        .from('site_settings')
+        .select('text_value')
+        .eq('key', 'sales_tax_rate')
+        .eq('is_active', true)
+        .maybeSingle(),
     ])
+
+  // Fresno County's combined rate is the fallback when nothing has been set.
+  const parsedRate = Number(taxSetting?.text_value)
+  const taxRate =
+    Number.isFinite(parsedRate) && parsedRate >= 0 && parsedRate < 1 ? parsedRate : 0.0835
 
   const { data: profile } = await supabase
     .from('profiles')
@@ -97,6 +114,16 @@ export default async function SettingsPage() {
             Only admins can change roles and suspensions.
           </p>
         )}
+      </section>
+
+      <section className="mt-14">
+        <h2 className="display text-2xl">Sales tax</h2>
+        <p className="mt-2 max-w-prose text-sm text-[var(--color-muted)]">
+          Applied to products rung up at the counter. Services are not taxed.
+        </p>
+        <div className="mt-6">
+          <SalesTaxForm rate={taxRate} />
+        </div>
       </section>
 
       {userIsAdmin && (

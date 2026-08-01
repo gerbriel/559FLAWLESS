@@ -1270,6 +1270,32 @@ export type Database = {
         }
         Returns: number
       }
+      /**
+       * Supersede a signed consent form with a new version. The old row keeps
+       * its signatures and stays readable, which is what makes "what did this
+       * person actually agree to?" answerable later. Added in 026.
+       */
+      publish_consent_version: {
+        Args: {
+          p_form_id: number
+          p_title: string
+          p_body: string
+          p_service_ids?: number[] | null
+          p_category_ids?: number[] | null
+          p_revalidate_after_days?: number | null
+          p_requires_initials?: boolean | null
+        }
+        Returns: number
+      }
+      /** A fraction, not a percentage — 0.0835 is 8.35%. Added in 026. */
+      set_sales_tax_rate: {
+        Args: { p_rate: number }
+        Returns: number
+      }
+      sales_tax_rate: {
+        Args: Record<PropertyKey, never>
+        Returns: number
+      }
       appointment_balance_cents: {
         Args: { p_appointment: string }
         Returns: number
