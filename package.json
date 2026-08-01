@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "tsx scripts/availability.test.ts",
+    "test": "tsx scripts/availability.test.ts && tsx scripts/announcements.test.ts",
     "check": "npm run typecheck && npm run lint && npm run test"
   },
   "dependencies": {

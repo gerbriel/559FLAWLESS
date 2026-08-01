@@ -4,7 +4,7 @@ import { Cormorant_Garamond, Inter } from 'next/font/google'
 import Script from 'next/script'
 import { Toaster } from 'sonner'
 import { ClientAnalytics } from '@/components/shared/ClientAnalytics'
-import { createClient } from '@/lib/supabase/server'
+import { createPublicClient } from '@/lib/supabase/public'
 import './globals.css'
 
 const display = Cormorant_Garamond({
@@ -52,7 +52,10 @@ type SiteSettings = {
 
 async function getSiteSettings(): Promise<SiteSettings> {
   try {
-    const supabase = await createClient()
+    // Cookie-free on purpose. Analytics IDs are public config, and reading
+    // cookies in the ROOT layout would opt the entire site — every marketing
+    // page — out of static rendering.
+    const supabase = createPublicClient()
     const { data } = await supabase
       .from('site_content')
       .select('key, value')

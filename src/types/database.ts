@@ -580,6 +580,15 @@ export type Announcement = {
   target_pages: string[]
   /** Higher shows first when several match. */
   priority: number
+
+  // ── Presentation, added in 018 ──────────────────────────────
+  display_style: 'banner' | 'modal' | 'corner' | 'inline'
+  image_url: string | null
+  dismissible: boolean
+  /** session = back next visit; persist = stays closed; never = always shows. */
+  dismiss_scope: 'session' | 'persist' | 'never'
+  /** Modal and corner only: seconds to wait before appearing. */
+  delay_seconds: number
 }
 
 // ── Added in 014–016 ──────────────────────────────────────────

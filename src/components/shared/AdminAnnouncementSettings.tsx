@@ -1,5 +1,7 @@
 'use client'
 
+import type { Announcement } from '@/types/database'
+
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -9,18 +11,6 @@ import { Badge } from '@/components/ui/badge'
 import { createClient } from '@/lib/supabase/client'
 import { Plus, Trash2, Edit2 } from 'lucide-react'
 
-interface Announcement {
-  id: number
-  title: string
-  body: string | null
-  link_url: string | null
-  link_label: string | null
-  variant: 'info' | 'promo' | 'urgent'
-  starts_at: string | null
-  ends_at: string | null
-  is_active: boolean
-  created_at: string
-}
 
 interface Props {
   announcements: Announcement[]
@@ -39,6 +29,17 @@ export function AdminAnnouncementSettings({ announcements: initialAnnouncements 
     starts_at: '',
     ends_at: '',
     is_active: true,
+    // Presentation (018)
+    display_style: 'banner' as 'banner' | 'modal' | 'corner' | 'inline',
+    image_url: '',
+    dismissible: true,
+    dismiss_scope: 'session' as 'session' | 'persist' | 'never',
+    delay_seconds: 0,
+    // Targeting (014)
+    audience_type: 'all' as 'all' | 'anonymous' | 'authenticated' | 'role',
+    audience_roles: [] as string[],
+    target_pages: '',
+    priority: 0,
   })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -53,6 +54,15 @@ export function AdminAnnouncementSettings({ announcements: initialAnnouncements 
       starts_at: '',
       ends_at: '',
       is_active: true,
+      display_style: 'banner',
+      image_url: '',
+      dismissible: true,
+      dismiss_scope: 'session',
+      delay_seconds: 0,
+      audience_type: 'all',
+      audience_roles: [],
+      target_pages: '',
+      priority: 0,
     })
     setEditing(null)
     setError(null)
@@ -68,6 +78,18 @@ export function AdminAnnouncementSettings({ announcements: initialAnnouncements 
       starts_at: announcement.starts_at ? announcement.starts_at.split('T')[0] : '',
       ends_at: announcement.ends_at ? announcement.ends_at.split('T')[0] : '',
       is_active: announcement.is_active,
+      display_style: (announcement.display_style ?? 'banner') as typeof formData.display_style,
+      image_url: announcement.image_url ?? '',
+      dismissible: announcement.dismissible ?? true,
+      dismiss_scope: (announcement.dismiss_scope ?? 'session') as typeof formData.dismiss_scope,
+      delay_seconds: announcement.delay_seconds ?? 0,
+      audience_type: (announcement.target_audience?.type ?? 'all') as typeof formData.audience_type,
+      audience_roles:
+        announcement.target_audience && 'roles' in announcement.target_audience
+          ? [...announcement.target_audience.roles]
+          : [],
+      target_pages: (announcement.target_pages ?? []).join('\n'),
+      priority: announcement.priority ?? 0,
     })
     setEditing(announcement.id)
   }
@@ -93,6 +115,24 @@ export function AdminAnnouncementSettings({ announcements: initialAnnouncements 
         starts_at: formData.starts_at ? new Date(formData.starts_at).toISOString() : null,
         ends_at: formData.ends_at ? new Date(formData.ends_at).toISOString() : null,
         is_active: formData.is_active,
+
+        display_style: formData.display_style,
+        image_url: formData.image_url.trim() || null,
+        // A modal with no way out traps the visitor; the DB rejects it too.
+        dismissible: formData.display_style === 'modal' ? true : formData.dismissible,
+        dismiss_scope: formData.dismiss_scope,
+        delay_seconds: Number(formData.delay_seconds) || 0,
+
+        target_audience:
+          formData.audience_type === 'role'
+            ? { type: 'role', roles: formData.audience_roles }
+            : { type: formData.audience_type },
+        // One path per line, blanks ignored. Empty means every page.
+        target_pages: formData.target_pages
+          .split('\n')
+          .map((s) => s.trim())
+          .filter(Boolean),
+        priority: Number(formData.priority) || 0,
       }
 
       if (editing === 'new') {
@@ -340,6 +380,170 @@ export function AdminAnnouncementSettings({ announcements: initialAnnouncements 
                   type="date"
                   value={formData.ends_at}
                   onChange={(e) => setFormData({ ...formData, ends_at: e.target.value })}
+                />
+              </Field>
+            </div>
+
+            {/* ── How it looks ─────────────────────────────── */}
+            <div className="border-t border-[var(--color-border)] pt-5">
+              <p className="label-caps mb-4 text-[var(--color-accent)]">How it appears</p>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Format" htmlFor="display_style">
+                  <Select
+                    id="display_style"
+                    value={formData.display_style}
+                    onChange={(e) =>
+                      setFormData({ ...formData, display_style: e.target.value as typeof formData.display_style })
+                    }
+                  >
+                    <option value="banner">Banner — strip above the header</option>
+                    <option value="modal">Modal — pop-up over the page</option>
+                    <option value="corner">Corner card — bottom right</option>
+                    <option value="inline">Inline — top of the page content</option>
+                  </Select>
+                </Field>
+
+                <Field
+                  label="Image URL"
+                  htmlFor="image_url"
+                  hint="Optional. Shown as a thumbnail on banners, full width elsewhere."
+                >
+                  <Input
+                    id="image_url"
+                    value={formData.image_url}
+                    onChange={(e) => setFormData({ ...formData, image_url: e.target.value })}
+                    placeholder="https://…"
+                  />
+                </Field>
+              </div>
+
+              {(formData.display_style === 'modal' || formData.display_style === 'corner') && (
+                <Field
+                  className="mt-4"
+                  label="Delay before showing (seconds)"
+                  htmlFor="delay_seconds"
+                  hint="0 shows it immediately. A few seconds is far less jarring."
+                >
+                  <Input
+                    id="delay_seconds"
+                    type="number"
+                    min={0}
+                    max={60}
+                    value={formData.delay_seconds}
+                    onChange={(e) =>
+                      setFormData({ ...formData, delay_seconds: Number(e.target.value) })
+                    }
+                  />
+                </Field>
+              )}
+
+              <Field className="mt-4" label="If dismissed" htmlFor="dismiss_scope">
+                <Select
+                  id="dismiss_scope"
+                  value={formData.dismiss_scope}
+                  onChange={(e) =>
+                    setFormData({ ...formData, dismiss_scope: e.target.value as typeof formData.dismiss_scope })
+                  }
+                >
+                  <option value="session">Comes back on their next visit</option>
+                  <option value="persist">Stays closed on that device</option>
+                  <option value="never">Cannot be dismissed — shows every time</option>
+                </Select>
+              </Field>
+
+              {formData.display_style === 'modal' && formData.dismiss_scope === 'never' && (
+                <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+                  A modal always gets a close button — otherwise there is no way past it.
+                  It will still reappear on every page view.
+                </p>
+              )}
+            </div>
+
+            {/* ── Who sees it, and where ───────────────────── */}
+            <div className="border-t border-[var(--color-border)] pt-5">
+              <p className="label-caps mb-4 text-[var(--color-accent)]">Who sees it</p>
+
+              <Field label="Audience" htmlFor="audience_type">
+                <Select
+                  id="audience_type"
+                  value={formData.audience_type}
+                  onChange={(e) =>
+                    setFormData({ ...formData, audience_type: e.target.value as typeof formData.audience_type })
+                  }
+                >
+                  <option value="all">Everyone</option>
+                  <option value="anonymous">Logged-out visitors only</option>
+                  <option value="authenticated">Anyone signed in</option>
+                  <option value="role">Specific roles…</option>
+                </Select>
+              </Field>
+
+              {formData.audience_type === 'role' && (
+                <fieldset className="mt-4">
+                  <legend className="label-caps mb-2 text-[var(--color-muted)]">Roles</legend>
+                  <div className="flex flex-wrap gap-2">
+                    {(['client', 'provider', 'front_desk', 'manager', 'admin'] as const).map((r) => {
+                      const on = formData.audience_roles.includes(r)
+                      return (
+                        <button
+                          key={r}
+                          type="button"
+                          onClick={() =>
+                            setFormData({
+                              ...formData,
+                              audience_roles: on
+                                ? formData.audience_roles.filter((x) => x !== r)
+                                : [...formData.audience_roles, r],
+                            })
+                          }
+                          className={
+                            'border px-3 py-1.5 text-xs capitalize transition-colors ' +
+                            (on
+                              ? 'border-[var(--color-accent)] bg-[var(--color-clay-soft)] text-[var(--color-clay-deep)] dark:bg-transparent dark:text-[var(--color-accent)]'
+                              : 'border-[var(--color-border)] text-[var(--color-muted)]')
+                          }
+                          aria-pressed={on}
+                        >
+                          {r.replace('_', ' ')}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {formData.audience_roles.length === 0 && (
+                    <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+                      No roles picked — nobody will see this.
+                    </p>
+                  )}
+                </fieldset>
+              )}
+
+              <Field
+                className="mt-4"
+                label="Pages"
+                htmlFor="target_pages"
+                hint="One path per line. Leave empty for every page. Use /account/* to cover a section."
+              >
+                <Textarea
+                  id="target_pages"
+                  rows={3}
+                  value={formData.target_pages}
+                  onChange={(e) => setFormData({ ...formData, target_pages: e.target.value })}
+                  placeholder={'/\n/book\n/services/*'}
+                />
+              </Field>
+
+              <Field
+                className="mt-4"
+                label="Priority"
+                htmlFor="priority"
+                hint="When several match the same spot, the highest number wins."
+              >
+                <Input
+                  id="priority"
+                  type="number"
+                  value={formData.priority}
+                  onChange={(e) => setFormData({ ...formData, priority: Number(e.target.value) })}
                 />
               </Field>
             </div>

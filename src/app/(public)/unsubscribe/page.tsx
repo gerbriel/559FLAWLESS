@@ -1,11 +1,11 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { Loader2, CheckCircle, XCircle } from 'lucide-react'
 
-export default function UnsubscribePage() {
+function UnsubscribeInner() {
   const searchParams = useSearchParams()
   const token = searchParams.get('token')
   const [status, setStatus] = useState<'loading' | 'success' | 'error' | 'invalid'>('loading')
@@ -100,5 +100,24 @@ export default function UnsubscribePage() {
         </Link>
       </div>
     </div>
+  )
+}
+
+/**
+ * `useSearchParams` forces a client-side bailout, which fails prerendering
+ * unless the component reading it sits behind a Suspense boundary.
+ */
+export default function UnsubscribePage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-[60vh] items-center justify-center">
+          <Loader2 className="h-6 w-6 animate-spin text-[var(--color-muted)]" strokeWidth={1.5} />
+          <span className="sr-only">Unsubscribing…</span>
+        </div>
+      }
+    >
+      <UnsubscribeInner />
+    </Suspense>
   )
 }

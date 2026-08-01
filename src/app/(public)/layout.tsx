@@ -1,9 +1,9 @@
 import { Suspense } from 'react'
 import { createPublicClient } from '@/lib/supabase/public'
-import { createClient } from '@/lib/supabase/server'
 import { SiteHeader } from '@/components/layout/SiteHeader'
 import { SiteFooter, type FooterContact } from '@/components/layout/SiteFooter'
-import { AnnouncementDisplay } from '@/components/shared/AnnouncementDisplay'
+import { Announcements } from '@/components/layout/Announcements'
+import type { LiveAnnouncement } from '@/lib/announcements'
 import { ClientAnalytics } from '@/components/shared/ClientAnalytics'
 
 /**
@@ -25,27 +25,13 @@ export default async function PublicLayout({
   children: React.ReactNode
 }) {
   const supabase = createPublicClient()
-  const authSupabase = await createClient()
 
-  // Get user role for announcement targeting (optional, doesn't force dynamic rendering)
-  let userRole: string | undefined
-  try {
-    const {
-      data: { user },
-    } = await authSupabase.auth.getUser()
-    if (user) {
-      const { data: profile } = await authSupabase
-        .from('profiles')
-        .select('role')
-        .eq('id', user.id)
-        .maybeSingle()
-      userRole = profile?.role
-    }
-  } catch {
-    // Anonymous is fine
-  }
-
-  const [{ data: categories }, { data: hours }, { data: contactRow }] = await Promise.all([
+  // Deliberately no auth lookup here. Reading the session touches cookies,
+  // which opts every public page out of static rendering — for the sake of one
+  // targeting decision the browser can make itself. <Announcements> resolves
+  // the viewer client-side instead.
+  const [{ data: categories }, { data: hours }, { data: contactRow }, { data: announcements }] =
+    await Promise.all([
     supabase
       .from('service_categories')
       .select('name, slug, services(name, slug, sort_order, is_active)')
@@ -53,6 +39,15 @@ export default async function PublicLayout({
       .order('sort_order'),
     supabase.from('business_hours').select('*'),
     supabase.from('site_content').select('value').eq('key', 'contact').maybeSingle(),
+    // Every live row. Which ones a given visitor sees depends on the page and
+    // who they are, and the client decides that.
+    supabase
+      .from('announcements')
+      .select('*')
+      .eq('is_active', true)
+      .order('priority', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(20),
   ])
 
   const nav = (categories ?? []).map((c) => ({
@@ -68,7 +63,7 @@ export default async function PublicLayout({
 
   return (
     <>
-      <AnnouncementDisplay userRole={userRole} />
+      <Announcements announcements={(announcements ?? []) as LiveAnnouncement[]} />
 
       <SiteHeader categories={nav} />
 
