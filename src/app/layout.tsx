@@ -1,3 +1,4 @@
+import { Suspense } from 'react'
 import type { Metadata, Viewport } from 'next'
 import { Cormorant_Garamond, Inter } from 'next/font/google'
 import Script from 'next/script'
@@ -138,7 +139,13 @@ export default async function RootLayout({
           </noscript>
         )}
 
-        <ClientAnalytics />
+        {/* ClientAnalytics reads useSearchParams, which forces any page that
+            renders it to bail out of prerendering unless it sits behind a
+            Suspense boundary. It lives in the root layout, so without this the
+            whole site — including /login — fails to build. */}
+        <Suspense fallback={null}>
+          <ClientAnalytics />
+        </Suspense>
         {children}
         <Toaster
           position="bottom-right"

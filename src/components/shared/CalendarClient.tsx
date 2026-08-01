@@ -1,5 +1,7 @@
 'use client'
 
+import type { CalendarAppointment } from '@/components/shared/CalendarView'
+
 import * as React from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { CalendarViewComponent, type CalendarView } from './CalendarView'
@@ -7,39 +9,6 @@ import { AppointmentModal } from './AppointmentModal'
 import { dateKeyInTimeZone } from '@/lib/time'
 import type { AppointmentStatus } from '@/types/database'
 
-interface CalendarAppointment {
-  id: string
-  starts_at: string
-  ends_at: string
-  status: AppointmentStatus
-  total_cents: number
-  deposit_cents: number
-  provider_id: string
-  client_id: string | null
-  client_notes: string | null
-  staff_notes: string | null
-  guest_first_name: string | null
-  guest_last_name: string | null
-  guest_email: string | null
-  guest_phone: string | null
-  profiles?: {
-    first_name: string | null
-    last_name: string | null
-    email: string | null
-    phone: string | null
-  } | null
-  provider?: {
-    first_name: string | null
-    last_name: string | null
-    display_name: string | null
-  } | null
-  appointment_services?: Array<{
-    name_snapshot: string
-    price_cents: number
-    duration_minutes: number
-    sort_order: number
-  }>
-}
 
 interface Provider {
   id: string

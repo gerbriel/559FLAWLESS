@@ -79,7 +79,8 @@ export function CartView() {
     e.preventDefault()
     setSubmitting(true)
 
-    try {supabase = createClient()
+    try {
+      const supabase = createClient()
 
       // If user opted in to newsletter, subscribe them
       if (form.subscribeNewsletter) {

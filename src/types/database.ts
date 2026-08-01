@@ -86,6 +86,16 @@ export type Profile = {
   timezone: string
   accepts_online_booking: boolean
   suspended_at: string | null
+
+  // ── Added in 014–016 ────────────────────────────────────────
+  /** Set when a staff member created this account on the client's behalf. */
+  created_by_staff_id: string | null
+  /** Evidence for marketing consent — see marketing_consent_at above. */
+  marketing_consent_ip: string | null
+  terms_accepted_at: string | null
+  terms_version_accepted: number | null
+  privacy_accepted_at: string | null
+
   created_at: string
   updated_at: string
 }
@@ -542,6 +552,17 @@ export type OrderItem = {
   line_total_cents: number
 }
 
+/**
+ * Who an announcement is shown to. Stored as jsonb so the shape can grow
+ * without a migration; see the column comment in 014.
+ */
+export type AnnouncementAudience =
+  | { type: 'all' }
+  | { type: 'anonymous' }
+  | { type: 'authenticated' }
+  | { type: 'role'; roles: UserRole[] }
+  | { type: 'clients'; client_ids: string[] }
+
 export type Announcement = {
   id: number
   title: string
@@ -553,6 +574,113 @@ export type Announcement = {
   ends_at: string | null
   is_active: boolean
   created_at: string
+  /** Added in 014. */
+  target_audience: AnnouncementAudience
+  /** Page paths this shows on. Empty = everywhere. Supports `/account/*`. */
+  target_pages: string[]
+  /** Higher shows first when several match. */
+  priority: number
+}
+
+// ── Added in 014–016 ──────────────────────────────────────────
+export type SettingType = 'policy' | 'script' | 'config' | 'content'
+
+export type SiteSetting = {
+  id: number
+  key: string
+  type: SettingType
+  version: number
+  value: Json
+  text_value: string | null
+  script_position: 'head_start' | 'head_end' | 'body_start' | 'body_end' | null
+  script_provider: string | null
+  label: string | null
+  description: string | null
+  help_text: string | null
+  effective_at: string | null
+  superseded_at: string | null
+  is_active: boolean
+  created_by: string | null
+  updated_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type ClientPageVisit = {
+  id: number
+  session_id: string
+  client_id: string | null
+  page_path: string
+  page_title: string | null
+  referrer: string | null
+  utm_source: string | null
+  utm_medium: string | null
+  utm_campaign: string | null
+  utm_content: string | null
+  utm_term: string | null
+  user_agent: string | null
+  ip_address: string | null
+  event_type: string | null
+  event_data: Json
+  created_at: string
+}
+
+export type UserActivityLog = {
+  id: number
+  user_id: string
+  action: string
+  details: Json
+  performed_by: string | null
+  ip_address: string | null
+  user_agent: string | null
+  created_at: string
+}
+
+export type ConsentAuditLog = {
+  id: number
+  profile_id: string | null
+  email: string
+  event_type: string
+  ip_address: string | null
+  user_agent: string | null
+  source: string | null
+  metadata: Json
+  created_at: string
+}
+
+export type NewsletterSubscription = {
+  id: number
+  email: string
+  profile_id: string | null
+  is_subscribed: boolean
+  confirmed_at: string | null
+  confirmation_token: string | null
+  confirmation_sent_at: string | null
+  subscribed_at: string
+  subscribed_ip: string | null
+  subscribed_user_agent: string | null
+  unsubscribed_at: string | null
+  unsubscribed_ip: string | null
+  unsubscribe_token: string
+  source: string
+  utm_source: string | null
+  utm_medium: string | null
+  utm_campaign: string | null
+  referrer: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type ServiceFormRequirement = {
+  id: number
+  service_id: number
+  consent_form_id: number | null
+  intake_form_id: number | null
+  is_required: boolean
+  revalidate_days: number | null
+  staff_note: string | null
+  created_at: string
+  updated_at: string
 }
 
 export type Testimonial = {
@@ -718,17 +846,6 @@ export type NewsletterSubscriber = {
   consent_ip: string | null
   consent_user_agent: string | null
   preferences: Json
-}
-
-export type UserActivityLog = {
-  id: number
-  user_id: string
-  action: string
-  details: Json
-  performed_by: string | null
-  ip_address: string | null
-  user_agent: string | null
-  created_at: string
 }
 
 export type Vendor = {
@@ -1038,6 +1155,32 @@ export type Database = {
           Rel<'client_packages_package_id_fkey', ['package_id'], 'service_packages', ['id']>,
         ]
       >
+      // ── Added in 014–016 ────────────────────────────────────
+      site_settings: TableDef<
+        SiteSetting,
+        [ToProfile<'site_settings', 'created_by'>, ToProfile<'site_settings', 'updated_by'>]
+      >
+      client_page_visits: TableDef<
+        ClientPageVisit,
+        [ToProfile<'client_page_visits', 'client_id'>]
+      >
+      consent_audit_log: TableDef<
+        ConsentAuditLog,
+        [ToProfile<'consent_audit_log', 'profile_id'>]
+      >
+      newsletter_subscriptions: TableDef<
+        NewsletterSubscription,
+        [ToProfile<'newsletter_subscriptions', 'profile_id'>]
+      >
+      service_form_requirements: TableDef<
+        ServiceFormRequirement,
+        [
+          Rel<'service_form_requirements_service_id_fkey', ['service_id'], 'services', ['id']>,
+          Rel<'service_form_requirements_consent_form_id_fkey', ['consent_form_id'], 'consent_forms', ['id']>,
+          Rel<'service_form_requirements_intake_form_id_fkey', ['intake_form_id'], 'intake_forms', ['id']>,
+        ]
+      >
+
       gift_cards: TableDef<GiftCard, [ToProfile<'gift_cards', 'purchased_by'>]>
       payments: TableDef<
         Payment,
@@ -1071,6 +1214,40 @@ export type Database = {
       newsletter_unsubscribe: {
         Args: { p_token: string }
         Returns: boolean
+      }
+
+      // ── Added in 014–016 ────────────────────────────────────
+      /** Append-only audit trail for role changes, logins, resets. */
+      log_user_activity: {
+        Args: {
+          p_user_id: string
+          p_action: string
+          p_details?: Json
+          p_performed_by?: string | null
+          p_ip_address?: string | null
+          p_user_agent?: string | null
+        }
+        Returns: undefined
+      }
+      /** Double opt-in signup; returns { ok, status, token } as jsonb. */
+      subscribe_newsletter: {
+        Args: {
+          p_email: string
+          p_source?: string
+          p_utm_source?: string | null
+          p_utm_medium?: string | null
+          p_utm_campaign?: string | null
+          p_referrer?: string | null
+        }
+        Returns: Json
+      }
+      confirm_newsletter: {
+        Args: { p_token: string }
+        Returns: Json
+      }
+      unsubscribe_newsletter: {
+        Args: { p_token: string }
+        Returns: Json
       }
     }
     Enums: {

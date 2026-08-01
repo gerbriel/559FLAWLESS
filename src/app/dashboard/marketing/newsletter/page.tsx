@@ -75,12 +75,12 @@ export default async function NewsletterPage() {
                   <td className="px-6 py-4">{sub.email}</td>
                   <td className="px-6 py-4">
                     {sub.is_subscribed && sub.confirmed_at && (
-                      <Badge variant="success">Active</Badge>
+                      <Badge tone="success">Active</Badge>
                     )}
                     {sub.is_subscribed && !sub.confirmed_at && (
-                      <Badge variant="warning">Pending</Badge>
+                      <Badge tone="warning">Pending</Badge>
                     )}
-                    {!sub.is_subscribed && <Badge variant="neutral">Unsubscribed</Badge>}
+                    {!sub.is_subscribed && <Badge tone="neutral">Unsubscribed</Badge>}
                   </td>
                   <td className="px-6 py-4 capitalize text-[var(--color-muted)]">
                     {sub.source || '—'}

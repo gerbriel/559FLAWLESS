@@ -16,19 +16,33 @@ import type { AppointmentStatus } from '@/types/database'
 
 export type CalendarView = 'day' | 'week' | 'month'
 
-interface CalendarAppointment {
+/**
+ * The one appointment shape the calendar and its modal both use.
+ *
+ * It was previously declared separately in three files, which drifted — the
+ * grid's copy was missing the fields the modal needed, so passing a row from
+ * one to the other did not typecheck even though the query returned them.
+ */
+export interface CalendarAppointment {
   id: string
   starts_at: string
   ends_at: string
   status: AppointmentStatus
   total_cents: number
+  deposit_cents: number
   provider_id: string
   client_id: string | null
+  client_notes: string | null
+  staff_notes: string | null
   guest_first_name: string | null
   guest_last_name: string | null
+  guest_email: string | null
+  guest_phone: string | null
   profiles?: {
     first_name: string | null
     last_name: string | null
+    email?: string | null
+    phone?: string | null
   } | null
   provider?: {
     first_name: string | null
@@ -37,7 +51,9 @@ interface CalendarAppointment {
   } | null
   appointment_services?: Array<{
     name_snapshot: string
-    sort_order: number
+    sort_order?: number
+    price_cents?: number
+    duration_minutes?: number
   }>
 }
 

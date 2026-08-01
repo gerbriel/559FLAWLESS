@@ -1,5 +1,7 @@
 'use client'
 
+import type { CalendarAppointment as AppointmentData } from '@/components/shared/CalendarView'
+
 import * as React from 'react'
 import { X, Calendar, Clock, User, FileText, DollarSign, Phone, Mail } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -8,36 +10,6 @@ import { formatMoney } from '@/lib/utils'
 import { formatDateTimeInTimeZone, formatTimeInTimeZone } from '@/lib/time'
 import type { AppointmentStatus } from '@/types/database'
 
-interface AppointmentData {
-  id: string
-  starts_at: string
-  ends_at: string
-  status: AppointmentStatus
-  total_cents: number
-  deposit_cents: number
-  client_notes: string | null
-  staff_notes: string | null
-  guest_first_name: string | null
-  guest_last_name: string | null
-  guest_email: string | null
-  guest_phone: string | null
-  profiles?: {
-    first_name: string | null
-    last_name: string | null
-    email: string | null
-    phone: string | null
-  } | null
-  provider?: {
-    first_name: string | null
-    last_name: string | null
-    display_name: string | null
-  } | null
-  appointment_services?: Array<{
-    name_snapshot: string
-    price_cents: number
-    duration_minutes: number
-  }>
-}
 
 interface AppointmentModalProps {
   appointment: AppointmentData | null

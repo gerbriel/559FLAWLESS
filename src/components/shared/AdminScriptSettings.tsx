@@ -1,5 +1,7 @@
 'use client'
 
+import type { Json } from '@/types/database'
+
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -38,7 +40,9 @@ export function AdminScriptSettings(props: Props) {
     try {
       const supabase = createClient()
 
-      const updates = [
+      // Typed explicitly: the array mixes {id} and {scripts} value shapes, and
+      // TS infers a union that will not satisfy the jsonb column on its own.
+      const updates: { key: string; value: Json; label: string }[] = [
         {
           key: 'google_analytics_id',
           value: { id: gaId.trim() },

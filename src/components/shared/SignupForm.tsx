@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import type { Profile } from '@/types/database'
 import { Button } from '@/components/ui/button'
 import { Field, Input } from '@/components/ui/field'
 
@@ -77,7 +78,7 @@ export function SignupForm() {
 
     // Update profile with consent tracking
     const now = new Date().toISOString()
-    const updates: Record<string, any> = {
+    const updates: Partial<Profile> = {
       marketing_opt_in: form.marketing,
       terms_accepted_at: now,
       terms_version_accepted: 1,

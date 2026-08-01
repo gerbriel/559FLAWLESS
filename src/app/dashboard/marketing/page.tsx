@@ -28,7 +28,7 @@ export default async function MarketingPage() {
         .eq('status', 'active'),
       supabase
         .from('announcements')
-        .select('id, title, body, link_url, link_label, variant, starts_at, ends_at, is_active, created_at')
+        .select('id, title, body, link_url, link_label, variant, starts_at, ends_at, is_active, created_at, target_audience, target_pages, priority')
         .order('created_at', { ascending: false }),
     ])
 

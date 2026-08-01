@@ -101,7 +101,9 @@ export function AdminAnnouncementSettings({ announcements: initialAnnouncements 
           .insert(data)
 
         if (insertError) throw insertError
-      } else {
+      } else if (editing !== null) {
+        // `editing` is number | 'new' | null; this branch has already ruled out
+        // 'new', and the null check makes it a plain id.
         const { error: updateError } = await supabase
           .from('announcements')
           .update(data)

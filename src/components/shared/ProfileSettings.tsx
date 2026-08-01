@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
+import type { Profile } from '@/types/database'
 import { Button } from '@/components/ui/button'
 import { Field, Input } from '@/components/ui/field'
 
@@ -57,7 +58,7 @@ export function ProfileSettings({
 
     // `role` and `suspended_at` are deliberately absent — a database trigger
     // rejects a non-admin changing either, so there is no point offering them.
-    const updates: Record<string, any> = {
+    const updates: Partial<Profile> = {
       first_name: form.first_name.trim(),
       last_name: form.last_name.trim(),
       phone: form.phone.trim() || null,

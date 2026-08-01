@@ -78,6 +78,17 @@ export default async function ClientDetailPage({ params }: Props) {
       .limit(100),
   ])
 
+  // No row means either the id is wrong or RLS filtered it out — either way
+  // there is nothing to show. Without this guard every `client.x` below throws
+  // and the page 500s instead of rendering a 404.
+  if (!client) notFound()
+
+  // The intake form's question list travels with the submission so a flag id
+  // ("accutane") can be rendered as the question the client actually answered.
+  const questions = ((intake?.intake_forms as unknown as { questions: Json } | null)
+    ?.questions ?? []) as IntakeQuestion[]
+  const answers = (intake?.answers ?? {}) as Record<string, Json>
+
   // Analytics summary
   const pageViews = analytics?.filter(e => e.event === 'pageview').length ?? 0
   const bookingStarts = analytics?.filter(e => e.event === 'booking_started').length ?? 0
