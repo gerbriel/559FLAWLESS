@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Check, ChevronDown } from 'lucide-react'
@@ -8,6 +8,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Field, Input } from '@/components/ui/field'
 import { Badge } from '@/components/ui/badge'
+import { trackFormEvent } from '@/components/shared/ClientAnalytics'
 
 /**
  * A signature stores a verbatim copy of the body that was on screen, plus the
@@ -21,6 +22,8 @@ export function ConsentSigner({
   body,
   revalidateAfterDays,
   alreadySigned,
+  signedAt,
+  expiresAt,
 }: {
   formId: number
   version: number
@@ -28,12 +31,25 @@ export function ConsentSigner({
   body: string
   revalidateAfterDays: number
   alreadySigned: boolean
+  signedAt?: string | null
+  expiresAt?: string | null
 }) {
   const router = useRouter()
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
   const [agreed, setAgreed] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [hasTrackedOpen, setHasTrackedOpen] = useState(false)
+
+  useEffect(() => {
+    if (open && !hasTrackedOpen) {
+      void trackFormEvent('consent', 'started', { form_id: formId })
+      setHasTrackedOpen(true)
+    }
+  }, [open, hasTrackedOpen, formId])
+
+  const isExpiringSoon =
+    expiresAt && new Date(expiresAt) < new Date(Date.now() + 30 * 86_400_000)
 
   async function sign(e: React.FormEvent) {
     e.preventDefault()
@@ -62,16 +78,17 @@ export function ConsentSigner({
       signed_name: name.trim(),
       body_snapshot: body,
       form_version: version,
-      user_agent: navigator.userAgent.slice(0, 500),
       expires_at: expiresAt,
     })
 
-    setBusy(false)
-
     if (error) {
-      toast.error('Could not record that. Please try again.')
+      setBusy(false)
+      toast.error('Could not save. Please try again.')
+      void trackFormEvent('consent', 'abandoned', { form_id: formId, error: error.message })
       return
     }
+
+    void trackFormEvent('consent', 'completed', { form_id: formId })
 
     toast.success('Signed. Thank you.')
     setOpen(false)
@@ -85,13 +102,24 @@ export function ConsentSigner({
         className="flex w-full items-center justify-between gap-4 px-6 py-4 text-left"
         aria-expanded={open}
       >
-        <span className="flex flex-wrap items-center gap-3">
-          {title}
-          {alreadySigned && (
-            <Badge tone="success">
-              <Check className="h-3 w-3" strokeWidth={2.5} />
-              Signed
-            </Badge>
+        <span className="flex flex-col gap-2">
+          <span className="flex flex-wrap items-center gap-3">
+            {title}
+            {alreadySigned && (
+              <Badge tone="success">
+                <Check className="h-3 w-3" strokeWidth={2.5} />
+                Signed
+              </Badge>
+            )}
+            {isExpiringSoon && (
+              <Badge tone="warning">Expires soon</Badge>
+            )}
+          </span>
+          {signedAt && (
+            <span className="text-xs text-[var(--color-muted)]">
+              Last signed {new Date(signedAt).toLocaleDateString()}
+              {expiresAt && ` • Expires ${new Date(expiresAt).toLocaleDateString()}`}
+            </span>
           )}
         </span>
         <ChevronDown

@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { Input } from '@/components/ui/field'
 import { Badge } from '@/components/ui/badge'
 import { formatMoney, initials } from '@/lib/utils'
+import { AlertTriangle, CheckCircle2, ShoppingCart } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,6 +32,52 @@ export default async function ClientsPage({ searchParams }: Props) {
   }
 
   const { data: clients } = await query
+
+  // Fetch form statuses and analytics for all clients
+  const clientIds = clients?.map(c => c.id) ?? []
+  
+  const [
+    { data: consents },
+    { data: intakes },
+    { data: analytics },
+  ] = await Promise.all([
+    supabase
+      .from('consent_signatures')
+      .select('client_id, expires_at')
+      .in('client_id', clientIds),
+    supabase
+      .from('intake_submissions')
+      .select('client_id, flags, reviewed_at')
+      .in('client_id', clientIds),
+    supabase
+      .from('analytics_events')
+      .select('user_id, event')
+      .in('user_id', clientIds),
+  ])
+
+  // Build status maps
+  const now = new Date()
+  const expiredConsentsMap = new Map<string, number>()
+  consents?.forEach(c => {
+    if (c.expires_at && new Date(c.expires_at) < now) {
+      expiredConsentsMap.set(c.client_id, (expiredConsentsMap.get(c.client_id) ?? 0) + 1)
+    }
+  })
+
+  const flaggedIntakesMap = new Map<string, number>()
+  intakes?.forEach(i => {
+    if (i.flags && i.flags.length > 0 && !i.reviewed_at) {
+      flaggedIntakesMap.set(i.client_id, (flaggedIntakesMap.get(i.client_id) ?? 0) + 1)
+    }
+  })
+
+  const bookingAbandonedMap = new Map<string, number>()
+  analytics?.forEach(e => {
+    if (e.event === 'booking_started' || e.event === 'booking_abandoned') {
+      const current = bookingAbandonedMap.get(e.user_id!) ?? 0
+      bookingAbandonedMap.set(e.user_id!, current + (e.event === 'booking_started' ? 1 : -1))
+    }
+  })
 
   return (
     <div>
@@ -65,6 +112,10 @@ export default async function ClientsPage({ searchParams }: Props) {
               lifetime_value_cents: number
             } | null
 
+            const expiredConsents = expiredConsentsMap.get(c.id) ?? 0
+            const flaggedIntakes = flaggedIntakesMap.get(c.id) ?? 0
+            const abandonedBookings = bookingAbandonedMap.get(c.id) ?? 0
+
             return (
               <li key={c.id}>
                 <Link
@@ -83,6 +134,26 @@ export default async function ClientsPage({ searchParams }: Props) {
                       {c.email}
                       {c.phone && ` · ${c.phone}`}
                     </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {expiredConsents > 0 && (
+                        <Badge tone="warning">
+                          <AlertTriangle className="mr-1 h-3 w-3" />
+                          {expiredConsents} consent expired
+                        </Badge>
+                      )}
+                      {flaggedIntakes > 0 && (
+                        <Badge tone="danger">
+                          <AlertTriangle className="mr-1 h-3 w-3" />
+                          {flaggedIntakes} intake flag{flaggedIntakes > 1 ? 's' : ''}
+                        </Badge>
+                      )}
+                      {abandonedBookings > 0 && (
+                        <Badge tone="info">
+                          <ShoppingCart className="mr-1 h-3 w-3" />
+                          {abandonedBookings} abandoned
+                        </Badge>
+                      )}
+                    </div>
                   </div>
 
                   <div className="flex items-center gap-4 text-sm">

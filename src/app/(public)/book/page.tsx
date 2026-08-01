@@ -30,7 +30,7 @@ export default async function BookPage({ searchParams }: Props) {
         // select at the type level and concatenation widens it to `string`,
         // which collapses the result type to SelectQueryError.
         .select(
-          'id, name, slug, description, price_cents, duration_minutes, deposit_cents, is_intimate, requires_age_verification, min_age, patch_test_hours, sort_order, service_categories(name, slug, is_intimate, sort_order)'
+          'id, name, slug, description, price_cents, duration_minutes, deposit_cents, is_intimate, requires_age_verification, min_age, patch_test_hours, sort_order, category_id, service_categories(name, slug, is_intimate, sort_order)'
         )
         .eq('is_active', true)
         .eq('requires_consultation', false)
@@ -95,6 +95,7 @@ export default async function BookPage({ searchParams }: Props) {
         requires_age_verification: s.requires_age_verification,
         min_age: s.min_age,
         patch_test_hours: s.patch_test_hours,
+        category_id: s.category_id,
         category: {
           name: cat?.name ?? 'Other',
           slug: cat?.slug ?? '',

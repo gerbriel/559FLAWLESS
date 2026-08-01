@@ -77,6 +77,7 @@ export type Profile = {
   pronouns: string | null
   age_verified_at: string | null
   marketing_opt_in: boolean
+  marketing_consent_at: string | null
   sms_opt_in: boolean
   display_name: string | null
   slug: string | null
@@ -714,6 +715,20 @@ export type NewsletterSubscriber = {
   unsubscribe_token: string
   subscribed_at: string
   unsubscribed_at: string | null
+  consent_ip: string | null
+  consent_user_agent: string | null
+  preferences: Json
+}
+
+export type UserActivityLog = {
+  id: number
+  user_id: string
+  action: string
+  details: Json
+  performed_by: string | null
+  ip_address: string | null
+  user_agent: string | null
+  created_at: string
 }
 
 export type Vendor = {
@@ -1005,6 +1020,10 @@ export type Database = {
       testimonials: TableDef<Testimonial, [ToProfile<'testimonials', 'client_id'>]>
       analytics_events: TableDef<AnalyticsEvent, [ToProfile<'analytics_events', 'user_id'>]>
       newsletter_subscribers: TableDef<NewsletterSubscriber, [ToProfile<'newsletter_subscribers', 'client_id'>]>
+      user_activity_log: TableDef<
+        UserActivityLog,
+        [ToProfile<'user_activity_log', 'user_id'>, ToProfile<'user_activity_log', 'performed_by'>]
+      >
       site_content: TableDef<SiteContent>
       business_hours: TableDef<BusinessHours>
       faqs: TableDef<Faq>

@@ -1,79 +1,87 @@
-import Link from 'next/link'
 import type { Metadata } from 'next'
+import { createClient } from '@/lib/supabase/server'
 import { Container, Section, SectionHeading } from '@/components/ui/section'
 
+export const revalidate = 600
+
 export const metadata: Metadata = {
-  title: 'Terms',
+  title: 'Terms of Service',
   description: 'Terms of service for booking and purchasing from 559 Flawless.',
 }
 
-export default function TermsPage() {
+export default async function TermsPage() {
+  const supabase = await createClient()
+  
+  // Fetch the latest active terms from site_settings
+  const { data: terms } = await supabase
+    .from('site_settings')
+    .select('text_value, version, effective_at')
+    .eq('key', 'terms_of_service')
+    .eq('is_active', true)
+    .order('version', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  const content = terms?.text_value || fallbackTerms
+  const version = terms?.version || 1
+  const effectiveDate = terms?.effective_at ? new Date(terms.effective_at).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  }) : null
+
   return (
     <Section>
       <Container>
-        <SectionHeading eyebrow="Terms" title="Terms of service." />
+        <SectionHeading eyebrow="Legal" title="Terms of Service" />
 
-        <div className="mt-14 max-w-3xl space-y-10 text-[var(--color-muted)]">
-          <Block title="Booking">
-            Booking an appointment reserves a specific slot with a specific provider.
-            Where a deposit is required, the slot is held on the understanding that the
-            deposit is paid; it comes off your total on the day.
-          </Block>
+        <div className="mt-8 max-w-3xl space-y-4 text-sm text-[var(--color-muted)]">
+          {effectiveDate && <p>Effective Date: {effectiveDate}</p>}
+          <p>Version {version}</p>
+        </div>
 
-          <Block title="Cancellations">
-            See the{' '}
-            <Link href="/policies" className="underline underline-offset-4">
-              studio policies
-            </Link>{' '}
-            for notice periods and what happens to a deposit on a late cancellation.
-          </Block>
-
-          <Block title="Services are cosmetic">
-            Every service offered here is a cosmetic esthetic service. Your esthetician
-            does not diagnose or treat medical conditions, and nothing performed here
-            substitutes for care from a physician or dermatologist. If something needs
-            medical attention we will tell you and refer you.
-          </Block>
-
-          <Block title="Results">
-            Individual results vary. Some treatments need a series before any change is
-            visible, and no specific outcome is promised or guaranteed.
-          </Block>
-
-          <Block title="Health disclosure">
-            You are responsible for giving accurate health information and for telling us
-            about changes before each visit. Some conditions and medications make certain
-            treatments unsafe, and we may decline or postpone a treatment on that basis.
-          </Block>
-
-          <Block title="Age">
-            Intimate services, chemical peels, and microneedling are for clients 18 and
-            over. Clients under 18 may book basic facials and non-intimate waxing with a
-            parent or guardian present to consent.
-          </Block>
-
-          <Block title="Products">
-            Unopened retail products may be returned within 14 days. Opened skincare
-            cannot be returned for hygiene reasons — if a product causes a reaction, tell
-            us and we will work it out with you.
-          </Block>
-
-          <Block title="Right to decline">
-            We may decline or end a service where it would be unsafe, where behaviour
-            toward staff is abusive, or where repeated no-shows have made scheduling
-            impractical.
-          </Block>
+        <div className="prose prose-neutral dark:prose-invert mt-14 max-w-3xl">
+          <div
+            dangerouslySetInnerHTML={{
+              __html: content.replace(/\n/g, '<br />').replace(/## /g, '<h2>').replace(/# /g, '<h1>'),
+            }}
+          />
         </div>
       </Container>
     </Section>
   )
 }
 
-function Block({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <h2 className="display text-2xl text-[var(--color-foreground)]">{title}</h2>
-      <p className="mt-3 leading-relaxed">{children}</p>
-    </div>
-  )
-}
+const fallbackTerms = `# Terms of Service
+
+## 1. Agreement to Terms
+By creating an account or booking services at 559 Flawless, you agree to these Terms of Service.
+
+## 2. Services
+We provide professional esthetic services including facials, waxing, nail care, and corrective skin treatments. All services are performed by licensed professionals.
+
+## 3. Booking & Cancellation
+- Appointments require a deposit
+- 24-hour cancellation notice required for full refund
+- Late cancellations forfeit deposit
+- Repeated no-shows may result in booking restrictions
+
+## 4. Age Requirements
+Certain services require clients to be 18 years or older. You attest that you meet age requirements for services you book.
+
+## 5. Health & Safety
+- Clients must disclose relevant health conditions
+- We reserve the right to decline service if contraindications exist
+- Follow aftercare instructions provided
+
+## 6. Photography
+Treatment photos are clinical records. Separate consent required for any marketing use.
+
+## 7. Privacy
+Your information is handled according to our Privacy Policy.
+
+## 8. Limitation of Liability
+Services are provided "as is". We are not liable for results that vary by individual skin type and condition.
+
+## 9. Changes
+We may update these terms. Continued use after changes constitutes acceptance.`

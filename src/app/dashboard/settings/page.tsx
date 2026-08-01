@@ -1,26 +1,38 @@
 import { createClient } from '@/lib/supabase/server'
+import Link from 'next/link'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { BookingSettingsForm } from '@/components/shared/BookingSettingsForm'
-import { ROLE_LABELS, type UserRole } from '@/types/database'
+import { ROLE_LABELS, type UserRole, isAdmin } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
 
 export default async function SettingsPage() {
   const supabase = await createClient()
 
-  const [{ data: settings }, { data: staff }, { data: closures }] = await Promise.all([
-    supabase.from('booking_settings').select('*').eq('id', 1).maybeSingle(),
-    supabase
-      .from('profiles')
-      .select('id, first_name, last_name, email, role, accepts_online_booking, suspended_at')
-      .neq('role', 'client')
-      .order('role'),
-    supabase
-      .from('closures')
-      .select('id, closure_date, reason')
-      .gte('closure_date', new Date().toISOString().slice(0, 10))
-      .order('closure_date'),
-  ])
+  const [{ data: { user } }, { data: settings }, { data: staff }, { data: closures }] =
+    await Promise.all([
+      supabase.auth.getUser(),
+      supabase.from('booking_settings').select('*').eq('id', 1).maybeSingle(),
+      supabase
+        .from('profiles')
+        .select('id, first_name, last_name, email, role, accepts_online_booking, suspended_at')
+        .neq('role', 'client')
+        .order('role'),
+      supabase
+        .from('closures')
+        .select('id, closure_date, reason')
+        .gte('closure_date', new Date().toISOString().slice(0, 10))
+        .order('closure_date'),
+    ])
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', user?.id ?? '')
+    .maybeSingle()
+
+  const userIsAdmin = profile ? isAdmin(profile.role) : false
 
   return (
     <div className="max-w-3xl">
@@ -44,7 +56,16 @@ export default async function SettingsPage() {
       </section>
 
       <section className="mt-14">
-        <h2 className="display text-2xl">Staff</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="display text-2xl">Staff</h2>
+          {userIsAdmin && (
+            <Link href="/dashboard/settings/users">
+              <Button variant="outline" size="sm">
+                Manage all users
+              </Button>
+            </Link>
+          )}
+        </div>
         <ul className="mt-6 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
           {(staff ?? []).map((s) => (
             <li key={s.id} className="flex flex-wrap items-center justify-between gap-4 py-4">
@@ -66,11 +87,16 @@ export default async function SettingsPage() {
             </li>
           ))}
         </ul>
-        <p className="mt-4 text-xs text-[var(--color-muted)]">
-          Roles and suspensions are changed in Supabase directly — a database trigger
-          rejects any attempt to change them from the app, including by an admin&rsquo;s
-          own session.
-        </p>
+        {userIsAdmin ? (
+          <p className="mt-4 text-xs text-[var(--color-muted)]">
+            Use the &ldquo;Manage all users&rdquo; button above to edit roles, suspend
+            accounts, and view activity logs.
+          </p>
+        ) : (
+          <p className="mt-4 text-xs text-[var(--color-muted)]">
+            Only admins can change roles and suspensions.
+          </p>
+        )}
       </section>
 
       <section className="mt-14">

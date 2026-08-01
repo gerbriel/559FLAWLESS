@@ -14,7 +14,7 @@ export default async function SettingsPage() {
   const [{ data: profile }, { data: record }] = await Promise.all([
     supabase
       .from('profiles')
-      .select('first_name, last_name, email, phone, pronouns, date_of_birth, marketing_opt_in, sms_opt_in')
+      .select('first_name, last_name, email, phone, pronouns, date_of_birth, marketing_opt_in, sms_opt_in, marketing_consent_at, terms_accepted_at, terms_version_accepted')
       .eq('id', user.id)
       .maybeSingle(),
     supabase
@@ -39,6 +39,9 @@ export default async function SettingsPage() {
             date_of_birth: profile?.date_of_birth ?? '',
             marketing_opt_in: profile?.marketing_opt_in ?? false,
             sms_opt_in: profile?.sms_opt_in ?? false,
+            marketing_consent_at: profile?.marketing_consent_at ?? null,
+            terms_accepted_at: profile?.terms_accepted_at ?? null,
+            terms_version_accepted: profile?.terms_version_accepted ?? null,
           }}
           photoReleaseGiven={
             !!record?.photo_release_at && !record?.photo_release_revoked_at

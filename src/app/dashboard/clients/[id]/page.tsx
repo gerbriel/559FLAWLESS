@@ -1,8 +1,9 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { AlertTriangle, Check } from 'lucide-react'
+import { AlertTriangle, Check, MessageSquare, Calendar, Activity } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
+import { ButtonLink } from '@/components/ui/button'
 import { ClientNoteForm } from '@/components/shared/ClientNoteForm'
 import { formatMoney } from '@/lib/utils'
 import { formatDateTimeInTimeZone , requestNow } from '@/lib/time'
@@ -30,6 +31,7 @@ export default async function ClientDetailPage({ params }: Props) {
     { data: intake },
     { data: signatures },
     { data: patchTests },
+    { data: analytics },
   ] = await Promise.all([
     supabase
       .from('profiles')
@@ -68,13 +70,19 @@ export default async function ClientDetailPage({ params }: Props) {
       .eq('client_id', id)
       .order('performed_at', { ascending: false })
       .limit(5),
+    supabase
+      .from('analytics_events')
+      .select('event, path, created_at, meta')
+      .eq('user_id', id)
+      .order('created_at', { ascending: false })
+      .limit(100),
   ])
 
-  if (!client) notFound()
-
-  const questions = ((intake?.intake_forms as unknown as { questions: Json } | null)
-    ?.questions ?? []) as IntakeQuestion[]
-  const answers = (intake?.answers ?? {}) as Record<string, Json>
+  // Analytics summary
+  const pageViews = analytics?.filter(e => e.event === 'pageview').length ?? 0
+  const bookingStarts = analytics?.filter(e => e.event === 'booking_started').length ?? 0
+  const bookingCompletions = analytics?.filter(e => e.event === 'booking_completed').length ?? 0
+  const abandonedBookings = bookingStarts - bookingCompletions
 
   return (
     <div>
@@ -84,6 +92,33 @@ export default async function ClientDetailPage({ params }: Props) {
 
       <div className="mt-8 flex flex-wrap items-start justify-between gap-6">
         <div>
+          <h1 className="display text-3xl">
+            {client.first_name} {client.last_name}
+          </h1>
+          <p className="mt-2 text-sm text-[var(--color-muted)]">
+            {client.email}
+            {client.phone && ` · ${client.phone}`}
+            {client.pronouns && ` · ${client.pronouns}`}
+          </p>
+          <div className="mt-4 flex gap-3">
+            <ButtonLink 
+              href={`/dashboard/messages?client=${id}`}
+              variant="outline"
+              size="sm"
+            >
+              <MessageSquare className="h-4 w-4" />
+              Message
+            </ButtonLink>
+            <ButtonLink 
+              href={`/dashboard/appointments/book-for-client?client=${id}`}
+              variant="primary"
+              size="sm"
+            >
+              <Calendar className="h-4 w-4" />
+              Book Appointment
+            </ButtonLink>
+          </div>
+
           <h1 className="display text-3xl">
             {client.first_name} {client.last_name}
           </h1>
@@ -298,6 +333,52 @@ export default async function ClientDetailPage({ params }: Props) {
                 })}
               </ul>
             )}
+
+          {/* Analytics */}
+          <section className="border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
+            <h3 className="label-caps mb-5 text-[var(--color-accent)]">Activity & Analytics</h3>
+            <dl className="mb-5 grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <dt className="text-[var(--color-muted)]">Page views</dt>
+                <dd className="mt-1 text-lg tabular-nums">{pageViews}</dd>
+              </div>
+              <div>
+                <dt className="text-[var(--color-muted)]">Booking starts</dt>
+                <dd className="mt-1 text-lg tabular-nums">{bookingStarts}</dd>
+              </div>
+              <div>
+                <dt className="text-[var(--color-muted)]">Completed</dt>
+                <dd className="mt-1 text-lg tabular-nums">{bookingCompletions}</dd>
+              </div>
+              <div>
+                <dt className="text-[var(--color-muted)]">Abandoned</dt>
+                <dd className="mt-1 text-lg tabular-nums text-amber-600">
+                  {abandonedBookings > 0 ? abandonedBookings : '—'}
+                </dd>
+              </div>
+            </dl>
+            {analytics && analytics.length > 0 && (
+              <div className="border-t border-[var(--color-border)] pt-4">
+                <h4 className="label-caps mb-3 text-xs text-[var(--color-muted)]">Recent Activity</h4>
+                <ul className="max-h-48 space-y-2 overflow-y-auto text-xs">
+                  {analytics.slice(0, 15).map((event, i) => (
+                    <li key={i} className="flex items-center gap-2 text-[var(--color-muted)]">
+                      <Activity className="h-3 w-3 shrink-0" />
+                      <span className="min-w-0 flex-1 truncate">
+                        {event.event === 'pageview' ? `Viewed ${event.path}` : event.event.replace(/_/g, ' ')}
+                      </span>
+                      <span className="shrink-0 text-[10px]">
+                        {new Date(event.created_at).toLocaleDateString('en-US', {
+                          month: 'short',
+                          day: 'numeric',
+                        })}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </section>
           </section>
 
           {(patchTests?.length ?? 0) > 0 && (

@@ -1,6 +1,9 @@
 import type { Metadata, Viewport } from 'next'
 import { Cormorant_Garamond, Inter } from 'next/font/google'
+import Script from 'next/script'
 import { Toaster } from 'sonner'
+import { ClientAnalytics } from '@/components/shared/ClientAnalytics'
+import { createClient } from '@/lib/supabase/server'
 import './globals.css'
 
 const display = Cormorant_Garamond({
@@ -39,12 +42,103 @@ export const viewport: Viewport = {
   ],
 }
 
-export default function RootLayout({
+type SiteSettings = {
+  google_analytics_id?: string
+  google_tag_manager_id?: string
+  custom_head_scripts?: string
+  custom_body_scripts?: string
+}
+
+async function getSiteSettings(): Promise<SiteSettings> {
+  try {
+    const supabase = await createClient()
+    const { data } = await supabase
+      .from('site_content')
+      .select('key, value')
+      .in('key', [
+        'google_analytics_id',
+        'google_tag_manager_id',
+        'custom_head_scripts',
+        'custom_body_scripts',
+      ])
+
+    const settings: SiteSettings = {}
+    if (data) {
+      for (const row of data) {
+        // The value is stored as jsonb, so extract the actual value
+        settings[row.key as keyof SiteSettings] =
+          typeof row.value === 'object' && row.value && 'value' in row.value
+            ? (row.value as { value: string }).value
+            : (row.value as string)
+      }
+    }
+    return settings
+  } catch {
+    return {}
+  }
+}
+
+export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  const settings = await getSiteSettings()
+  const isProduction = process.env.NODE_ENV === 'production'
+
   return (
     <html lang="en" className={`${display.variable} ${sans.variable} h-full antialiased`}>
+      <head>
+        {/* Google Analytics */}
+        {isProduction && settings.google_analytics_id && (
+          <>
+            <Script
+              src={`https://www.googletagmanager.com/gtag/js?id=${settings.google_analytics_id}`}
+              strategy="afterInteractive"
+            />
+            <Script id="google-analytics" strategy="afterInteractive">
+              {`
+                window.dataLayer = window.dataLayer || [];
+                function gtag(){dataLayer.push(arguments);}
+                gtag('js', new Date());
+                gtag('config', '${settings.google_analytics_id}');
+              `}
+            </Script>
+          </>
+        )}
+
+        {/* Google Tag Manager */}
+        {isProduction && settings.google_tag_manager_id && (
+          <Script id="google-tag-manager" strategy="afterInteractive">
+            {`
+              (function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+              new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+              j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+              'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+              })(window,document,'script','dataLayer','${settings.google_tag_manager_id}');
+            `}
+          </Script>
+        )}
+
+        {/* Custom head scripts (admin configured, XSS risk if not properly sanitized) */}
+        {isProduction && settings.custom_head_scripts && (
+          <Script id="custom-head-scripts" strategy="afterInteractive">
+            {settings.custom_head_scripts}
+          </Script>
+        )}
+      </head>
       <body className="flex min-h-full flex-col">
+        {/* Google Tag Manager (noscript) */}
+        {isProduction && settings.google_tag_manager_id && (
+          <noscript>
+            <iframe
+              src={`https://www.googletagmanager.com/ns.html?id=${settings.google_tag_manager_id}`}
+              height="0"
+              width="0"
+              style={{ display: 'none', visibility: 'hidden' }}
+            />
+          </noscript>
+        )}
+
+        <ClientAnalytics />
         {children}
         <Toaster
           position="bottom-right"
@@ -57,7 +151,15 @@ export default function RootLayout({
             },
           }}
         />
+
+        {/* Custom body scripts */}
+        {isProduction && settings.custom_body_scripts && (
+          <Script id="custom-body-scripts" strategy="lazyOnload">
+            {settings.custom_body_scripts}
+          </Script>
+        )}
       </body>
     </html>
   )
 }
+

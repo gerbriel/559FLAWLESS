@@ -1,4 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
+import Link from 'next/link'
+import { Button } from '@/components/ui/button'
 import { TestimonialModeration } from '@/components/shared/TestimonialModeration'
 import { AnnouncementManager } from '@/components/shared/AnnouncementManager'
 
@@ -35,7 +37,9 @@ export default async function MarketingPage() {
       <h1 className="display text-3xl">Marketing</h1>
 
       <div className="mt-8 grid gap-px border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-3">
-        <Stat label="Newsletter list" value={String(subscribers ?? 0)} />
+        <Link href="/dashboard/marketing/newsletter" className="block hover:opacity-80">
+          <Stat label="Newsletter list" value={String(subscribers ?? 0)} />
+        </Link>
         <Stat label="Reviews awaiting" value={String(pending?.length ?? 0)} />
         <Stat label="Live reviews" value={String(approved?.length ?? 0)} />
       </div>

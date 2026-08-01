@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Field, Input } from '@/components/ui/field'
@@ -19,12 +20,18 @@ export function SignupForm() {
     email: '',
     phone: '',
     password: '',
-    marketing: false,
+    marketing: true,  // Pre-checked per requirements
+    terms: false,     // NOT pre-checked - required explicit consent
   })
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
+
+    if (!form.terms) {
+      setError('Please accept the Terms of Service to continue.')
+      return
+    }
 
     if (form.password.length < MIN_PASSWORD) {
       setError(`Please use at least ${MIN_PASSWORD} characters.`)
@@ -33,6 +40,13 @@ export function SignupForm() {
 
     setBusy(true)
     const supabase = createClient()
+
+    // Capture consent evidence
+    const userAgent = navigator.userAgent
+    const ipAddress = await fetch('https://api.ipify.org?format=json')
+      .then((r) => r.json())
+      .then((d) => d.ip)
+      .catch(() => null)
 
     const { data, error: signUpError } = await supabase.auth.signUp({
       email: form.email.trim().toLowerCase(),
@@ -61,11 +75,28 @@ export function SignupForm() {
       return
     }
 
+    // Update profile with consent tracking
+    const now = new Date().toISOString()
+    const updates: Record<string, any> = {
+      marketing_opt_in: form.marketing,
+      terms_accepted_at: now,
+      terms_version_accepted: 1,
+      privacy_accepted_at: now,
+    }
+
     if (form.marketing) {
-      await supabase
-        .from('profiles')
-        .update({ marketing_opt_in: true })
-        .eq('id', data.user!.id)
+      updates.marketing_consent_at = now
+      updates.marketing_consent_ip = ipAddress
+    }
+
+    await supabase.from('profiles').update(updates).eq('id', data.user!.id)
+
+    // If marketing opt-in, also create newsletter subscription
+    if (form.marketing) {
+      await supabase.rpc('subscribe_newsletter', {
+        p_email: form.email.trim().toLowerCase(),
+        p_source: 'signup',
+      })
     }
 
     router.push('/account')
@@ -147,15 +178,57 @@ export function SignupForm() {
         />
       </Field>
 
-      <label className="flex cursor-pointer items-start gap-3 text-sm text-[var(--color-muted)]">
-        <input
-          type="checkbox"
-          checked={form.marketing}
-          onChange={(e) => setForm({ ...form, marketing: e.target.checked })}
-          className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
-        />
-        <span>Email me occasional offers and skincare tips. No more than monthly.</span>
-      </label>
+      <div className="space-y-3 border-t border-[var(--color-border)] pt-6">
+        <label className="flex cursor-pointer items-start gap-3 text-sm">
+          <input
+            type="checkbox"
+            checked={form.marketing}
+            onChange={(e) => setForm({ ...form, marketing: e.target.checked })}
+            className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
+          />
+          <span className="text-[var(--color-muted)]">
+            I agree to receive marketing emails and promotional offers. You can unsubscribe
+            anytime. See our{' '}
+            <Link
+              href="/privacy"
+              target="_blank"
+              className="text-[var(--color-foreground)] underline underline-offset-4"
+            >
+              Privacy Policy
+            </Link>
+            .
+          </span>
+        </label>
+
+        <label className="flex cursor-pointer items-start gap-3 text-sm">
+          <input
+            type="checkbox"
+            required
+            checked={form.terms}
+            onChange={(e) => setForm({ ...form, terms: e.target.checked })}
+            className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
+          />
+          <span>
+            I have read and agree to the{' '}
+            <Link
+              href="/terms"
+              target="_blank"
+              className="text-[var(--color-foreground)] underline underline-offset-4"
+            >
+              Terms of Service
+            </Link>{' '}
+            and{' '}
+            <Link
+              href="/privacy"
+              target="_blank"
+              className="text-[var(--color-foreground)] underline underline-offset-4"
+            >
+              Privacy Policy
+            </Link>
+            . <span className="text-red-600">*</span>
+          </span>
+        </label>
+      </div>
 
       {error && <p className="text-sm text-red-700 dark:text-red-400">{error}</p>}
 

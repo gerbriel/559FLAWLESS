@@ -16,6 +16,9 @@ interface ProfileFields {
   date_of_birth: string
   marketing_opt_in: boolean
   sms_opt_in: boolean
+  marketing_consent_at: string | null
+  terms_accepted_at: string | null
+  terms_version_accepted: number | null
 }
 
 export function ProfileSettings({
@@ -31,6 +34,16 @@ export function ProfileSettings({
   const [form, setForm] = useState(profile)
   const [photoRelease, setPhotoRelease] = useState(photoReleaseGiven)
   const [busy, setBusy] = useState(false)
+  const [unsubscribing, setUnsubscribing] = useState(false)
+
+  const formatDate = (dateStr: string | null) => {
+    if (!dateStr) return 'Never'
+    return new Date(dateStr).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    })
+  }
 
   async function save(e: React.FormEvent) {
     e.preventDefault()
@@ -38,20 +51,28 @@ export function ProfileSettings({
 
     const supabase = createClient()
 
+    // Track if marketing consent changed
+    const marketingChanged = form.marketing_opt_in !== profile.marketing_opt_in
+    const now = new Date().toISOString()
+
     // `role` and `suspended_at` are deliberately absent — a database trigger
     // rejects a non-admin changing either, so there is no point offering them.
-    const { error } = await supabase
-      .from('profiles')
-      .update({
-        first_name: form.first_name.trim(),
-        last_name: form.last_name.trim(),
-        phone: form.phone.trim() || null,
-        pronouns: form.pronouns.trim() || null,
-        date_of_birth: form.date_of_birth || null,
-        marketing_opt_in: form.marketing_opt_in,
-        sms_opt_in: form.sms_opt_in,
-      })
-      .eq('id', userId)
+    const updates: Record<string, any> = {
+      first_name: form.first_name.trim(),
+      last_name: form.last_name.trim(),
+      phone: form.phone.trim() || null,
+      pronouns: form.pronouns.trim() || null,
+      date_of_birth: form.date_of_birth || null,
+      marketing_opt_in: form.marketing_opt_in,
+      sms_opt_in: form.sms_opt_in,
+    }
+
+    // If enabling marketing, capture consent timestamp
+    if (marketingChanged && form.marketing_opt_in) {
+      updates.marketing_consent_at = now
+    }
+
+    const { error } = await supabase.from('profiles').update(updates).eq('id', userId)
 
     if (error) {
       setBusy(false)
@@ -75,6 +96,33 @@ export function ProfileSettings({
     setBusy(false)
     toast.success('Saved.')
     router.refresh()
+  }
+
+  async function handleUnsubscribe() {
+    if (!confirm('Are you sure you want to unsubscribe from all marketing emails?')) {
+      return
+    }
+
+    setUnsubscribing(true)
+    const supabase = createClient()
+
+    const { error } = await supabase
+      .from('profiles')
+      .update({
+        marketing_opt_in: false,
+        marketing_consent_at: null,
+      })
+      .eq('id', userId)
+
+    if (error) {
+      toast.error('Could not unsubscribe. Please try again.')
+    } else {
+      toast.success('Unsubscribed from marketing emails.')
+      setForm({ ...form, marketing_opt_in: false })
+      router.refresh()
+    }
+
+    setUnsubscribing(false)
   }
 
   return (
@@ -112,7 +160,78 @@ export function ProfileSettings({
             onChange={(e) => setForm({ ...form, phone: e.target.value })}
           />
         </Field>
-        <Field label="Pronouns" htmlFor="p_pronouns" hint="Optional.">
+      </div>
+
+      <fieldset className="border-t border-[var(--color-border)] pt-6">
+        <legend className="label-caps mb-4 text-[var(--color-accent)]">Preferences</legend>
+
+        <label className="flex cursor-pointer items-start gap-3 text-sm">
+          <input
+            type="checkbox"
+            checked={form.marketing_opt_in}
+            onChange={(e) => setForm({ ...form, marketing_opt_in: e.target.checked })}
+            className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
+          />
+          <span>Send me marketing emails and promotional offers.</span>
+        </label>
+
+        {form.marketing_opt_in && profile.marketing_consent_at && (
+          <p className="ml-7 text-xs text-[var(--color-muted)]">
+            Subscribed on {formatDate(profile.marketing_consent_at)}
+          </p>
+        )}
+
+        {!form.marketing_opt_in && profile.marketing_consent_at && (
+          <div className="ml-7 space-y-2">
+            <p className="text-xs text-[var(--color-muted)]">
+              Previously subscribed on {formatDate(profile.marketing_consent_at)}
+            </p>
+            <button
+              type="button"
+              onClick={() => setForm({ ...form, marketing_opt_in: true })}
+              className="text-xs text-[var(--color-accent)] underline underline-offset-4"
+            >
+              Re-subscribe
+            </button>
+          </div>
+        )}
+
+        <label className="flex cursor-pointer items-start gap-3 text-sm">
+          <input
+            type="checkbox"
+            checked={form.sms_opt_in}
+            onChange={(e) => setForm({ ...form, sms_opt_in: e.target.checked })}
+            className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
+          />
+          <span>Text me appointment reminders.</span>
+        </label>
+
+        {profile.marketing_opt_in && (
+          <div className="mt-4 border-t border-[var(--color-border)] pt-4">
+            <button
+              type="button"
+              onClick={handleUnsubscribe}
+              disabled={unsubscribing}
+              className="text-sm text-red-600 underline underline-offset-4 hover:text-red-700 disabled:opacity-50 dark:text-red-400"
+            >
+              {unsubscribing ? 'Unsubscribing…' : 'Unsubscribe from all marketing'}
+            </button>
+          </div>
+        )}
+      </fieldset>
+
+      {profile.terms_accepted_at && (
+        <div className="border-t border-[var(--color-border)] pt-6">
+          <p className="label-caps mb-2 text-[var(--color-accent)]">Legal</p>
+          <p className="text-xs text-[var(--color-muted)]">
+            You accepted the Terms of Service (v{profile.terms_version_accepted ?? 1}) on{' '}
+            {formatDate(profile.terms_accepted_at)}
+          </p>
+        </div>
+      )}
+
+      <div className="grid gap-6 sm:grid-cols-2">
+        <Field label="Pronouns" htmlFor="p_pronouns">
           <Input
             id="p_pronouns"
             maxLength={40}

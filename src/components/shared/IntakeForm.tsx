@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { ChevronDown } from 'lucide-react'
@@ -8,6 +8,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Field, Input, Select, Textarea } from '@/components/ui/field'
 import { cn } from '@/lib/utils'
+import { trackFormEvent } from '@/components/shared/ClientAnalytics'
 import type { IntakeQuestion } from '@/types/database'
 
 type Answer = string | boolean | string[]
@@ -23,17 +24,27 @@ export function IntakeForm({
   questions,
   previousAnswers,
   collapsedByDefault,
+  lastSubmittedAt,
 }: {
   formId: number
   title: string
   questions: IntakeQuestion[]
   previousAnswers: Record<string, Answer>
   collapsedByDefault: boolean
+  lastSubmittedAt?: string | null
 }) {
   const router = useRouter()
   const [open, setOpen] = useState(!collapsedByDefault)
   const [busy, setBusy] = useState(false)
   const [answers, setAnswers] = useState<Record<string, Answer>>(previousAnswers ?? {})
+  const [hasTrackedOpen, setHasTrackedOpen] = useState(false)
+
+  useEffect(() => {
+    if (open && !hasTrackedOpen) {
+      void trackFormEvent('intake', 'started', { form_id: formId })
+      setHasTrackedOpen(true)
+    }
+  }, [open, hasTrackedOpen, formId])
 
   function set(id: string, value: Answer) {
     setAnswers((a) => ({ ...a, [id]: value }))
@@ -62,16 +73,18 @@ export function IntakeForm({
     const { error } = await supabase.from('intake_submissions').insert({
       intake_form_id: formId,
       client_id: user.id,
-      answers: answers as never,
+      answers,
       flags,
     })
 
-    setBusy(false)
-
     if (error) {
-      toast.error('Could not save that. Please try again.')
+      setBusy(false)
+      toast.error('Could not save. Please try again.')
+      void trackFormEvent('intake', 'abandoned', { form_id: formId, error: error.message })
       return
     }
+
+    void trackFormEvent('intake', 'completed', { form_id: formId, flags })
 
     toast.success(
       flags.length > 0
@@ -88,7 +101,14 @@ export function IntakeForm({
         onClick={() => setOpen(true)}
         className="flex w-full items-center justify-between border border-[var(--color-border)] bg-[var(--color-surface)] px-6 py-4 text-left transition-colors hover:border-[var(--color-accent)]"
       >
-        <span>Update my health form</span>
+        <div>
+          <span className="block">{previousAnswers && Object.keys(previousAnswers).length > 0 ? 'Update my health form' : 'Complete health form'}</span>
+          {lastSubmittedAt && (
+            <span className="mt-1 block text-xs text-[var(--color-muted)]">
+              Last completed {new Date(lastSubmittedAt).toLocaleDateString()}
+            </span>
+          )}
+        </div>
         <ChevronDown className="h-4 w-4" strokeWidth={1.5} />
       </button>
     )

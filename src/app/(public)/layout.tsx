@@ -1,9 +1,10 @@
 import { Suspense } from 'react'
 import { createPublicClient } from '@/lib/supabase/public'
+import { createClient } from '@/lib/supabase/server'
 import { SiteHeader } from '@/components/layout/SiteHeader'
 import { SiteFooter, type FooterContact } from '@/components/layout/SiteFooter'
-import { AnnouncementBar } from '@/components/layout/AnnouncementBar'
-import { AnalyticsTracker } from '@/components/shared/AnalyticsTracker'
+import { AnnouncementDisplay } from '@/components/shared/AnnouncementDisplay'
+import { ClientAnalytics } from '@/components/shared/ClientAnalytics'
 
 /**
  * Everything this layout reads is public, so the whole marketing site can be
@@ -24,23 +25,35 @@ export default async function PublicLayout({
   children: React.ReactNode
 }) {
   const supabase = createPublicClient()
+  const authSupabase = await createClient()
 
-  const [{ data: categories }, { data: announcements }, { data: hours }, { data: contactRow }] =
-    await Promise.all([
-      supabase
-        .from('service_categories')
-        .select('name, slug, services(name, slug, sort_order, is_active)')
-        .eq('is_active', true)
-        .order('sort_order'),
-      supabase
-        .from('announcements')
-        .select('id, title, link_url, link_label, variant')
-        .eq('is_active', true)
-        .order('created_at', { ascending: false })
-        .limit(1),
-      supabase.from('business_hours').select('*'),
-      supabase.from('site_content').select('value').eq('key', 'contact').maybeSingle(),
-    ])
+  // Get user role for announcement targeting (optional, doesn't force dynamic rendering)
+  let userRole: string | undefined
+  try {
+    const {
+      data: { user },
+    } = await authSupabase.auth.getUser()
+    if (user) {
+      const { data: profile } = await authSupabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .maybeSingle()
+      userRole = profile?.role
+    }
+  } catch {
+    // Anonymous is fine
+  }
+
+  const [{ data: categories }, { data: hours }, { data: contactRow }] = await Promise.all([
+    supabase
+      .from('service_categories')
+      .select('name, slug, services(name, slug, sort_order, is_active)')
+      .eq('is_active', true)
+      .order('sort_order'),
+    supabase.from('business_hours').select('*'),
+    supabase.from('site_content').select('value').eq('key', 'contact').maybeSingle(),
+  ])
 
   const nav = (categories ?? []).map((c) => ({
     name: c.name,
@@ -51,20 +64,11 @@ export default async function PublicLayout({
       .map((s) => ({ name: s.name, slug: s.slug })),
   }))
 
-  const announcement = announcements?.[0]
   const contact = (contactRow?.value ?? {}) as FooterContact
 
   return (
     <>
-      {announcement && (
-        <AnnouncementBar
-          id={announcement.id}
-          title={announcement.title}
-          linkUrl={announcement.link_url}
-          linkLabel={announcement.link_label}
-          variant={announcement.variant}
-        />
-      )}
+      <AnnouncementDisplay userRole={userRole} />
 
       <SiteHeader categories={nav} />
 
@@ -77,7 +81,7 @@ export default async function PublicLayout({
       />
 
       <Suspense fallback={null}>
-        <AnalyticsTracker />
+        <ClientAnalytics />
       </Suspense>
     </>
   )

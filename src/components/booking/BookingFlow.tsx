@@ -15,9 +15,11 @@ import {
   timeZoneAbbreviation,
 } from '@/lib/time'
 import { trackEvent } from '@/components/shared/AnalyticsTracker'
+import { FormRequirementChecker } from '@/components/shared/FormRequirementChecker'
 
 export interface BookableService {
   id: number
+  category_id: number
   name: string
   slug: string
   description: string | null
@@ -103,6 +105,7 @@ export function BookingFlow({
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [formsComplete, setFormsComplete] = useState(false)
   const [confirmation, setConfirmation] = useState<{
     id: string
     startsAt: string
@@ -677,6 +680,16 @@ export function BookingFlow({
                   onChange={(e) => setForm({ ...form, notes: e.target.value })}
                 />
               </Field>
+
+              {service && signedInEmail && (
+                <div className="mt-8">
+                  <FormRequirementChecker
+                    serviceId={service.id}
+                    categoryId={service.category_id}
+                    onRequirementsChecked={setFormsComplete}
+                  />
+                </div>
+              )}
             </div>
 
             {error && (
@@ -685,6 +698,10 @@ export function BookingFlow({
               </p>
             )}
 
+                type="submit"
+                size="lg"
+                disabled={submitting || (signedInEmail && !formsComplete)}
+              
             <div className="mt-10 flex items-center gap-4">
               <Button
                 type="button"

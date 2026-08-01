@@ -9,6 +9,7 @@ import { useCart } from '@/store/cart'
 import { Button } from '@/components/ui/button'
 import { Field, Input, Select } from '@/components/ui/field'
 import { formatMoney } from '@/lib/utils'
+import { trackCartEvent } from './ClientAnalytics'
 
 interface CartProduct {
   id: number
@@ -28,6 +29,7 @@ export function CartView() {
     email: '',
     phone: '',
     fulfillment: 'pickup' as 'pickup' | 'shipping',
+    subscribeNewsletter: true,  // Pre-checked marketing consent
   })
 
   // Prices are read fresh from the catalog every time the bag renders — the
@@ -77,7 +79,16 @@ export function CartView() {
     e.preventDefault()
     setSubmitting(true)
 
-    try {
+    try {supabase = createClient()
+
+      // If user opted in to newsletter, subscribe them
+      if (form.subscribeNewsletter) {
+        await supabase.rpc('subscribe_newsletter', {
+          p_email: form.email.trim().toLowerCase(),
+          p_source: 'checkout',
+        })
+      }
+
       const res = await fetch('/api/stripe/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -177,7 +188,10 @@ export function CartView() {
 
             <button
               type="button"
-              onClick={() => remove(r.productId)}
+              onClick={() => {
+                remove(r.productId)
+                void trackCartEvent('remove', { product_id: r.productId })
+              }}
               className="p-1 text-[var(--color-muted)] hover:text-[var(--color-foreground)]"
               aria-label={`Remove ${r.product.name}`}
             >
@@ -232,6 +246,18 @@ export function CartView() {
                 <option value="shipping">Ship to me</option>
               </Select>
             </Field>
+
+            <label className="flex cursor-pointer items-start gap-3 text-sm">
+              <input
+                type="checkbox"
+                checked={form.subscribeNewsletter}
+                onChange={(e) => setForm({ ...form, subscribeNewsletter: e.target.checked })}
+                className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
+              />
+              <span className="text-[var(--color-muted)]">
+                Subscribe to our newsletter for exclusive offers and skincare tips
+              </span>
+            </label>
           </div>
 
           <dl className="mt-6 space-y-2 border-t border-[var(--color-border)] pt-6 text-sm">

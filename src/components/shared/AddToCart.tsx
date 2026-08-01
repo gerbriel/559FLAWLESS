@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { Minus, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useCart } from '@/store/cart'
+import { trackCartEvent } from './ClientAnalytics'
 
 export function AddToCart({
   productId,
@@ -51,6 +52,7 @@ export function AddToCart({
       <Button
         size="lg"
         onClick={() => {
+          void trackCartEvent('add', { product_id: productId, quantity: qty })
           add(productId, qty)
           toast.success('Added to your bag.')
         }}
