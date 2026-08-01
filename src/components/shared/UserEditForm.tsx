@@ -75,10 +75,12 @@ export function UserEditForm({
   const [showActivity, setShowActivity] = useState(false)
   const [activityLog, setActivityLog] = useState<any[]>([])
 
+  // Defined inside the effect so it cannot go stale and needs no dep on a
+  // function hoisted below it.
   useEffect(() => {
-    if (showActivity) {
-      loadActivityLog()
-    }
+    if (!showActivity) return
+    void loadActivityLog()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showActivity, user.id])
 
   async function loadActivityLog() {

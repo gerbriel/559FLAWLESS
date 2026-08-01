@@ -698,8 +698,8 @@ export function BookingFlow({
               </p>
             )}
 
-                type="submit"
-                size="lg"
+                type=&quot;submit&quot;
+                size=&quot;lg&quot;
                 disabled={submitting || (signedInEmail && !formsComplete)}
               
             <div className="mt-10 flex items-center gap-4">

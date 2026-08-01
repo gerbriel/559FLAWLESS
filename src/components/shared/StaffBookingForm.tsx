@@ -8,7 +8,7 @@ import { Input, Label, Field, Select } from '@/components/ui/field'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatMoney, formatDuration, initials } from '@/lib/utils'
-import { Search, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { Search, AlertTriangle } from 'lucide-react'
 
 interface Service {
   id: number
@@ -53,6 +53,7 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
   const [selectedClient, setSelectedClient] = useState<ClientProfile | null>(preselectedClient ?? null)
   const [serviceId, setServiceId] = useState<number | null>(null)
   const [providerId, setProviderId] = useState<string | null>(null)
+  const [selectedAddonIds, setSelectedAddonIds] = useState<number[]>([])
   const [selectedDate, setSelectedDate] = useState('')
   const [availableSlots, setAvailableSlots] = useState<TimeSlot[]>([])
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null)
@@ -161,16 +162,27 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
         const service = services.find(s => s.id === serviceId)
         if (!service) return
 
-        const response = await fetch(
-          `/api/availability?serviceId=${serviceId}&providerId=${providerId}&date=${selectedDate}`
-        )
+        // The route takes provider/service/from/days — not
+        // providerId/serviceId/date. With the wrong names it 400'd every time,
+        // so no slots ever appeared and staff could not pick a time at all.
+        const params = new URLSearchParams({
+          provider: providerId,
+          service: String(serviceId),
+          from: selectedDate,
+          days: '1',
+        })
+        const response = await fetch(`/api/availability?${params}`)
 
         if (!response.ok) {
           throw new Error('Failed to fetch availability')
         }
 
         const data = await response.json()
-        setAvailableSlots(data.slots ?? [])
+        // Response shape is { days: [{ date, slots: ISO[] }] }.
+        const day = (data.days ?? []).find(
+          (d: { date: string }) => d.date === selectedDate
+        )
+        setAvailableSlots(day?.slots ?? [])
       } catch (err) {
         console.error('Error fetching slots:', err)
         setAvailableSlots([])
@@ -202,20 +214,18 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
           serviceId,
           providerId,
           startsAt: selectedSlot,
-          addonIds: [],
+          addonIds: selectedAddonIds,
           notes: clientNotes.trim() || null,
-          source: 'staff',
         }),
       })
 
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.error || 'Booking failed')
+        throw new Error(data.message || data.error || 'Booking failed')
       }
 
-      // Success! Redirect to the appointment detail page
-      router.push(`/dashboard/appointments/${data.id}`)
+      router.push(`/dashboard/appointments/${data.booking.id}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create booking')
     } finally {

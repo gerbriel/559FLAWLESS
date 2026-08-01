@@ -1,6 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
-import { Button } from '@/components/ui/button'
 import { TestimonialModeration } from '@/components/shared/TestimonialModeration'
 import { AnnouncementManager } from '@/components/shared/AnnouncementManager'
 

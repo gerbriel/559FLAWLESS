@@ -2,12 +2,11 @@
 
 import { useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Field, Input, Select } from '@/components/ui/field'
 import { UserEditForm } from './UserEditForm'
-import { ROLE_LABELS, type UserRole, type Profile } from '@/types/database'
+import { ROLE_LABELS, type Profile } from '@/types/database'
 
 type UserListItem = Pick<
   Profile,

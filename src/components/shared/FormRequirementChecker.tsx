@@ -271,7 +271,7 @@ export function FormRequirementChecker({
           {hasRequired && (
             <p className="mt-4 text-sm text-[var(--color-muted)]">
               Please complete all required forms before confirming your appointment.
-              You'll be able to return to this booking after submitting each form.
+              You&apos;ll be able to return to this booking after submitting each form.
             </p>
           )}
         </div>

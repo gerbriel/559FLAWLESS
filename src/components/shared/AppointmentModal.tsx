@@ -5,7 +5,6 @@ import type { CalendarAppointment as AppointmentData } from '@/components/shared
 import * as React from 'react'
 import { X, Calendar, Clock, User, FileText, DollarSign, Phone, Mail } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { formatMoney } from '@/lib/utils'
 import { formatDateTimeInTimeZone, formatTimeInTimeZone } from '@/lib/time'
 import type { AppointmentStatus } from '@/types/database'

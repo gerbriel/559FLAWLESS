@@ -57,14 +57,14 @@ function UnsubscribeInner() {
         {status === 'success' && (
           <>
             <CheckCircle className="mx-auto h-12 w-12 text-green-600 dark:text-green-400" strokeWidth={1.5} />
-            <h1 className="display mt-6 text-3xl">You've been unsubscribed.</h1>
+            <h1 className="display mt-6 text-3xl">You&apos;ve been unsubscribed.</h1>
             {email && (
               <p className="mt-3 text-[var(--color-muted)]">
                 {email} will no longer receive marketing emails from us.
               </p>
             )}
             <p className="mt-6 text-sm text-[var(--color-muted)]">
-              You'll still receive transactional emails like appointment confirmations.
+              You&apos;ll still receive transactional emails like appointment confirmations.
             </p>
             <p className="mt-3 text-sm text-[var(--color-muted)]">
               Changed your mind?{' '}
@@ -80,7 +80,7 @@ function UnsubscribeInner() {
             <XCircle className="mx-auto h-12 w-12 text-red-600 dark:text-red-400" strokeWidth={1.5} />
             <h1 className="display mt-6 text-3xl">Something went wrong.</h1>
             <p className="mt-3 text-[var(--color-muted)]">
-              We couldn't process your unsubscribe request. Please try again or contact us directly.
+              We couldn&apos;t process your unsubscribe request. Please try again or contact us directly.
             </p>
           </>
         )}

@@ -57,10 +57,10 @@ function ConfirmInner() {
         {status === 'success' && (
           <>
             <CheckCircle className="mx-auto h-12 w-12 text-green-600 dark:text-green-400" strokeWidth={1.5} />
-            <h1 className="display mt-6 text-3xl">You're subscribed!</h1>
+            <h1 className="display mt-6 text-3xl">You&apos;re subscribed!</h1>
             {email && (
               <p className="mt-3 text-[var(--color-muted)]">
-                {email} is confirmed. You'll receive our newsletter and exclusive offers.
+                {email} is confirmed. You&apos;ll receive our newsletter and exclusive offers.
               </p>
             )}
             <Link href="/" className="label-caps mt-8 inline-block border-b border-[var(--color-foreground)] pb-1">
@@ -87,7 +87,7 @@ function ConfirmInner() {
             <XCircle className="mx-auto h-12 w-12 text-red-600 dark:text-red-400" strokeWidth={1.5} />
             <h1 className="display mt-6 text-3xl">Something went wrong.</h1>
             <p className="mt-3 text-[var(--color-muted)]">
-              We couldn't confirm your subscription. The link may have expired. Please try subscribing again.
+              We couldn&apos;t confirm your subscription. The link may have expired. Please try subscribing again.
             </p>
           </>
         )}

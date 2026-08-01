@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Check, ChevronDown } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { requestNow } from '@/lib/time'
 import { Button } from '@/components/ui/button'
 import { Field, Input } from '@/components/ui/field'
 import { Badge } from '@/components/ui/badge'
@@ -39,17 +40,21 @@ export function ConsentSigner({
   const [name, setName] = useState('')
   const [agreed, setAgreed] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [hasTrackedOpen, setHasTrackedOpen] = useState(false)
+  const hasTrackedOpen = useRef(false)
 
+  // A ref, not state: "have we already logged this" changes nothing on screen,
+  // so writing it during an effect should not schedule another render.
   useEffect(() => {
-    if (open && !hasTrackedOpen) {
+    if (open && !hasTrackedOpen.current) {
+      hasTrackedOpen.current = true
       void trackFormEvent('consent', 'started', { form_id: formId })
-      setHasTrackedOpen(true)
     }
-  }, [open, hasTrackedOpen, formId])
+  }, [open, formId])
 
+  // requestNow() rather than a bare Date.now() in render — same reason as the
+  // server components: reading the clock during render is impure.
   const isExpiringSoon =
-    expiresAt && new Date(expiresAt) < new Date(Date.now() + 30 * 86_400_000)
+    expiresAt && new Date(expiresAt) < new Date(requestNow() + 30 * 86_400_000)
 
   async function sign(e: React.FormEvent) {
     e.preventDefault()

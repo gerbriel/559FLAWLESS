@@ -38,7 +38,9 @@ export default async function BookPage({ searchParams }: Props) {
       supabase
         .from('profiles')
         .select('id, display_name, first_name, bio, timezone')
-        .eq('role', 'provider')
+        // Bookable is `accepts_online_booking`, not role — a solo owner is
+        // admin AND the person doing the treatment. See migration 020.
+        .neq('role', 'client')
         .eq('accepts_online_booking', true)
         .is('suspended_at', null),
       supabase.from('provider_services').select('provider_id, service_id').eq('is_active', true),

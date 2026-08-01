@@ -6,10 +6,6 @@ import * as React from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { CalendarViewComponent, type CalendarView } from './CalendarView'
 import { AppointmentModal } from './AppointmentModal'
-import { dateKeyInTimeZone } from '@/lib/time'
-import type { AppointmentStatus } from '@/types/database'
-
-
 interface Provider {
   id: string
   first_name: string | null

@@ -58,15 +58,10 @@ export function DirectionsLink({
 }) {
   const [open, setOpen] = useState(false)
   const [copied, setCopied] = useState(false)
-  const [isApple, setIsApple] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
   const address = formatAddress(location)
   const links = targets(location)
-
-  useEffect(() => {
-    setIsApple(/iPhone|iPad|iPod|Macintosh/.test(navigator.userAgent))
-  }, [])
 
   // Close on outside click or Escape.
   useEffect(() => {
@@ -94,6 +89,12 @@ export function DirectionsLink({
       // Clipboard blocked — the address is on screen to read anyway.
     }
   }
+
+  // Read at render of the (interaction-only) menu rather than mirrored into
+  // state by an effect — there is nothing to synchronise, it is just a fact
+  // about the device.
+  const isApple =
+    typeof navigator !== 'undefined' && /iPhone|iPad|iPod|Macintosh/.test(navigator.userAgent)
 
   const options = [
     { key: 'google', label: 'Google Maps', href: links.google },

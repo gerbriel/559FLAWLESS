@@ -105,7 +105,8 @@ export async function loadAvailability(opts: {
     .eq('id', opts.providerId)
     .maybeSingle()
 
-  if (!provider || provider.role !== 'provider') return null
+  // Any non-client staff member who takes bookings — see migration 020.
+  if (!provider || provider.role === 'client') return null
   if (provider.suspended_at || !provider.accepts_online_booking) return null
   if (!isValidTimeZone(provider.timezone)) return null
 
@@ -437,4 +438,159 @@ export const BOOKING_ERROR_MESSAGES: Record<BookingError, string> = {
   slot_taken: 'Someone just booked that time. Please pick another.',
   rate_limited: 'That is a lot of bookings at once. Please wait a few minutes.',
   booking_failed: 'We could not complete the booking. Please try again or call us.',
+}
+
+// ── Staff bookings ──────────────────────────────────────────
+
+export interface StaffBookingRequest {
+  clientId: string
+  providerId: string
+  serviceId: number
+  addonIds: number[]
+  startsAt: string
+  notes: string | null
+  /** The staff member doing the booking; recorded on the appointment. */
+  createdBy: string
+  /**
+   * Staff can book outside published hours — squeezing someone in before open
+   * is a normal thing for a studio to do. The exclusion constraint still runs,
+   * so this can never create a double booking; it only skips the
+   * "is this slot advertised" check.
+   */
+  overrideAvailability?: boolean
+}
+
+/**
+ * Book on behalf of an existing client.
+ *
+ * Shares the pricing and insert path with `createBooking` on purpose. The
+ * previous implementation was a separate hand-rolled route that built the
+ * `slot` column itself — `slot` is a tstzrange maintained by a trigger, so
+ * every staff booking failed with `22P02 malformed range literal`. Anything
+ * that writes an appointment goes through here or `createBooking`, and neither
+ * touches `slot`.
+ *
+ * No deposit is taken: when the studio books someone in, payment is handled in
+ * person rather than by emailing them a Stripe link.
+ */
+export async function createStaffBooking(req: StaffBookingRequest): Promise<BookingOutcome> {
+  const supabase = createAdminClient()
+  const now = new Date()
+
+  const requested = new Date(req.startsAt)
+  if (Number.isNaN(requested.getTime())) return failure('invalid_request', 400)
+  if (req.addonIds.length > MAX_ADDONS) return failure('invalid_request', 400)
+
+  const { data: client } = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('id', req.clientId)
+    .eq('role', 'client')
+    .maybeSingle()
+
+  if (!client) return failure('invalid_request', 404)
+
+  // Same server-side pricing as a public booking: the caller names the service,
+  // never what it costs.
+  const outcome = await priceService(req.providerId, req.serviceId, req.addonIds)
+  if (!outcome.ok) {
+    return failure(outcome.error, outcome.error === 'unknown_service' ? 404 : 409)
+  }
+  const { service, addons, baseDuration, basePrice, durationMinutes, bufferMinutes } =
+    outcome.priced
+
+  const { data: provider } = await supabase
+    .from('profiles')
+    .select('timezone')
+    .eq('id', req.providerId)
+    .maybeSingle()
+
+  if (!provider) return failure('unknown_provider', 404)
+
+  if (!req.overrideAvailability) {
+    const dateKey = dateKeyInTimeZone(requested, provider.timezone)
+    const availability = await loadAvailability({
+      providerId: req.providerId,
+      durationMinutes,
+      bufferMinutes,
+      fromDateKey: dateKey,
+      days: 1,
+      now,
+    })
+    if (!availability) return failure('provider_not_bookable', 409)
+
+    const [day] = generateSlots(availability, dateKey, 1)
+    const offered = day?.slots.some((s) => s.getTime() === requested.getTime()) ?? false
+    if (!offered) return failure('slot_unavailable', 409)
+  }
+
+  const endsAt = new Date(requested.getTime() + durationMinutes * MINUTE_MS)
+
+  // `slot` is deliberately absent — the appointments_set_slot trigger owns it.
+  const { data: appointment, error: insertError } = await supabase
+    .from('appointments')
+    .insert({
+      provider_id: req.providerId,
+      client_id: req.clientId,
+      starts_at: requested.toISOString(),
+      ends_at: endsAt.toISOString(),
+      buffer_minutes: bufferMinutes,
+      status: 'confirmed',
+      source: 'staff',
+      deposit_cents: 0,
+      deposit_status: 'none',
+      client_notes: req.notes,
+      created_by: req.createdBy,
+    })
+    .select('id, starts_at, ends_at, status, deposit_cents')
+    .single()
+
+  if (insertError) {
+    // The exclusion constraint is still the thing that makes this safe, even
+    // when availability was overridden.
+    if (insertError.code === '23P01') return failure('slot_taken', 409)
+    console.error('staff booking insert failed', insertError)
+    return failure('booking_failed', 500)
+  }
+
+  const lines = [
+    {
+      appointment_id: appointment.id,
+      service_id: service.id,
+      name_snapshot: service.name,
+      price_cents: basePrice,
+      duration_minutes: baseDuration,
+      sort_order: 0,
+    },
+    ...addons.map((a, i) => ({
+      appointment_id: appointment.id,
+      addon_id: a.id,
+      name_snapshot: a.name,
+      price_cents: a.price_cents,
+      duration_minutes: a.duration_minutes,
+      sort_order: i + 1,
+    })),
+  ]
+
+  const { error: lineError } = await supabase.from('appointment_services').insert(lines)
+  if (lineError) {
+    await supabase.from('appointments').delete().eq('id', appointment.id)
+    console.error('staff booking line items failed', lineError)
+    return failure('booking_failed', 500)
+  }
+
+  // No notification is written here: the appointment_notify trigger already
+  // tells the client and the provider. Doing it again sent two.
+  return {
+    ok: true,
+    booking: {
+      id: appointment.id,
+      startsAt: appointment.starts_at,
+      endsAt: appointment.ends_at,
+      status: appointment.status,
+      depositCents: 0,
+      totalCents: outcome.priced.totalCents,
+      timezone: provider.timezone,
+    },
+  }
 }

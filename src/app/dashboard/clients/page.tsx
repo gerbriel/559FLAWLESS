@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { Input } from '@/components/ui/field'
 import { Badge } from '@/components/ui/badge'
+import { NewClientForm } from '@/components/shared/NewClientForm'
 import { formatMoney, initials } from '@/lib/utils'
 import { AlertTriangle, CheckCircle2, ShoppingCart } from 'lucide-react'
 
@@ -99,11 +100,14 @@ export default async function ClientsPage({ searchParams }: Props) {
 
   return (
     <div>
-      <div className="flex flex-wrap items-baseline justify-between gap-4">
-        <h1 className="display text-3xl">Clients</h1>
-        <span className="text-sm text-[var(--color-muted)]">
-          {clients?.length ?? 0} shown
-        </span>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex flex-wrap items-baseline gap-4">
+          <h1 className="display text-3xl">Clients</h1>
+          <span className="text-sm text-[var(--color-muted)]">
+            {clients?.length ?? 0} shown
+          </span>
+        </div>
+        <NewClientForm />
       </div>
 
       <form className="mt-8 max-w-md">

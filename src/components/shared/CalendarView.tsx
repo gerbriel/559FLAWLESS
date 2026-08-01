@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { ChevronLeft, ChevronRight, Calendar, Filter } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Filter } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { formatMoney } from '@/lib/utils'

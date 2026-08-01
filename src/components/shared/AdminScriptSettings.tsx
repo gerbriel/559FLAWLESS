@@ -7,7 +7,6 @@ import { useRouter } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input, Textarea, Field } from '@/components/ui/field'
-import { Badge } from '@/components/ui/badge'
 import { createClient } from '@/lib/supabase/client'
 import { AlertTriangle } from 'lucide-react'
 
