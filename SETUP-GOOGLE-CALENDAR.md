@@ -113,3 +113,38 @@ sync reconciles rather than a client seeing an error for a slot they took.
 **If access is revoked**, Google returns `invalid_grant`. That's recorded on the
 connection and shown on the schedule page as *Access revoked* with a Reconnect
 button, rather than retrying a dead token forever.
+
+---
+
+## The other scheduled jobs (migration 044)
+
+Calendar sync is the only job that has to reach outside the database, so it is
+the only one on a Vercel cron. Everything else — reminders, waitlist offers,
+clock-in nudges, licence warnings, recurring expenses — runs on **pg_cron**,
+inside Supabase, on every plan including the free one.
+
+**Turn it on once:** Supabase Dashboard → Database → Extensions → search
+`pg_cron` → enable. Then run migration `044_scheduled_jobs.sql`.
+
+Until you do, migration 044 applies but schedules nothing and says so, and
+Settings shows "Not scheduled yet". Those features still work — they just only
+happen when someone presses the button on the relevant page.
+
+| Job | Runs |
+|---|---|
+| Notifications and rebooking nudges | every 15 minutes |
+| Waitlist offers | every 10 minutes |
+| Clock in/out reminders | every 15 minutes, 5am–9pm Pacific |
+| Licence expiry warnings | daily, ~8am Pacific |
+| Recurring expenses | daily, small hours |
+
+Times inside pg_cron are UTC, so a job pinned to a wall-clock hour drifts by one
+hour across daylight saving. Each schedule above is either frequent enough that
+it does not matter, or placed far enough from a boundary that an hour changes
+nothing.
+
+Every job is idempotent — running one twice sends nothing twice — so the
+frequent schedules cost nothing when there is no work to do.
+
+Check they are alive under **Settings → Background jobs**, which shows each
+job's schedule and when it last ran.

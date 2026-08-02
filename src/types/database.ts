@@ -2073,6 +2073,20 @@ export type Database = {
       }
       booking_review_label: { Args: { p_reason: string | null }; Returns: string }
 
+      // ── Scheduled jobs, added in 044 ────────────────────────
+      /** What pg_cron is running, and how each job last finished. Empty when
+       *  pg_cron is not enabled, which the UI shows as "not set up". */
+      scheduled_job_status: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          jobname: string
+          schedule: string
+          active: boolean
+          last_run: string | null
+          last_status: string | null
+        }[]
+      }
+
       // ── Barcodes, added in 040 ──────────────────────────────
       /** Resolve a scanned GTIN to a product id, zero-padding-insensitive. */
       product_id_for_barcode: { Args: { p_code: string }; Returns: number | null }

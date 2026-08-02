@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { BookingSettingsForm } from '@/components/shared/BookingSettingsForm'
 import { SalesTaxForm } from '@/components/shared/SalesTaxForm'
+import { ScheduledJobs } from '@/components/shared/ScheduledJobs'
 import {
   BusinessHoursForm,
   type BusinessHourRow,
@@ -207,6 +208,8 @@ export default async function SettingsPage() {
           </ul>
         </section>
       )}
+
+      {userIsAdmin && <ScheduledJobs />}
 
       <section className="mt-14">
         <h2 className="display text-2xl">Upcoming closures</h2>
