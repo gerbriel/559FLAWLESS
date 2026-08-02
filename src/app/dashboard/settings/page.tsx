@@ -6,6 +6,10 @@ import { BookingSettingsForm } from '@/components/shared/BookingSettingsForm'
 import { SalesTaxForm } from '@/components/shared/SalesTaxForm'
 import { ScheduledJobs } from '@/components/shared/ScheduledJobs'
 import {
+  StaffVisibility,
+  type StaffVisibilityRow,
+} from '@/components/shared/StaffVisibility'
+import {
   BusinessHoursForm,
   type BusinessHourRow,
 } from '@/components/shared/BusinessHoursForm'
@@ -23,6 +27,7 @@ export default async function SettingsPage() {
     { data: closures },
     { data: taxSetting },
     { data: businessHours },
+    { data: publicProfiles },
   ] = await Promise.all([
       supabase.auth.getUser(),
       supabase.from('booking_settings').select('*').eq('id', 1).maybeSingle(),
@@ -46,6 +51,7 @@ export default async function SettingsPage() {
         .from('business_hours')
         .select('day_of_week, opens_at, closes_at, is_closed')
         .order('day_of_week'),
+      supabase.from('staff_profiles').select('profile_id, is_public'),
     ])
 
   // Fresno County's combined rate is the fallback when nothing has been set.
@@ -60,6 +66,15 @@ export default async function SettingsPage() {
     .maybeSingle()
 
   const userIsAdmin = profile ? isAdmin(profile.role) : false
+
+  // Bookable and listed are different questions — see StaffVisibility.
+  const listed = new Map((publicProfiles ?? []).map((r) => [r.profile_id, r.is_public]))
+  const visibilityRows: StaffVisibilityRow[] = (staff ?? []).map((s) => ({
+    id: s.id,
+    name: `${s.first_name ?? ''} ${s.last_name ?? ''}`.trim() || (s.email ?? 'Team member'),
+    bookable: s.accepts_online_booking,
+    listed: listed.get(s.id) ?? false,
+  }))
 
   return (
     <div className="max-w-3xl">
@@ -121,11 +136,10 @@ export default async function SettingsPage() {
               </div>
               <div className="flex flex-wrap gap-2">
                 <Badge tone="neutral">{ROLE_LABELS[s.role as UserRole]}</Badge>
-                {s.role === 'provider' && (
-                  <Badge tone={s.accepts_online_booking ? 'success' : 'warning'}>
-                    {s.accepts_online_booking ? 'Bookable' : 'Not bookable'}
-                  </Badge>
-                )}
+                {/* Not gated on role: the owner is an admin who also does the
+                    treatments, and gating this on `provider` hid her status
+                    entirely. Bookable is accepts_online_booking, per 020. */}
+                {s.accepts_online_booking && <Badge tone="success">Bookable</Badge>}
                 {s.suspended_at && <Badge tone="danger">Suspended</Badge>}
               </div>
             </li>
@@ -208,6 +222,22 @@ export default async function SettingsPage() {
           </ul>
         </section>
       )}
+
+      <section className="mt-14">
+        <h2 className="display text-2xl">Who the public sees</h2>
+        <p className="mt-2 max-w-prose text-sm text-[var(--color-muted)]">
+          Two separate things, and both start off. Being an admin, a manager or a
+          provider puts nobody on the website — appearing there is always a
+          decision someone makes here.
+        </p>
+        <div className="mt-6">
+          <StaffVisibility
+            rows={visibilityRows}
+            viewerId={user?.id ?? ''}
+            viewerIsAdmin={userIsAdmin}
+          />
+        </div>
+      </section>
 
       {userIsAdmin && <ScheduledJobs />}
 
