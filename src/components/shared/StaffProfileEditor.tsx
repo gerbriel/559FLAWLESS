@@ -34,16 +34,23 @@ const fromList = (list: string[]) => list.join('\n')
  *
  * A manager can open anyone's; everyone else gets exactly their own, which is
  * also what the database will allow.
+ *
+ * `isAdmin` is the viewer's role, not the subject's, and it gates only one
+ * thing: whether the "Works at" note offers a link to Locations. That page
+ * turns away anyone who is not an admin, so for everyone else the same fact is
+ * stated in plain text rather than dressed up as a door.
  */
 export function StaffProfileEditor({
   profile,
   isSelf,
   isManager,
+  isAdmin,
   locations = [],
 }: {
   profile: StaffProfile
   isSelf: boolean
   isManager: boolean
+  isAdmin: boolean
   locations?: TeamLocation[]
 }) {
   const router = useRouter()
@@ -479,14 +486,21 @@ export function StaffProfileEditor({
             ))}
           </div>
           <p className="mt-3 text-xs text-[var(--color-muted)]">
-            Set under{' '}
-            <Link
-              href="/dashboard/settings/locations"
-              className="underline underline-offset-4"
-            >
-              Locations
-            </Link>
-            . Shown on the public profile when the studio runs more than one.
+            {isAdmin ? (
+              <>
+                Set under{' '}
+                <Link
+                  href="/dashboard/settings/locations"
+                  className="underline underline-offset-4"
+                >
+                  Locations
+                </Link>
+                .
+              </>
+            ) : (
+              <>Set under Locations, which an admin keeps.</>
+            )}{' '}
+            Shown on the public profile when the studio runs more than one.
           </p>
         </div>
       )}

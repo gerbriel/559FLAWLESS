@@ -1,9 +1,12 @@
 import Link from 'next/link'
+import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { Input } from '@/components/ui/field'
 import { Badge } from '@/components/ui/badge'
 import { NewClientForm } from '@/components/shared/NewClientForm'
+import { SectionTabs } from '@/components/layout/SectionTabs'
 import { formatMoney, initials } from '@/lib/utils'
+import { isFrontDesk, type UserRole } from '@/types/database'
 import { AlertTriangle, CheckCircle2, ShoppingCart } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
@@ -37,16 +40,31 @@ export default async function ClientsPage({ searchParams }: Props) {
     )
   }
 
-  const { data: clients } = await query
+  // The roster itself needs nothing from the session, so the session read rides
+  // alongside it rather than costing a round trip of its own.
+  const [
+    {
+      data: { user },
+    },
+    { data: clients },
+  ] = await Promise.all([supabase.auth.getUser(), query])
+
+  if (!user) redirect('/login?next=/dashboard/clients')
 
   // Fetch form statuses and analytics for all clients
   const clientIds = clients?.map(c => c.id) ?? []
-  
+
   const [
+    { data: viewer },
     { data: consents },
     { data: intakes },
     { data: analytics },
   ] = await Promise.all([
+    // A provider reaches this page — the sidebar offers Clients to her, and RLS
+    // gives her the people she treats. What she cannot do is anything that goes
+    // through front-desk-only doors, so the role decides which of those to
+    // offer. Least privilege on a missing profile, as everywhere else.
+    supabase.from('profiles').select('role').eq('id', user.id).maybeSingle(),
     supabase
       .from('consent_signatures')
       .select('client_id, expires_at')
@@ -60,6 +78,9 @@ export default async function ClientsPage({ searchParams }: Props) {
       .select('user_id, event')
       .in('user_id', clientIds),
   ])
+
+  const role = (viewer?.role ?? 'provider') as UserRole
+  const booksForOthers = isFrontDesk(role)
 
   // Build status maps
   const now = new Date()
@@ -107,26 +128,33 @@ export default async function ClientsPage({ searchParams }: Props) {
             {clients?.length ?? 0} shown
           </span>
         </div>
-        <NewClientForm />
+        {/* Creating an account for a walk-in goes through
+            /api/admin/clients/create, which answers 403 to anyone below front
+            desk. Offering the form to a provider was a form that could only
+            fail on submit. */}
+        {booksForOthers && <NewClientForm />}
       </div>
 
       {/* View switcher — clients and newsletter signups are the same audience
           seen two ways, so they live side by side rather than in separate
-          sections of the dashboard. */}
-      <nav className="mt-8 flex flex-wrap gap-x-7 gap-y-2" aria-label="View">
-        <Link
-          href="/dashboard/clients"
-          className="label-caps border-b border-[var(--color-foreground)] pb-1"
-        >
-          Clients
-        </Link>
-        <Link
-          href="/dashboard/clients/newsletter"
-          className="label-caps pb-1 text-[var(--color-muted)]"
-        >
-          Newsletter
-        </Link>
-      </nav>
+          sections of the dashboard.
+
+          Newsletter is front-desk work: /dashboard/clients/newsletter redirects
+          a provider to /dashboard. With the tab hidden, one tab is left and
+          SectionTabs renders nothing — for a provider, Clients is just the
+          list. */}
+      <SectionTabs
+        label="View"
+        root="/dashboard/clients"
+        tabs={[
+          { href: '/dashboard/clients', label: 'Clients' },
+          {
+            href: '/dashboard/clients/newsletter',
+            label: 'Newsletter',
+            visible: booksForOthers,
+          },
+        ]}
+      />
 
       <form className="mt-6 max-w-md">
         <Input

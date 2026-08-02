@@ -7,7 +7,6 @@ import {
   CalendarDays,
   Users,
   MessageSquare,
-  BarChart3,
   FileBarChart,
   Package,
   Scissors,
@@ -15,16 +14,13 @@ import {
   ShoppingBag,
   Megaphone,
   Settings,
-  Clock,
   ClipboardList,
-  Timer,
-  MapPin,
   Receipt,
   ClipboardCheck,
   FileSignature,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { isFrontDesk, isManager, isAdmin, type UserRole } from '@/types/database'
+import { isFrontDesk, isManager, isStaff, type UserRole } from '@/types/database'
 
 interface NavItem {
   href: string
@@ -37,6 +33,8 @@ interface NavItem {
 
 const ITEMS: NavItem[] = [
   { href: '/dashboard', label: 'Today', icon: LayoutDashboard, visible: () => true },
+  // One entry, three tabs: the diary, your own hours, and your timesheet. They
+  // are one job — where your time goes — and were three sidebar rows saying so.
   { href: '/dashboard/calendar', label: 'Calendar', icon: CalendarDays, visible: () => true },
   // Bookings the approval rules held back. A provider sees their own; front
   // desk and up see the studio's — RLS on `appointments` already draws that
@@ -47,7 +45,6 @@ const ITEMS: NavItem[] = [
     icon: ClipboardCheck,
     visible: () => true,
   },
-  { href: '/dashboard/schedule', label: 'My hours', icon: Clock, visible: () => true },
   {
     href: '/dashboard/clients',
     label: 'Clients',
@@ -66,13 +63,6 @@ const ITEMS: NavItem[] = [
     label: 'Waitlist',
     icon: ClipboardList,
     visible: (r) => isFrontDesk(r),
-  },
-  {
-    href: '/dashboard/timesheets',
-    label: 'Timesheets',
-    icon: Timer,
-    // Everyone sees their own; managers see everyone's.
-    visible: () => true,
   },
   {
     href: '/dashboard/sell',
@@ -108,19 +98,16 @@ const ITEMS: NavItem[] = [
     visible: (r) => isFrontDesk(r),
   },
   {
-    href: '/dashboard/analytics',
-    label: 'Analytics',
-    icon: BarChart3,
-    visible: (r) => isManager(r),
-  },
-  {
     href: '/dashboard/reports',
     label: 'Reports',
     icon: FileBarChart,
-    // Sales, tax, commissions and profit. Every report here either shows what
-    // the business earned or what it pays people, which is a manager's business
-    // and not the front desk's.
-    visible: (r) => isManager(r),
+    // Most reports here show what the business earned or what it pays people,
+    // and those are manager-and-above. But the Appointments report is
+    // deliberately minRole 'front_desk' — it carries no money at all and the
+    // front desk runs the book. The page filters its own cards by each report's
+    // minRole and redirects anyone left with none, so opening the door this far
+    // shows the front desk exactly the one report that is theirs.
+    visible: (r) => isFrontDesk(r),
   },
   {
     href: '/dashboard/expenses',
@@ -140,18 +127,12 @@ const ITEMS: NavItem[] = [
     href: '/dashboard/settings',
     label: 'Settings',
     icon: Settings,
-    // Managers need booking policy, hours and tax. The genuinely admin-only
-    // sections inside the page hide themselves.
-    visible: (r) => isManager(r),
-  },
-  {
-    href: '/dashboard/settings/locations',
-    label: 'Locations',
-    icon: MapPin,
-    // The first open location is what every appointment, sale and stock count
-    // defaults to, and its timezone is what every opening hour is read in.
-    // That is pricing-grade authority, so it sits with the admin.
-    visible: (r) => isAdmin(r),
+    // All staff, not just managers. Settings is now the only door to Locations
+    // (its own sidebar row is gone) and to your own team profile, which is
+    // deliberately isStaff so a provider can edit her bio and see her licence
+    // expiry. Every row inside is gated individually, so a provider opening
+    // this sees a short page rather than a wall of forms that reject her.
+    visible: (r) => isStaff(r),
   },
 ]
 

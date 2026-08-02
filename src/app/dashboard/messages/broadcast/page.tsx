@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { BroadcastMessageForm } from '@/components/shared/BroadcastMessageForm'
@@ -53,9 +54,16 @@ export default async function BroadcastMessagesPage() {
 
   return (
     <div>
-      <h1 className="display text-3xl">Broadcast Messages</h1>
-      <p className="mt-2 text-sm text-[var(--color-muted)]">
-        Send individual message threads to multiple clients at once
+      {/* The way back, matching /dashboard/messages/[id]. This page sits under
+          Messages and has no sidebar entry of its own. */}
+      <Link href="/dashboard/messages" className="label-caps text-[var(--color-muted)]">
+        ← Messages
+      </Link>
+
+      <h1 className="display mt-8 text-3xl">Message several clients</h1>
+      <p className="mt-2 max-w-prose text-sm text-[var(--color-muted)]">
+        One thread each, not a group conversation — everyone gets their own, and replies
+        come back to Messages as normal.
       </p>
 
       <div className="mt-8 max-w-4xl">

@@ -10,7 +10,7 @@ import {
   requestNow,
   timeZoneAbbreviation,
 } from '@/lib/time'
-import { isFrontDesk, type UserRole } from '@/types/database'
+import { isFrontDesk, isManager, type UserRole } from '@/types/database'
 import { reviewReasonLabel } from '@/types/scheduling'
 
 export const dynamic = 'force-dynamic'
@@ -33,6 +33,13 @@ export default async function PendingBookingsPage() {
   // the page says it is showing.
   const role = (profile?.role ?? 'provider') as UserRole
   const wholeStudio = isFrontDesk(role)
+  // Everyone gets this page — the sidebar entry is ungated, because a provider
+  // has her own queue to clear. The rules that put bookings here are a
+  // different question: /dashboard/settings/scheduling bounces anyone below
+  // manager back to /dashboard/settings, and the Booking policy form on the
+  // Settings index is manager-only too. So the queue is for everyone and the
+  // links out of it are not.
+  const setsThePolicy = isManager(role)
 
   const { data: settings } = await supabase
     .from('booking_settings')
@@ -63,9 +70,14 @@ export default async function PendingBookingsPage() {
     <div className="max-w-4xl">
       <div className="flex flex-wrap items-baseline justify-between gap-4">
         <h1 className="display text-3xl">Waiting on you</h1>
-        <Link href="/dashboard/settings/scheduling" className="label-caps text-[var(--color-muted)] hover:text-[var(--color-accent)]">
-          Approval rules
-        </Link>
+        {setsThePolicy && (
+          <Link
+            href="/dashboard/settings/scheduling"
+            className="label-caps text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+          >
+            Approval rules
+          </Link>
+        )}
       </div>
 
       <p className="mt-3 max-w-prose text-sm text-[var(--color-muted)]">
@@ -78,10 +90,16 @@ export default async function PendingBookingsPage() {
           <>
             {' '}
             Every online booking is currently being held —{' '}
-            <Link href="/dashboard/settings" className="underline">
-              change that under Booking policy
-            </Link>
-            .
+            {setsThePolicy ? (
+              <>
+                <Link href="/dashboard/settings" className="underline">
+                  change that under Booking policy
+                </Link>
+                .
+              </>
+            ) : (
+              <>a manager can change that under Settings.</>
+            )}
           </>
         )}
       </p>

@@ -12,7 +12,13 @@ import { PhotoReminderCard } from '@/components/shared/PhotoReminderCard'
 import { PhotoReminderPrompt } from '@/components/shared/PhotoReminderPrompt'
 import { formatMoney } from '@/lib/utils'
 import { requestNow } from '@/lib/time'
-import { isManager, type IntakeQuestion, type Json, type UserRole } from '@/types/database'
+import {
+  isFrontDesk,
+  isManager,
+  type IntakeQuestion,
+  type Json,
+  type UserRole,
+} from '@/types/database'
 import {
   averageTicketCents,
   noShowRatePct,
@@ -302,20 +308,28 @@ export default async function ClientDetailPage({ params }: Props) {
             />
           </div>
 
-          <div className="mt-5 flex gap-3">
-            <ButtonLink href={`/dashboard/messages?client=${id}`} variant="outline" size="sm">
-              <MessageSquare className="h-4 w-4" />
-              Message
-            </ButtonLink>
-            <ButtonLink
-              href={`/dashboard/appointments/book-for-client?client=${id}`}
-              variant="primary"
-              size="sm"
-            >
-              <Calendar className="h-4 w-4" />
-              Book Appointment
-            </ButtonLink>
-          </div>
+          {/* Both doors are front-desk-only, and a provider reaches this page:
+              /dashboard/appointments/book-for-client redirects her to
+              /dashboard, and `message_threads` is `is_front_desk()` for select
+              (006), so Messages would have rendered an empty list. The record
+              below is hers to read and write — booking for someone else and
+              handling correspondence are not. */}
+          {isFrontDesk(role) && (
+            <div className="mt-5 flex gap-3">
+              <ButtonLink href={`/dashboard/messages?client=${id}`} variant="outline" size="sm">
+                <MessageSquare className="h-4 w-4" />
+                Message
+              </ButtonLink>
+              <ButtonLink
+                href={`/dashboard/appointments/book-for-client?client=${id}`}
+                variant="primary"
+                size="sm"
+              >
+                <Calendar className="h-4 w-4" />
+                Book Appointment
+              </ButtonLink>
+            </div>
+          )}
         </div>
 
         <dl className="grid grid-cols-3 gap-x-8 gap-y-5 text-sm">

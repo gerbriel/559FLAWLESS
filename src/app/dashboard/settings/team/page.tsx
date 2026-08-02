@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { requestNow } from '@/lib/time'
-import { isManager, isStaff, ROLE_LABELS, type UserRole } from '@/types/database'
+import { isAdmin, isManager, isStaff, ROLE_LABELS, type UserRole } from '@/types/database'
 import { Badge } from '@/components/ui/badge'
 import { StaffProfileEditor } from '@/components/shared/StaffProfileEditor'
 import { StaffProfileInternal } from '@/components/shared/StaffProfileInternal'
@@ -45,6 +45,9 @@ export default async function TeamSettingsPage() {
 
   const role = me.role as UserRole
   const manager = isManager(role)
+  // The viewer's own role. Only Locations is admin-only, and only an admin is
+  // offered the link to it — /dashboard/settings/locations bounces everyone else.
+  const admin = isAdmin(role)
 
   // RLS decides what comes back here, not the query. A provider gets exactly
   // her own row from each of these; a manager gets everyone's. The `.eq()` on
@@ -144,6 +147,7 @@ export default async function TeamSettingsPage() {
               profile={mine}
               isSelf
               isManager={manager}
+              isAdmin={admin}
               locations={locations.get(mine.profile_id) ?? []}
             />
           ) : (
@@ -189,12 +193,25 @@ export default async function TeamSettingsPage() {
           </p>
 
           {others.length === 0 ? (
+            // Inviting is an admin's job — /dashboard/settings/users redirects
+            // everyone else to /dashboard — and this block is reached by any
+            // manager. So a manager is told who to ask, not sent to a door that
+            // shuts in her face.
             <p className="mt-8 text-sm text-[var(--color-muted)]">
-              Nobody else on the books. Invite someone from{' '}
-              <Link href="/dashboard/settings/users" className="underline underline-offset-4">
-                User management
-              </Link>
-              .
+              {admin ? (
+                <>
+                  Nobody else on the books. Invite someone from{' '}
+                  <Link
+                    href="/dashboard/settings/users"
+                    className="underline underline-offset-4"
+                  >
+                    User management
+                  </Link>
+                  .
+                </>
+              ) : (
+                <>Nobody else on the books. An admin invites people to the studio.</>
+              )}
             </p>
           ) : (
             <div className="mt-8 space-y-16">
@@ -234,6 +251,7 @@ export default async function TeamSettingsPage() {
                           profile={member}
                           isSelf={false}
                           isManager
+                          isAdmin={admin}
                           locations={locations.get(member.profile_id) ?? []}
                         />
                       </div>

@@ -16,7 +16,7 @@ export const dynamic = 'force-dynamic'
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = request.nextUrl
   const done = (status: string) =>
-    NextResponse.redirect(`${origin}/dashboard/schedule?calendar=${status}`)
+    NextResponse.redirect(`${origin}/dashboard/calendar/hours?calendar=${status}`)
 
   if (searchParams.get('error')) return done('denied')
 
@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  if (!user) return NextResponse.redirect(`${origin}/login?next=/dashboard/schedule`)
+  if (!user) return NextResponse.redirect(`${origin}/login?next=/dashboard/calendar/hours`)
 
   // `state` came back from Google, so it is attacker-influencable. It must match
   // the signed-in user or this is a grant being planted on someone else's account.

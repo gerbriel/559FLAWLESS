@@ -4,6 +4,7 @@ import { Mail, UserCheck, Download } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { Input } from '@/components/ui/field'
 import { Badge } from '@/components/ui/badge'
+import { SectionTabs } from '@/components/layout/SectionTabs'
 import { isFrontDesk, type UserRole } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
@@ -93,18 +94,17 @@ export default async function NewsletterPage({ searchParams }: Props) {
         </a>
       </div>
 
-      {/* View switcher — the same list of people, two ways in. */}
-      <nav className="mt-8 flex flex-wrap gap-x-7 gap-y-2" aria-label="View">
-        <Link href="/dashboard/clients" className="label-caps pb-1 text-[var(--color-muted)]">
-          Clients
-        </Link>
-        <Link
-          href="/dashboard/clients/newsletter"
-          className="label-caps border-b border-[var(--color-foreground)] pb-1"
-        >
-          Newsletter
-        </Link>
-      </nav>
+      {/* View switcher — the same list of people, two ways in. Both tabs are
+          unconditional here because the gate above already means the viewer is
+          front desk or above, which is exactly who may open either. */}
+      <SectionTabs
+        label="View"
+        root="/dashboard/clients"
+        tabs={[
+          { href: '/dashboard/clients', label: 'Clients' },
+          { href: '/dashboard/clients/newsletter', label: 'Newsletter' },
+        ]}
+      />
 
       <nav className="mt-6 flex flex-wrap gap-x-6 gap-y-2" aria-label="Filter">
         {FILTERS.map((f) => (

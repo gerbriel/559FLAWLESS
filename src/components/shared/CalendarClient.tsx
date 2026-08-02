@@ -72,6 +72,9 @@ export function CalendarClient({
     const params = new URLSearchParams(searchParams)
     params.set('from', date)
     params.set('view', view)
+    // The diary is the root of the Calendar / My hours / Timesheets section, so
+    // this pushes to the section root and stays on the tab it is rendered from.
+    // `from` and `view` are read on the server and decide the range fetched.
     router.push(`/dashboard/calendar?${params.toString()}`, { scroll: false })
   }
 

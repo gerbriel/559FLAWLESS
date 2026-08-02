@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
   const { origin } = request.nextUrl
 
   if (!calendarSyncConfigured()) {
-    return NextResponse.redirect(`${origin}/dashboard/schedule?calendar=not_configured`)
+    return NextResponse.redirect(`${origin}/dashboard/calendar/hours?calendar=not_configured`)
   }
 
   const supabase = await createClient()
@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  if (!user) return NextResponse.redirect(`${origin}/login?next=/dashboard/schedule`)
+  if (!user) return NextResponse.redirect(`${origin}/login?next=/dashboard/calendar/hours`)
 
   const { data: profile } = await supabase
     .from('profiles')

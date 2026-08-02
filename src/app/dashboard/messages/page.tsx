@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
-import type { ThreadStatus } from '@/types/database'
+import { isFrontDesk, type ThreadStatus, type UserRole } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
 
@@ -32,11 +32,39 @@ export default async function DashboardMessagesPage({ searchParams }: Props) {
 
   if (active !== 'all') query = query.eq('status', active as ThreadStatus)
 
-  const { data: threads } = await query
+  // The thread list needs nothing from the session — RLS scopes it — so the
+  // session read rides alongside rather than costing its own round trip.
+  const [
+    {
+      data: { user },
+    },
+    { data: threads },
+  ] = await Promise.all([supabase.auth.getUser(), query])
+
+  const { data: viewer } = user
+    ? await supabase.from('profiles').select('role').eq('id', user.id).maybeSingle()
+    : { data: null }
+
+  // /dashboard/messages/broadcast redirects anyone below front desk to
+  // /dashboard, so the one way into it is offered on the same terms.
+  const canBroadcast = isFrontDesk((viewer?.role ?? 'provider') as UserRole)
 
   return (
     <div>
-      <h1 className="display text-3xl">Messages</h1>
+      <div className="flex flex-wrap items-baseline justify-between gap-4">
+        <h1 className="display text-3xl">Messages</h1>
+        {/* The only route to the broadcast composer. It had no inbound link
+            anywhere, so a page the front desk is entitled to use could be
+            reached only by typing the URL. */}
+        {canBroadcast && (
+          <Link
+            href="/dashboard/messages/broadcast"
+            className="label-caps text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+          >
+            Message several clients
+          </Link>
+        )}
+      </div>
 
       <nav className="mt-8 flex flex-wrap gap-x-7 gap-y-2" aria-label="Filter">
         {FILTERS.map((f) => (

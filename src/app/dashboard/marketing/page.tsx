@@ -1,12 +1,32 @@
 import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
+import { redirect } from 'next/navigation'
 import { TestimonialModeration } from '@/components/shared/TestimonialModeration'
 import { AdminAnnouncementSettings } from '@/components/shared/AdminAnnouncementSettings'
+import { isManager } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
 
 export default async function MarketingPage() {
   const supabase = await createClient()
+
+  // Same check as the section layout, repeated here on purpose: a layout does
+  // not re-render on a client-side transition, so the tab bar can land someone
+  // on this page without the layout's gate running again. Broadcast and
+  // Newsletter already self-gate; this is the last page in the section that did
+  // not.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) redirect('/login?next=/dashboard/marketing')
+
+  const { data: viewer } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .maybeSingle()
+
+  if (!viewer || !isManager(viewer.role)) redirect('/dashboard')
 
   const [
     { data: pending },
@@ -45,7 +65,10 @@ export default async function MarketingPage() {
       <h1 className="display text-3xl">Marketing</h1>
 
       <div className="mt-8 grid gap-px border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-3">
-        <Link href="/dashboard/marketing/broadcast" className="block hover:opacity-80">
+        {/* A count of people opens the people, not the composer. Both this tile
+            and that list read `newsletter_subscribers`, so the number a manager
+            clicks is the number they land on. */}
+        <Link href="/dashboard/clients/newsletter" className="block hover:opacity-80">
           <Stat label="Newsletter list" value={String(subscribers ?? 0)} />
         </Link>
         <Stat label="Reviews awaiting" value={String(pending?.length ?? 0)} />

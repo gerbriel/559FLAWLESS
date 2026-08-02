@@ -51,29 +51,18 @@ export default async function BroadcastPage() {
 
   return (
     <div>
-      <h1 className="display text-3xl">Newsletter</h1>
+      <h1 className="display text-3xl">Send newsletter</h1>
       <p className="mt-2 max-w-prose text-sm text-[var(--color-muted)]">
         Write once and it lands in the inbox of everyone on the list who has an account
-        here. They can reply, and it comes back as an ordinary conversation.
-      </p>
-
-      <nav className="mt-8 flex flex-wrap gap-x-7 gap-y-2" aria-label="View">
-        <Link href="/dashboard/marketing" className="label-caps pb-1 text-[var(--color-muted)]">
-          Marketing
-        </Link>
-        <Link
-          href="/dashboard/marketing/broadcast"
-          className="label-caps border-b border-[var(--color-foreground)] pb-1"
-        >
-          Newsletter
-        </Link>
+        here. They can reply, and it comes back as an ordinary conversation.{' '}
         <Link
           href="/dashboard/clients/newsletter"
-          className="label-caps pb-1 text-[var(--color-muted)]"
+          className="text-[var(--color-accent)] underline underline-offset-4"
         >
-          Subscribers
-        </Link>
-      </nav>
+          Who is on the list
+        </Link>{' '}
+        sits with Clients, since someone can subscribe long before they ever book.
+      </p>
 
       <div className="mt-8">
         <BroadcastComposer reachableCount={reachable} unreachable={unreachable} />

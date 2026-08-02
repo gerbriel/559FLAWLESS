@@ -205,7 +205,7 @@ The calendar syncs with URL parameters:
 
 - **Appointments Page**: `/dashboard/appointments`
 - **Client Details**: Click appointment → Client name
-- **Provider Schedule**: `/dashboard/schedule`
+- **Provider Schedule**: `/dashboard/calendar/hours` (the "My hours" tab)
 - **Booking Page**: Click empty slot → Add appointment
 
 ## 📝 Feedback

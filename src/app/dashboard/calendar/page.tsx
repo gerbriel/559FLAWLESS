@@ -119,9 +119,18 @@ export default async function CalendarPage({ searchParams }: Props) {
   })) as any
 
   return (
-    <div>
-      <h1 className="display mb-10 text-3xl">Calendar</h1>
-      
+    // No *visible* heading: the section tab bar directly above already says
+    // "Calendar", and unlike My hours / Timesheets there is no badge or scope
+    // label to hang one off. The heading still exists for the document outline —
+    // CalendarClient renders no heading of its own, and the tab bar is a <nav>,
+    // so without this the diary would be the one dashboard page with none.
+    //
+    // The mt-10 collapses with the layout's own wrapper margin rather than
+    // adding to it — the gap is 40px either way, matching the sibling tabs.
+    // Kept only so this page reads the same as its siblings in isolation.
+    <div className="mt-10">
+      <h1 className="sr-only">Calendar</h1>
+
       <CalendarClient
         initialAppointments={formattedAppointments}
         providers={(providers || []) as any}
