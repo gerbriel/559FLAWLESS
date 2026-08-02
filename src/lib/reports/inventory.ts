@@ -463,10 +463,17 @@ export const inventoryReport: ReportModule = {
     const backBarRows = computed.filter((c) => c.consumedH > 0)
     const retailMoved = computed.filter((c) => c.soldH > 0)
 
+    // Margin on the Retail Sales report is only as good as the cost behind it,
+    // and a product that traded this period with no cost on file is where that
+    // breaks. Distinct from stock sitting there uncosted, which is the tile above.
+    const noCostTraded = computed.filter((c) => c.noCost && (c.soldH > 0 || c.consumedH > 0))
+
     const byValueDesc = (a: Computed, b: Computed) =>
       (b.valueCost ?? 0) - (a.valueCost ?? 0) || b.onHandH - a.onHandH || a.sortName.localeCompare(b.sortName)
 
-    const rows = [...stockedRows].sort(byValueDesc).map((c) => c.row)
+    // The main table is the shelf plus everything that moved across it — a
+    // product that sold out in the period belongs here, showing zero.
+    const rows = computed.filter((c) => c.stocked || c.moved).sort(byValueDesc).map((c) => c.row)
 
     const summary: NonNullable<ReportResult['summary']> = [
       { label: 'Stock value at cost', value: formatMoney(totalValueCost) },
@@ -505,10 +512,10 @@ export const inventoryReport: ReportModule = {
         tone: 'warn',
       })
     }
-    if (noCostRows.length > unvaluedAtCost.length) {
+    if (noCostTraded.length > 0) {
       summary.push({
-        label: 'Products with no cost recorded',
-        value: String(noCostRows.length),
+        label: 'Moved with no cost on file',
+        value: `${noCostTraded.length} — margin on these is wrong`,
         tone: 'warn',
       })
     }
@@ -601,7 +608,7 @@ export const inventoryReport: ReportModule = {
       noCostRows.length > 0
         ? `${noCostRows.length} product(s) have no wholesale cost on file (\`cost_cents = 0\`). Their stock value at cost is blank rather than zero, so the "Stock value at cost" tile above is understated by whatever those ${round(fromHundredths(unvaluedUnitsH), 2)} unit(s) are actually worth. Same reasoning as the price: a total that silently counts unknown stock as free looks complete when it is not.`
         : 'Every stocked product has a wholesale cost on file.',
-      'Products with nothing on the shelf and no movement in the period are left out of the main table — there is nothing to report about them. Unpriced ones are still surfaced in their own section, because being unsellable is a problem whether or not there is stock behind it.',
+      'The main table is everything with stock on hand plus everything that moved during the period, so a product that sold out shows with a zero. Products with neither are left out — there is nothing to report about them — except unpriced retail ones, which are still surfaced in their own section, because being unsellable is a problem whether or not there is stock behind it.',
       'Quantities are `numeric(12,2)`, not integers — a back bar counts in half-litres. All quantity arithmetic here is done in hundredths and money is integer cents throughout; nothing is rounded until the value is produced.',
       'Sub-tables reuse the main column set, so "Stock by site" leaves the movement columns blank.',
     ]

@@ -149,7 +149,7 @@ const COLUMNS: ReportColumn[] = [
 export const retailSalesReport: ReportModule = {
   // Must match the registry key exactly — `loadReport` refuses a module that
   // answers at someone else's URL.
-  key: 'retail_sales',
+  key: 'retail-sales',
   title: 'Retail Sales',
   description: 'Units, revenue and margin by product, brand, category and seller — plus the attach rate.',
   // Shows cost and margin, so manager and above.

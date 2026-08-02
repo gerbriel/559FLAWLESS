@@ -473,9 +473,12 @@ export const mostValuableClientsReport: ReportModule = {
       { key: 'flags', label: 'Flags', align: 'left', format: 'text' },
     ]
 
+    // A row carries the key whether or not the column is declared; drop it
+    // when it is not, so a CSV export cannot emit an undeclared column.
     const strip = (r: Record<string, string | number | null>) => {
       if (showRedeemed) return r
-      const { redeemed_cents: _redeemed, ...rest } = r
+      const rest = { ...r }
+      delete rest.redeemed_cents
       return rest
     }
 

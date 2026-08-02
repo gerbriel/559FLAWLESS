@@ -96,18 +96,6 @@ function add(bucket: TaxBucket, entry: LedgerEntry): void {
   }
 }
 
-function merge(into: TaxBucket, from: TaxBucket): void {
-  into.grossCents += from.grossCents
-  into.exemptCents += from.exemptCents
-  into.deliveryCents += from.deliveryCents
-  into.nonTaxableProductCents += from.nonTaxableProductCents
-  into.taxableCents += from.taxableCents
-  into.taxCents += from.taxCents
-  into.residualCents += from.residualCents
-  into.saleCount += from.saleCount
-  into.refundCount += from.refundCount
-}
-
 function row(location: string, period: string, b: TaxBucket) {
   return {
     location,
