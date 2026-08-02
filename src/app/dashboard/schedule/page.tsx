@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { ScheduleEditor } from '@/components/shared/ScheduleEditor'
+import { PauseBookings } from '@/components/shared/PauseBookings'
 import {
   CalendarConnection,
   type CalendarConnectionState,
@@ -100,10 +101,15 @@ export default async function SchedulePage() {
         minus blocks, studio closures, and anything already on your calendar.
       </p>
 
-      {!profile.accepts_online_booking && (
+      {profile.accepts_online_booking ? (
+        // Anyone may take themselves off; only an admin may put someone on.
+        // That asymmetry is enforced by migration 045, not just here.
+        <PauseBookings providerId={user.id} />
+      ) : (
         <p className="mt-6 border-l-2 border-amber-600 bg-amber-50 p-4 text-sm text-[var(--color-muted)] dark:bg-transparent">
-          Your calendar will not appear on the booking page until an admin marks you as
-          accepting online bookings.
+          You are not on the booking page, so clients cannot reserve your time. An admin
+          can put you on it under Settings → Who the public sees. Your hours below are
+          saved either way.
         </p>
       )}
 
