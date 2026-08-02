@@ -10,7 +10,10 @@ import type {
   CalendarBusyRow,
   ClosureRow,
 } from '@/lib/calendar-blocks'
-import { CalendarViewComponent, type CalendarView } from './CalendarView'
+import { type CalendarView } from './CalendarView'
+// Drop-in for CalendarViewComponent with identical props: adds drag-to-move on
+// desktop, and passes month view and touch devices straight through unchanged.
+import { DragScheduleCalendar } from './DragScheduleCalendar'
 import { AppointmentModal } from './AppointmentModal'
 interface Provider {
   id: string
@@ -104,7 +107,7 @@ export function CalendarClient({
 
   return (
     <>
-      <CalendarViewComponent
+      <DragScheduleCalendar
         view={view}
         currentDate={currentDate}
         appointments={initialAppointments}

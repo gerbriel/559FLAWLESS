@@ -352,6 +352,18 @@ export type ProductStock = {
   updated_at: string
 }
 
+/** A saved custom-report definition. The definition is validated against an
+ *  allow-list before it ever reaches a query — see src/lib/reports/custom.ts. */
+export type SavedReport = {
+  id: number
+  name: string
+  definition: Json
+  is_shared: boolean
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
 export type BookingSettings = {
   id: number
   min_lead_minutes: number
@@ -729,6 +741,12 @@ export type OrderItem = {
   id: number
   order_id: number
   product_id: number | null
+  /**
+   * What the unit cost the studio, captured at sale by a trigger (043) — the
+   * cost counterpart to unit_price_cents. Null on rows written before 043;
+   * report code falls back to products.cost_cents and says that it did.
+   */
+  cost_snapshot_cents: number | null
   name_snapshot: string
   sku_snapshot: string | null
   unit_price_cents: number
@@ -1587,6 +1605,7 @@ export type Database = {
 
       // ── Multi-location, added in 032 ────────────────────────
       locations: TableDef<Location>
+      saved_reports: TableDef<SavedReport, [ToProfile<'saved_reports', 'created_by'>]>
       // ── Resources and waitlist, added in 037 ────────────────
       resources: TableDef<
         Resource,

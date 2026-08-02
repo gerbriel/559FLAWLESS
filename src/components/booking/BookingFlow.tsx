@@ -16,6 +16,7 @@ import {
 } from '@/lib/time'
 import { trackEvent } from '@/components/shared/AnalyticsTracker'
 import { FormRequirementChecker } from '@/components/shared/FormRequirementChecker'
+import { WaitlistJoin } from '@/components/booking/WaitlistJoin'
 import { SignedInAs, backfillProfile } from '@/components/shared/SignedInIdentity'
 
 export interface BookableService {
@@ -736,14 +737,21 @@ export function BookingFlow({
               </div>
             )}
 
+            {/* A full week is the moment the waitlist is worth offering — not
+                buried in a contact form the client has to think to use. */}
             {days.length > 0 && days.every((d) => d.slots.length === 0) && !loadingSlots && (
-              <p className="mt-6 text-sm text-[var(--color-muted)]">
-                Nothing open this week. Try a later week, or{' '}
-                <Link href="/contact" className="underline underline-offset-4">
-                  message us
-                </Link>{' '}
-                about the waitlist.
-              </p>
+              <WaitlistJoin
+                className="mt-8"
+                services={services.map((s) => ({ id: s.id, name: s.name }))}
+                providers={eligibleProviders.map((p) => ({
+                  id: p.id,
+                  display_name: p.display_name,
+                }))}
+                selectedServiceIds={selected.map((s) => s.id)}
+                preferredProviderId={provider?.id ?? null}
+                timeZone={timezone}
+                fromDateKey={weekStart ?? undefined}
+              />
             )}
 
             <div className="mt-10 flex items-center gap-4">

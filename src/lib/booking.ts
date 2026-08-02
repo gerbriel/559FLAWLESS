@@ -35,6 +35,7 @@ const RATE_LIMIT_WINDOW_MIN = 10
 const RATE_LIMIT_MAX = 4
 
 export type BookingError =
+  | 'client_banned'
   | 'invalid_request'
   | 'unknown_provider'
   | 'provider_not_bookable'
@@ -96,6 +97,12 @@ export async function loadAvailability(opts: {
   bufferMinutes: number
   fromDateKey: string
   days: number
+  /**
+   * What is being booked. Used to find the rooms and equipment those services
+   * need, so a slot with a free provider but no free wax warmer is not offered.
+   * Omitting it simply skips the resource check.
+   */
+  serviceIds?: number[]
   now?: Date
 }): Promise<AvailabilityInput | null> {
   const supabase = createAdminClient()
@@ -128,6 +135,7 @@ export async function loadAvailability(opts: {
     { data: closureRows },
     { data: appts },
     { data: calBusy },
+    { data: resourceBusy },
   ] = await Promise.all([
     supabase
       .from('booking_settings')
@@ -158,6 +166,16 @@ export async function loadAvailability(opts: {
       .eq('provider_id', opts.providerId)
       .gte('ends_at', busyFrom)
       .lte('starts_at', busyTo),
+    // A slot with a free provider but no free room is not a slot. Returns
+    // { starts_at, ends_at } — the shape `busy` already takes — and zero rows
+    // until a service is actually attached to a resource, so this is inert
+    // until the studio configures one. See migration 037.
+    supabase.rpc('resource_busy_intervals', {
+      p_location_id: null,
+      p_from: busyFrom,
+      p_to: busyTo,
+      p_service_ids: opts.serviceIds ?? [],
+    }),
   ])
 
   // An existing appointment occupies its window PLUS its own turnover buffer.
@@ -169,6 +187,7 @@ export async function loadAvailability(opts: {
       ).toISOString(),
     })),
     ...(calBusy ?? []),
+    ...(resourceBusy ?? []),
   ]
 
   return {
@@ -372,6 +391,7 @@ export async function createBooking(req: BookingRequest): Promise<BookingOutcome
 
   const availability = await loadAvailability({
     providerId: req.providerId,
+    serviceIds: req.serviceIds,
     durationMinutes,
     bufferMinutes,
     fromDateKey: dateKey,
@@ -422,6 +442,8 @@ export async function createBooking(req: BookingRequest): Promise<BookingOutcome
   if (insertError) {
     // 23P01 = exclusion_violation: someone took this slot mid-flight.
     if (insertError.code === '23P01') return failure('slot_taken', 409)
+    // 23P02 comes from appointments_refuse_banned_client (039).
+    if (insertError.code === '23P02') return failure('client_banned', 403)
     console.error('booking insert failed', insertError)
     return failure('booking_failed', 500)
   }
@@ -488,6 +510,10 @@ export const BOOKING_ERROR_MESSAGES: Record<BookingError, string> = {
   addon_not_available_for_service: 'That add-on cannot be combined with this service.',
   slot_unavailable: 'That time is no longer open. Please pick another.',
   slot_taken: 'Someone just booked that time. Please pick another.',
+  // The word "banned" never reaches a client. The staff-facing reason lives in
+  // client_bans, which no client can read. See migration 039.
+  client_banned:
+    'We are not able to book this one online. Please call the studio and we will take it from there.',
   rate_limited: 'That is a lot of bookings at once. Please wait a few minutes.',
   booking_failed: 'We could not complete the booking. Please try again or call us.',
 }
@@ -563,6 +589,7 @@ export async function createStaffBooking(req: StaffBookingRequest): Promise<Book
     const dateKey = dateKeyInTimeZone(requested, provider.timezone)
     const availability = await loadAvailability({
       providerId: req.providerId,
+      serviceIds: req.serviceIds,
       durationMinutes,
       bufferMinutes,
       fromDateKey: dateKey,
@@ -601,6 +628,8 @@ export async function createStaffBooking(req: StaffBookingRequest): Promise<Book
     // The exclusion constraint is still the thing that makes this safe, even
     // when availability was overridden.
     if (insertError.code === '23P01') return failure('slot_taken', 409)
+    // 23P02 comes from appointments_refuse_banned_client (039).
+    if (insertError.code === '23P02') return failure('client_banned', 403)
     console.error('staff booking insert failed', insertError)
     return failure('booking_failed', 500)
   }

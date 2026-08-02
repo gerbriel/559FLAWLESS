@@ -64,6 +64,7 @@ export async function GET(request: NextRequest) {
   // with UTC is enough to fetch the provider, then the real key is derived.
   const probe = await loadAvailability({
     providerId,
+    serviceIds,
     durationMinutes: priced.durationMinutes,
     bufferMinutes: priced.bufferMinutes,
     fromDateKey: from || dateKeyInTimeZone(now, 'UTC'),
@@ -82,6 +83,7 @@ export async function GET(request: NextRequest) {
       ? probe
       : ((await loadAvailability({
           providerId,
+          serviceIds,
           durationMinutes: priced.durationMinutes,
           bufferMinutes: priced.bufferMinutes,
           fromDateKey,

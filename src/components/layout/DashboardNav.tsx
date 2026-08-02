@@ -8,6 +8,7 @@ import {
   Users,
   MessageSquare,
   BarChart3,
+  FileBarChart,
   Package,
   Scissors,
   ScanLine,
@@ -15,6 +16,9 @@ import {
   Megaphone,
   Settings,
   Clock,
+  ClipboardList,
+  Inbox,
+  Timer,
   MapPin,
   Receipt,
   ClipboardCheck,
@@ -58,6 +62,19 @@ const ITEMS: NavItem[] = [
     badge: 'threads',
   },
   {
+    href: '/dashboard/waitlist',
+    label: 'Waitlist',
+    icon: ClipboardList,
+    visible: (r) => isFrontDesk(r),
+  },
+  {
+    href: '/dashboard/timesheets',
+    label: 'Timesheets',
+    icon: Timer,
+    // Everyone sees their own; managers see everyone's.
+    visible: () => true,
+  },
+  {
     href: '/dashboard/sell',
     label: 'Sell',
     icon: ScanLine,
@@ -85,6 +102,15 @@ const ITEMS: NavItem[] = [
     href: '/dashboard/analytics',
     label: 'Analytics',
     icon: BarChart3,
+    visible: (r) => isManager(r),
+  },
+  {
+    href: '/dashboard/reports',
+    label: 'Reports',
+    icon: FileBarChart,
+    // Sales, tax, commissions and profit. Every report here either shows what
+    // the business earned or what it pays people, which is a manager's business
+    // and not the front desk's.
     visible: (r) => isManager(r),
   },
   {

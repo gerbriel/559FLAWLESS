@@ -5,6 +5,7 @@ import { DashboardNav } from '@/components/layout/DashboardNav'
 import { SignOutButton } from '@/components/layout/SignOutButton'
 import { NotificationBell } from '@/components/layout/NotificationBell'
 import { LocationSwitcher } from '@/components/layout/LocationSwitcher'
+import { TimeClockPanel } from '@/components/shared/TimeClockPanel'
 import { isStaff, ROLE_LABELS, type UserRole } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
@@ -66,6 +67,9 @@ export default async function DashboardLayout({
           <div className="flex items-center gap-5">
             {/* Renders nothing at all while there is one studio. */}
             <LocationSwitcher />
+            {/* One tap to clock in or out. Self-contained; renders nothing for
+                anyone with no shift to punch. */}
+            <TimeClockPanel compact />
             <NotificationBell count={unreadNotifications ?? 0} />
             <Link
               href="/"
