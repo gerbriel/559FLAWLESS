@@ -15,6 +15,9 @@ import {
   Megaphone,
   Settings,
   Clock,
+  MapPin,
+  Receipt,
+  ClipboardCheck,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { isFrontDesk, isManager, isAdmin, type UserRole } from '@/types/database'
@@ -31,6 +34,15 @@ interface NavItem {
 const ITEMS: NavItem[] = [
   { href: '/dashboard', label: 'Today', icon: LayoutDashboard, visible: () => true },
   { href: '/dashboard/calendar', label: 'Calendar', icon: CalendarDays, visible: () => true },
+  // Bookings the approval rules held back. A provider sees their own; front
+  // desk and up see the studio's — RLS on `appointments` already draws that
+  // line, so the item itself is visible to everyone.
+  {
+    href: '/dashboard/appointments/pending',
+    label: 'Waiting on you',
+    icon: ClipboardCheck,
+    visible: () => true,
+  },
   { href: '/dashboard/schedule', label: 'My hours', icon: Clock, visible: () => true },
   {
     href: '/dashboard/clients',
@@ -76,6 +88,14 @@ const ITEMS: NavItem[] = [
     visible: (r) => isManager(r),
   },
   {
+    href: '/dashboard/expenses',
+    label: 'Expenses',
+    icon: Receipt,
+    // What the studio pays in rent is a term of the business, not something the
+    // front desk needs to run the day.
+    visible: (r) => isManager(r),
+  },
+  {
     href: '/dashboard/marketing',
     label: 'Marketing',
     icon: Megaphone,
@@ -88,6 +108,15 @@ const ITEMS: NavItem[] = [
     // Managers need booking policy, hours and tax. The genuinely admin-only
     // sections inside the page hide themselves.
     visible: (r) => isManager(r),
+  },
+  {
+    href: '/dashboard/settings/locations',
+    label: 'Locations',
+    icon: MapPin,
+    // The first open location is what every appointment, sale and stock count
+    // defaults to, and its timezone is what every opening hour is read in.
+    // That is pricing-grade authority, so it sits with the admin.
+    visible: (r) => isAdmin(r),
   },
 ]
 

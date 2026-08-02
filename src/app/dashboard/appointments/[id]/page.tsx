@@ -6,9 +6,11 @@ import { Badge } from '@/components/ui/badge'
 import { AppointmentStatusControl } from '@/components/shared/AppointmentStatusControl'
 import { ClientNoteForm } from '@/components/shared/ClientNoteForm'
 import { TakePayment, type PaymentRecord } from '@/components/shared/TakePayment'
+import { PhotoReminderPrompt } from '@/components/shared/PhotoReminderPrompt'
 import { formatMoney, formatDuration } from '@/lib/utils'
 import { formatDateTimeInTimeZone } from '@/lib/time'
 import type { AppointmentStatus } from '@/types/database'
+import type { AppointmentPhotoPrompt } from '@/types/clientprofile'
 
 export const dynamic = 'force-dynamic'
 
@@ -77,6 +79,17 @@ export default async function StaffAppointmentPage({ params }: Props) {
         .maybeSingle()
     : { data: null }
 
+  // Is a before/after photograph due on this visit? `photo_due` is null unless
+  // a documented service is booked AND the client's consent covers it — the
+  // gate is in `client_photo_consent_ok` (039), never in the component.
+  const { data: photoPrompt } = await supabase
+    .from('appointment_photo_prompts')
+    .select(
+      'appointment_id, client_id, provider_id, location_id, starts_at, status, photo_documented, intimate, documented_services, followup_days, before_count, after_count, progress_count, consent_ok, photo_due'
+    )
+    .eq('appointment_id', id)
+    .maybeSingle()
+
   return (
     <div className="max-w-3xl">
       <Link href="/dashboard/calendar" className="label-caps text-[var(--color-muted)]">
@@ -114,6 +127,12 @@ export default async function StaffAppointmentPage({ params }: Props) {
             Unreviewed intake flags
           </p>
           <p className="text-sm text-[var(--color-muted)]">{intake!.flags.join(', ')}</p>
+        </div>
+      )}
+
+      {photoPrompt && (
+        <div className="mt-8">
+          <PhotoReminderPrompt prompt={photoPrompt as unknown as AppointmentPhotoPrompt} />
         </div>
       )}
 

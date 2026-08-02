@@ -42,6 +42,15 @@ export interface BlockRow {
 export interface BusyRow {
   starts_at: string
   ends_at: string
+  /**
+   * A stretch in the middle of someone else's appointment where the PROVIDER
+   * is free and the ROOM is not — hair colour developing, a peel sitting.
+   * Emitted by the `provider_busy_segments` RPC (migration 036).
+   *
+   * Ignored unless `allowProcessingOverlap` is on, so a busy list that never
+   * sets it behaves exactly as it always has.
+   */
+  is_processing?: boolean | null
 }
 
 export interface AvailabilityInput {
@@ -61,11 +70,69 @@ export interface AvailabilityInput {
   maxAdvanceDays: number
   /** Injected so callers control "now" and tests stay deterministic. */
   now: Date
+
+  /**
+   * ── Scheduling mechanics (migration 036) ───────────────────
+   *
+   * Every field below is optional and every default is a no-op. A caller that
+   * sets none of them gets the slot list this module produced before they
+   * existed — that is the contract, and there is a test for it.
+   *
+   * Read from `provider_scheduling_config(provider, location)`.
+   */
+
+  /**
+   * Idle the studio wants either side of a booking, in minutes.
+   * Measured against other appointments only, never against the open or close
+   * of the working window: a 9am booking on a 9am open is not a gap violation.
+   */
+  minGapMinutes?: number
+  /**
+   * The other direction — keep the day compact. On a day that already has
+   * something in it, an offered slot has to sit within this many minutes of the
+   * nearest booking. Null or undefined = no ceiling. An empty day is unaffected;
+   * the rule is about not scattering, and there is nothing yet to scatter from.
+   */
+  maxGapMinutes?: number | null
+  /**
+   * Don't leave a fifteen-minute orphan. A slot that would strand a free
+   * stretch shorter than this — against a neighbouring appointment OR against
+   * the edge of the working window — is not offered. 0 = off.
+   */
+  minFragmentMinutes?: number
+  /**
+   * Offer the processing gap inside someone else's appointment. Off by
+   * default and deliberately so: freeing the provider only helps if there is
+   * somewhere else for the second client to sit.
+   */
+  allowProcessingOverlap?: boolean
 }
 
 export interface DaySlots {
   dateKey: string
   slots: Date[]
+}
+
+/**
+ * The occupied intervals immediately either side of a candidate, or null where
+ * there is nothing on that side. Null means "the working window", not "zero" —
+ * the two rules that care about the difference need to tell them apart.
+ */
+function neighbours(
+  candidate: Interval,
+  occupied: Interval[]
+): { prevEnd: number | null; nextStart: number | null } {
+  let prevEnd: number | null = null
+  let nextStart: number | null = null
+
+  for (const o of occupied) {
+    if (o.end <= candidate.start && (prevEnd === null || o.end > prevEnd)) prevEnd = o.end
+    if (o.start >= candidate.end && (nextStart === null || o.start < nextStart)) {
+      nextStart = o.start
+    }
+  }
+
+  return { prevEnd, nextStart }
 }
 
 /**
@@ -96,13 +163,25 @@ export function generateSlots(
   const earliest = now.getTime() + minLeadMinutes * MINUTE_MS
   const latest = now.getTime() + maxAdvanceDays * 86_400_000
 
+  const minGap = Math.max(0, input.minGapMinutes ?? 0)
+  const maxGap = input.maxGapMinutes ?? null
+  const minFragment = Math.max(0, input.minFragmentMinutes ?? 0)
+  const allowProcessingOverlap = input.allowProcessingOverlap === true
+  // One flag so the untouched-studio path stays the untouched-studio path:
+  // no neighbour scan, no window-edge arithmetic, nothing.
+  const gapRulesActive = minGap > 0 || maxGap !== null || minFragment > 0
+
   const closureSet = new Set(closures)
 
   // Pre-resolve occupied intervals once rather than per candidate slot.
-  const occupied: Interval[] = busy.map((b) => ({
-    start: new Date(b.starts_at).getTime(),
-    end: new Date(b.ends_at).getTime(),
-  }))
+  // A processing segment blocks the room, so it only comes out of the list when
+  // the studio has said it has somewhere else to put the second client.
+  const occupied: Interval[] = busy
+    .filter((b) => !(allowProcessingOverlap && b.is_processing === true))
+    .map((b) => ({
+      start: new Date(b.starts_at).getTime(),
+      end: new Date(b.ends_at).getTime(),
+    }))
 
   const result: DaySlots[] = []
 
@@ -147,6 +226,22 @@ export function generateSlots(
       const closeMin = timeToMinutes(window.end_time)
       const step = Math.max(5, window.slot_interval_minutes)
 
+      // The edges of this working window, as instants. Only the fragment rule
+      // reads them, so they are only resolved when a rule is switched on.
+      // A close of 24:00 is midnight on the NEXT day, not midnight on this one.
+      const windowOpenMs = gapRulesActive
+        ? zonedTimeToUtc(dateKey, minutesToTime(openMin), timeZone).getTime()
+        : 0
+      const windowCloseMs = gapRulesActive
+        ? closeMin < 1440
+          ? zonedTimeToUtc(dateKey, minutesToTime(closeMin), timeZone).getTime()
+          : zonedTimeToUtc(
+              addDaysToDateKey(dateKey, 1),
+              minutesToTime(closeMin - 1440),
+              timeZone
+            ).getTime()
+        : 0
+
       // The last start that still lets the whole service finish before close.
       for (let m = openMin; m + totalMinutes <= closeMin; m += step) {
         const start = zonedTimeToUtc(dateKey, minutesToTime(m), timeZone)
@@ -158,6 +253,34 @@ export function generateSlots(
         const candidate: Interval = { start: startMs, end: endMs }
         if (dayBlocks.some((b) => overlaps(candidate, b))) continue
         if (occupied.some((o) => overlaps(candidate, o))) continue
+
+        if (gapRulesActive) {
+          const { prevEnd, nextStart } = neighbours(candidate, occupied)
+
+          // Minimum gap: against real appointments only.
+          if (minGap > 0) {
+            if (prevEnd !== null && startMs - prevEnd < minGap * MINUTE_MS) continue
+            if (nextStart !== null && nextStart - endMs < minGap * MINUTE_MS) continue
+          }
+
+          // No orphans: a free stretch is either nothing at all or big enough
+          // to sell. Measured against the window edge too — the fifteen minutes
+          // before opening is exactly the fragment nobody can book.
+          if (minFragment > 0) {
+            const before = startMs - (prevEnd ?? windowOpenMs)
+            const after = (nextStart ?? windowCloseMs) - endMs
+            if (before > 0 && before < minFragment * MINUTE_MS) continue
+            if (after > 0 && after < minFragment * MINUTE_MS) continue
+          }
+
+          // Keep the day compact — but only once there is a day to keep
+          // compact. With nothing booked yet, every time is as good as any.
+          if (maxGap !== null && (prevEnd !== null || nextStart !== null)) {
+            const before = prevEnd !== null ? startMs - prevEnd : Infinity
+            const after = nextStart !== null ? nextStart - endMs : Infinity
+            if (Math.min(before, after) > maxGap * MINUTE_MS) continue
+          }
+        }
 
         slots.push(start)
       }

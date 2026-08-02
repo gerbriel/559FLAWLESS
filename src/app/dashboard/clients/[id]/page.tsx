@@ -5,15 +5,33 @@ import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
 import { ButtonLink } from '@/components/ui/button'
 import { ClientNoteForm } from '@/components/shared/ClientNoteForm'
+import { ClientBanPanel } from '@/components/shared/ClientBanPanel'
+import { ClientTagPicker, type ClientTagOption } from '@/components/shared/ClientTagPicker'
+import { ClientTimeline } from '@/components/shared/ClientTimeline'
+import { PhotoReminderCard } from '@/components/shared/PhotoReminderCard'
+import { PhotoReminderPrompt } from '@/components/shared/PhotoReminderPrompt'
 import { formatMoney } from '@/lib/utils'
-import { formatDateTimeInTimeZone , requestNow } from '@/lib/time'
-import type { IntakeQuestion, Json } from '@/types/database'
+import { requestNow } from '@/lib/time'
+import { isManager, type IntakeQuestion, type Json, type UserRole } from '@/types/database'
+import {
+  averageTicketCents,
+  noShowRatePct,
+  visitCadenceDays,
+  type AppointmentPhotoPrompt,
+  type ClientBanWithActors,
+  type ClientPhotoStatus,
+  type ClientTimelineEntry,
+  type SignedTreatmentPhoto,
+  type TreatmentPhotoRow,
+} from '@/types/clientprofile'
 
 export const dynamic = 'force-dynamic'
 
-const STUDIO_TZ = 'America/Los_Angeles'
-
 const FITZPATRICK = ['', 'I', 'II', 'III', 'IV', 'V', 'VI']
+
+/** How long a treatment-photo link is good for. Long enough to look at, short
+ *  enough that a copied URL is worthless by the time it is pasted anywhere. */
+const SIGNED_URL_TTL_SECONDS = 300
 
 interface Props {
   params: Promise<{ id: string }>
@@ -22,34 +40,32 @@ interface Props {
 export default async function ClientDetailPage({ params }: Props) {
   const { id } = await params
   const supabase = await createClient()
+  const now = requestNow()
 
-  const [
-    { data: client },
-    { data: record },
-    { data: appointments },
-    { data: notes },
-    { data: intake },
-    { data: signatures },
-    { data: patchTests },
-    { data: analytics },
-    { data: purchases },
-  ] = await Promise.all([
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  // Two batches, both started before either is awaited — so all sixteen queries
+  // are still in flight at once. Split rather than one flat `Promise.all`
+  // because postgrest-js resolves each select string at the type level, and
+  // sixteen of them in a single destructure is enough to trip TS2589 ("type
+  // instantiation is excessively deep") and collapse the whole tuple.
+  const corePromise = Promise.all([
     supabase
       .from('profiles')
-      .select('id, first_name, last_name, email, phone, pronouns, date_of_birth, created_at, marketing_opt_in')
+      .select(
+        'id, first_name, last_name, email, phone, pronouns, date_of_birth, created_at, marketing_opt_in',
+      )
       .eq('id', id)
       .eq('role', 'client')
       .maybeSingle(),
     supabase.from('client_records').select('*').eq('client_id', id).maybeSingle(),
     supabase
-      .from('appointments')
-      .select('id, starts_at, status, total_cents, appointment_services(name_snapshot, sort_order)')
-      .eq('client_id', id)
-      .order('starts_at', { ascending: false })
-      .limit(20),
-    supabase
       .from('client_notes')
-      .select('id, body, products_used, next_visit_plan, created_at, profiles!client_notes_author_id_fkey(first_name)')
+      .select(
+        'id, body, products_used, next_visit_plan, created_at, profiles!client_notes_author_id_fkey(first_name)',
+      )
       .eq('client_id', id)
       .order('created_at', { ascending: false })
       .limit(20),
@@ -77,23 +93,103 @@ export default async function ClientDetailPage({ params }: Props) {
       .eq('user_id', id)
       .order('created_at', { ascending: false })
       .limit(100),
-    // What they have bought — in the room and online — so the history is the
-    // whole relationship rather than only the treatments.
     supabase
-      .from('orders')
+      .from('profiles')
+      .select('role')
+      .eq('id', user?.id ?? id)
+      .maybeSingle(),
+  ])
+
+  const extrasPromise = Promise.all([
+    // The whole relationship in one pass — visits, purchases, payments, notes,
+    // consent, intake, photographs, patch tests, and the ban history. Nine
+    // tables' worth of RLS is applied inside the view, so nothing needs
+    // re-checking here.
+    supabase
+      .from('client_timeline')
       .select(
-        'id, order_number, status, channel, payment_method, total_cents, paid_at, created_at, order_items(name_snapshot, qty, unit_price_cents)'
+        'client_id, occurred_at, kind, ref, title, detail, amount_cents, status, location_id',
       )
       .eq('client_id', id)
-      .in('status', ['paid', 'fulfilling', 'ready_for_pickup', 'shipped', 'completed'])
-      .order('created_at', { ascending: false })
-      .limit(20),
+      .order('occurred_at', { ascending: false })
+      .limit(200),
+    // client_bans has two FKs to profiles, so both embeds name their
+    // constraint — `profiles(...)` alone is ambiguous and returns an error.
+    supabase
+      .from('client_bans')
+      .select(
+        'id, client_id, location_id, applies_studio_wide, reason, banned_by, banned_at, expires_at, lifted_at, lifted_by, lift_reason, created_at, updated_at, banned_by_profile:profiles!client_bans_banned_by_fkey(first_name, last_name), lifted_by_profile:profiles!client_bans_lifted_by_fkey(first_name, last_name), locations(name)',
+      )
+      .eq('client_id', id)
+      .order('banned_at', { ascending: false }),
+    supabase.from('client_photo_status').select('*').eq('client_id', id).maybeSingle(),
+    supabase
+      .from('treatment_photos')
+      .select(
+        'id, appointment_id, storage_path, phase, body_area, taken_at, notes, deletion_requested_at',
+      )
+      .eq('client_id', id)
+      .order('taken_at', { ascending: false })
+      .limit(12),
+    // Only the visits a photograph could still be due on. `photo_due` is null
+    // whenever consent does not permit one, so this can never surface a prompt
+    // for somebody who has not released.
+    supabase
+      .from('appointment_photo_prompts')
+      .select(
+        'appointment_id, client_id, provider_id, location_id, starts_at, status, photo_documented, intimate, documented_services, followup_days, before_count, after_count, progress_count, consent_ok, photo_due',
+      )
+      .eq('client_id', id)
+      .in('status', ['confirmed', 'checked_in', 'completed'])
+      .order('starts_at', { ascending: false })
+      .limit(5),
+    supabase
+      .from('client_tag_links')
+      .select('tag_id, client_tags(id, name, description, is_alert)')
+      .eq('client_id', id),
+    supabase.from('client_tags').select('id, name, description, is_alert').order('sort_order'),
+    supabase
+      .from('locations')
+      .select('id, name, timezone, is_active, sort_order')
+      .order('sort_order'),
   ])
+
+  const [
+    { data: client },
+    { data: record },
+    { data: notes },
+    { data: intake },
+    { data: signatures },
+    { data: patchTests },
+    { data: analytics },
+    { data: viewer },
+  ] = await corePromise
+
+  const [
+    { data: timeline },
+    { data: bans },
+    { data: photoStatus },
+    { data: photos },
+    { data: prompts },
+    { data: tagLinks },
+    { data: allTags },
+    { data: locations },
+  ] = await extrasPromise
 
   // No row means either the id is wrong or RLS filtered it out — either way
   // there is nothing to show. Without this guard every `client.x` below throws
   // and the page 500s instead of rendering a 404.
   if (!client) notFound()
+
+  const sites = locations ?? []
+  // `locations.timezone` is authoritative for a site's wall clock; the primary
+  // site is the one the CRM renders in. Nothing here hardcodes Los Angeles.
+  const timeZone =
+    sites.find((l) => l.is_active)?.timezone ?? sites[0]?.timezone ?? 'America/Los_Angeles'
+  const primaryLocationId = sites.find((l) => l.is_active)?.id ?? sites[0]?.id ?? 1
+  const siteNames = new Map(sites.map((l) => [l.id, l.name]))
+
+  const role = (viewer?.role ?? 'provider') as UserRole
 
   // The intake form's question list travels with the submission so a flag id
   // ("accutane") can be rendered as the question the client actually answered.
@@ -101,11 +197,81 @@ export default async function ClientDetailPage({ params }: Props) {
     ?.questions ?? []) as IntakeQuestion[]
   const answers = (intake?.answers ?? {}) as Record<string, Json>
 
+  const tags = (
+    (tagLinks ?? [])
+      .map((l) => l.client_tags as unknown as ClientTagOption | null)
+      .filter(Boolean) as ClientTagOption[]
+  ).sort((a, b) => a.name.localeCompare(b.name))
+
+  const banRows = (bans ?? []) as unknown as ClientBanWithActors[]
+  const liveBan = banRows.find(
+    (b) => !b.lifted_at && (!b.expires_at || new Date(b.expires_at).getTime() > now),
+  )
+
+  // Signed, server-side, against a private bucket — never a public URL and
+  // never a path handed to the browser to sign for itself.
+  const photoRows = (photos ?? []) as TreatmentPhotoRow[]
+  let signedPhotos: SignedTreatmentPhoto[] = photoRows.map((p) => ({
+    ...p,
+    signedUrl: null,
+  }))
+  if (photoRows.length > 0) {
+    const { data: signed } = await supabase.storage.from('treatment').createSignedUrls(
+      photoRows.map((p) => p.storage_path),
+      SIGNED_URL_TTL_SECONDS,
+    )
+    const byPath = new Map((signed ?? []).map((s) => [s.path, s.signedUrl]))
+    signedPhotos = photoRows.map((p) => ({
+      ...p,
+      signedUrl: byPath.get(p.storage_path) ?? null,
+    }))
+  }
+
+  const promptRows = (prompts ?? []) as AppointmentPhotoPrompt[]
+  const duePrompts = promptRows.filter(
+    (p) => p.photo_due || (p.photo_documented && !p.consent_ok),
+  )
+
+  // Derived from the counters client_record_sync_stats (005) already maintains.
+  // Nothing here re-aggregates `appointments` — a second copy of that sum is
+  // free to drift from the first.
+  const stats = {
+    visit_count: record?.visit_count ?? 0,
+    no_show_count: record?.no_show_count ?? 0,
+    cancel_count: record?.cancel_count ?? 0,
+    lifetime_value_cents: record?.lifetime_value_cents ?? 0,
+    first_visit_at: record?.first_visit_at ?? null,
+    last_visit_at: record?.last_visit_at ?? null,
+  }
+  const cadence = visitCadenceDays(stats)
+  const noShowRate = noShowRatePct(stats)
+  const avgTicket = averageTicketCents(stats)
+
+  const productCents = (timeline ?? [])
+    .filter((e) => e.kind === 'purchase')
+    .reduce((sum, e) => sum + (e.amount_cents ?? 0), 0)
+
   // Analytics summary
-  const pageViews = analytics?.filter(e => e.event === 'pageview').length ?? 0
-  const bookingStarts = analytics?.filter(e => e.event === 'booking_started').length ?? 0
-  const bookingCompletions = analytics?.filter(e => e.event === 'booking_completed').length ?? 0
+  const pageViews = analytics?.filter((e) => e.event === 'pageview').length ?? 0
+  const bookingStarts = analytics?.filter((e) => e.event === 'booking_started').length ?? 0
+  const bookingCompletions =
+    analytics?.filter((e) => e.event === 'booking_completed').length ?? 0
   const abandonedBookings = bookingStarts - bookingCompletions
+
+  const firstName = client.first_name ?? 'This client'
+
+  const banPanel = (
+    <ClientBanPanel
+      clientId={client.id}
+      clientName={firstName}
+      bans={banRows}
+      locations={sites.filter((l) => l.is_active).map((l) => ({ id: l.id, name: l.name }))}
+      currentLocationId={primaryLocationId}
+      timeZone={timeZone}
+      canLift={isManager(role)}
+      now={now}
+    />
+  )
 
   return (
     <div>
@@ -115,24 +281,33 @@ export default async function ClientDetailPage({ params }: Props) {
 
       <div className="mt-8 flex flex-wrap items-start justify-between gap-6">
         <div>
-          <h1 className="display text-3xl">
-            {client.first_name} {client.last_name}
-          </h1>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="display text-3xl">
+              {client.first_name} {client.last_name}
+            </h1>
+            {liveBan && <Badge tone="danger">Not taking bookings</Badge>}
+          </div>
+
           <p className="mt-2 text-sm text-[var(--color-muted)]">
             {client.email}
             {client.phone && ` · ${client.phone}`}
             {client.pronouns && ` · ${client.pronouns}`}
           </p>
-          <div className="mt-4 flex gap-3">
-            <ButtonLink 
-              href={`/dashboard/messages?client=${id}`}
-              variant="outline"
-              size="sm"
-            >
+
+          <div className="mt-4">
+            <ClientTagPicker
+              clientId={client.id}
+              assigned={tags}
+              all={(allTags ?? []) as ClientTagOption[]}
+            />
+          </div>
+
+          <div className="mt-5 flex gap-3">
+            <ButtonLink href={`/dashboard/messages?client=${id}`} variant="outline" size="sm">
               <MessageSquare className="h-4 w-4" />
               Message
             </ButtonLink>
-            <ButtonLink 
+            <ButtonLink
               href={`/dashboard/appointments/book-for-client?client=${id}`}
               variant="primary"
               size="sm"
@@ -141,32 +316,32 @@ export default async function ClientDetailPage({ params }: Props) {
               Book Appointment
             </ButtonLink>
           </div>
-
-          <h1 className="display text-3xl">
-            {client.first_name} {client.last_name}
-          </h1>
-          <p className="mt-2 text-sm text-[var(--color-muted)]">
-            {client.email}
-            {client.phone && ` · ${client.phone}`}
-            {client.pronouns && ` · ${client.pronouns}`}
-          </p>
         </div>
 
-        <dl className="flex gap-8 text-sm">
-          <div>
-            <dt className="label-caps text-[var(--color-muted)]">Visits</dt>
-            <dd className="mt-1 text-lg tabular-nums">{record?.visit_count ?? 0}</dd>
-          </div>
-          <div>
-            <dt className="label-caps text-[var(--color-muted)]">Lifetime</dt>
-            <dd className="mt-1 text-lg tabular-nums">
-              {formatMoney(record?.lifetime_value_cents ?? 0)}
-            </dd>
-          </div>
-          <div>
-            <dt className="label-caps text-[var(--color-muted)]">No-shows</dt>
-            <dd className="mt-1 text-lg tabular-nums">{record?.no_show_count ?? 0}</dd>
-          </div>
+        <dl className="grid grid-cols-3 gap-x-8 gap-y-5 text-sm">
+          <Stat label="Visits" value={String(stats.visit_count)} />
+          <Stat label="Lifetime" value={formatMoney(stats.lifetime_value_cents)} />
+          <Stat label="Avg visit" value={avgTicket === null ? '—' : formatMoney(avgTicket)} />
+          <Stat label="Products" value={productCents > 0 ? formatMoney(productCents) : '—'} />
+          <Stat
+            label="Comes every"
+            value={
+              cadence === null
+                ? '—'
+                : cadence >= 60
+                  ? `${Math.round(cadence / 30)} mo`
+                  : `${cadence} d`
+            }
+          />
+          <Stat
+            label="No-shows"
+            value={
+              noShowRate === null
+                ? String(stats.no_show_count)
+                : `${stats.no_show_count} · ${noShowRate}%`
+            }
+            tone={noShowRate !== null && noShowRate >= 20 ? 'warning' : undefined}
+          />
         </dl>
       </div>
 
@@ -180,22 +355,46 @@ export default async function ClientDetailPage({ params }: Props) {
           <ul className="flex flex-wrap gap-2">
             {(intake?.flags ?? []).map((f) => (
               <li key={f}>
-                <Badge tone="warning">
-                  {questions.find((q) => q.id === f)?.label ?? f}
-                </Badge>
+                <Badge tone="warning">{questions.find((q) => q.id === f)?.label ?? f}</Badge>
               </li>
             ))}
           </ul>
           {intake?.reviewed_at && (
             <p className="mt-3 text-xs text-[var(--color-muted)]">
-              Reviewed {new Date(intake.reviewed_at).toLocaleDateString()}
+              Reviewed{' '}
+              {new Date(intake.reviewed_at).toLocaleDateString('en-US', {
+                timeZone,
+              })}
             </p>
           )}
         </div>
       )}
 
+      {/* A live ban is the first thing you need to know when you open the file;
+          with no ban in force the panel is an action and belongs at the bottom. */}
+      {liveBan && <div className="mt-10">{banPanel}</div>}
+
       <div className="mt-12 grid gap-12 lg:grid-cols-[1.3fr_1fr]">
         <div className="space-y-12">
+          {/* ── Photo prompts ─────────────────────────── */}
+          {duePrompts.length > 0 && (
+            <section className="space-y-4">
+              {duePrompts.map((p) => (
+                <div key={p.appointment_id}>
+                  <p className="label-caps mb-2 text-[var(--color-muted)]">
+                    {new Date(p.starts_at).toLocaleDateString('en-US', {
+                      timeZone,
+                      weekday: 'short',
+                      month: 'short',
+                      day: 'numeric',
+                    })}
+                  </p>
+                  <PhotoReminderPrompt prompt={p} />
+                </div>
+              ))}
+            </section>
+          )}
+
           {/* ── Visit notes ───────────────────────────── */}
           <section>
             <h2 className="display text-2xl">Treatment notes</h2>
@@ -208,7 +407,9 @@ export default async function ClientDetailPage({ params }: Props) {
             ) : (
               <ul className="mt-8 space-y-5">
                 {(notes ?? []).map((n) => {
-                  const author = n.profiles as { first_name: string | null } | null
+                  const author = n.profiles as {
+                    first_name: string | null
+                  } | null
                   return (
                     <li
                       key={n.id}
@@ -216,6 +417,7 @@ export default async function ClientDetailPage({ params }: Props) {
                     >
                       <p className="label-caps mb-3 text-[var(--color-muted)]">
                         {new Date(n.created_at).toLocaleDateString('en-US', {
+                          timeZone,
                           month: 'short',
                           day: 'numeric',
                           year: 'numeric',
@@ -242,107 +444,22 @@ export default async function ClientDetailPage({ params }: Props) {
             )}
           </section>
 
-          {/* ── Visit history ─────────────────────────── */}
-          <section>
-            <h2 className="display text-2xl">Visit history</h2>
-            {(appointments?.length ?? 0) === 0 ? (
-              <p className="mt-4 text-sm text-[var(--color-muted)]">No appointments yet.</p>
-            ) : (
-              <ul className="mt-6 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
-                {(appointments ?? []).map((a) => (
-                  <li key={a.id}>
-                    <Link
-                      href={`/dashboard/appointments/${a.id}`}
-                      className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 py-4 text-sm transition-colors hover:text-[var(--color-accent)]"
-                    >
-                      <span>{formatDateTimeInTimeZone(new Date(a.starts_at), STUDIO_TZ)}</span>
-                      <span className="text-[var(--color-muted)]">
-                        {((a.appointment_services ?? []) as { name_snapshot: string; sort_order: number }[])
-                          .sort((x, y) => x.sort_order - y.sort_order)
-                          .map((s) => s.name_snapshot)
-                          .join(' + ')}
-                      </span>
-                      <span className="flex items-center gap-3">
-                        <Badge tone={a.status === 'completed' ? 'success' : 'neutral'}>
-                          {a.status.replace('_', ' ')}
-                        </Badge>
-                        <span className="tabular-nums">{formatMoney(a.total_cents)}</span>
-                      </span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-
-          {/* ── Purchases ─────────────────────────────── */}
+          {/* ── Everything, in order ──────────────────── */}
           <section>
             <div className="flex flex-wrap items-baseline justify-between gap-4">
-              <h2 className="display text-2xl">Purchases</h2>
-              {(purchases?.length ?? 0) > 0 && (
-                <span className="text-sm tabular-nums text-[var(--color-muted)]">
-                  {formatMoney(
-                    (purchases ?? []).reduce((sum, o) => sum + o.total_cents, 0)
-                  )}{' '}
-                  in products
-                </span>
-              )}
+              <h2 className="display text-2xl">History</h2>
+              <span className="text-sm text-[var(--color-muted)]">
+                Visits, purchases, payments, forms and photographs
+              </span>
             </div>
-
-            {(purchases?.length ?? 0) === 0 ? (
-              <p className="mt-4 text-sm text-[var(--color-muted)]">
-                Nothing bought yet.
-              </p>
-            ) : (
-              <ul className="mt-6 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
-                {(purchases ?? []).map((o) => {
-                  const items = (o.order_items ?? []) as {
-                    name_snapshot: string
-                    qty: number
-                    unit_price_cents: number
-                  }[]
-
-                  return (
-                    <li key={o.id} className="py-4">
-                      <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 text-sm">
-                        <span>
-                          {new Date(o.paid_at ?? o.created_at).toLocaleDateString('en-US', {
-                            month: 'short',
-                            day: 'numeric',
-                            year: 'numeric',
-                          })}
-                        </span>
-
-                        <span className="flex items-center gap-2">
-                          <Badge tone={o.channel === 'in_store' ? 'accent' : 'neutral'}>
-                            {o.channel === 'in_store' ? 'In studio' : 'Online'}
-                          </Badge>
-                          {o.payment_method && (
-                            <span className="text-xs text-[var(--color-muted)]">
-                              {o.payment_method}
-                            </span>
-                          )}
-                          <span className="tabular-nums">{formatMoney(o.total_cents)}</span>
-                        </span>
-                      </div>
-
-                      <p className="mt-1 text-sm text-[var(--color-muted)]">
-                        {items
-                          .map((i) => (i.qty > 1 ? `${i.name_snapshot} ×${i.qty}` : i.name_snapshot))
-                          .join(', ')}
-                      </p>
-
-                      {o.order_number && (
-                        <p className="mt-0.5 text-xs tabular-nums text-[var(--color-muted)]">
-                          {o.order_number}
-                        </p>
-                      )}
-                    </li>
-                  )
-                })}
-              </ul>
-            )}
+            <ClientTimeline
+              entries={(timeline ?? []) as ClientTimelineEntry[]}
+              timeZone={timeZone}
+              showLocation={sites.length > 1 ? siteNames : undefined}
+            />
           </section>
+
+          {!liveBan && banPanel}
         </div>
 
         {/* ── Sidebar ─────────────────────────────────── */}
@@ -350,7 +467,10 @@ export default async function ClientDetailPage({ params }: Props) {
           <section className="border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
             <h3 className="label-caps mb-5 text-[var(--color-accent)]">Skin profile</h3>
             <dl className="space-y-3 text-sm">
-              <Row label="Fitzpatrick" value={record?.fitzpatrick ? FITZPATRICK[record.fitzpatrick] : '—'} />
+              <Row
+                label="Fitzpatrick"
+                value={record?.fitzpatrick ? FITZPATRICK[record.fitzpatrick] : '—'}
+              />
               <Row label="Skin type" value={record?.skin_type ?? '—'} />
               <Row
                 label="Concerns"
@@ -361,11 +481,21 @@ export default async function ClientDetailPage({ params }: Props) {
             </dl>
           </section>
 
+          <PhotoReminderCard
+            status={(photoStatus ?? null) as ClientPhotoStatus | null}
+            photos={signedPhotos}
+            timeZone={timeZone}
+            now={now}
+          />
+
           {/* Full intake answers */}
           {intake && questions.length > 0 && (
             <section className="border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
               <h3 className="label-caps mb-5 text-[var(--color-accent)]">
-                Intake · {new Date(intake.submitted_at).toLocaleDateString()}
+                Intake ·{' '}
+                {new Date(intake.submitted_at).toLocaleDateString('en-US', {
+                  timeZone,
+                })}
               </h3>
               <dl className="space-y-3 text-sm">
                 {questions.map((q) => {
@@ -399,7 +529,7 @@ export default async function ClientDetailPage({ params }: Props) {
             ) : (
               <ul className="space-y-2.5 text-sm">
                 {(signatures ?? []).map((s) => {
-                  const expired = s.expires_at && new Date(s.expires_at).getTime() < requestNow()
+                  const expired = s.expires_at && new Date(s.expires_at).getTime() < now
                   const form = s.consent_forms as { title: string } | null
                   return (
                     <li key={s.id} className="flex items-start gap-2">
@@ -417,7 +547,9 @@ export default async function ClientDetailPage({ params }: Props) {
                       <span>
                         {form?.title}
                         <span className="block text-xs text-[var(--color-muted)]">
-                          {expired ? 'Expired — needs re-signing' : new Date(s.signed_at).toLocaleDateString()}
+                          {expired
+                            ? 'Expired — needs re-signing'
+                            : new Date(s.signed_at).toLocaleDateString('en-US', { timeZone })}
                         </span>
                       </span>
                     </li>
@@ -425,6 +557,38 @@ export default async function ClientDetailPage({ params }: Props) {
                 })}
               </ul>
             )}
+          </section>
+
+          {(patchTests?.length ?? 0) > 0 && (
+            <section className="border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
+              <h3 className="label-caps mb-5 text-[var(--color-accent)]">Patch tests</h3>
+              <ul className="space-y-2.5 text-sm">
+                {(patchTests ?? []).map((t) => (
+                  <li key={t.id} className="flex items-center justify-between gap-3">
+                    <span>
+                      {(t.services as { name: string } | null)?.name ?? t.product ?? 'Test'}
+                      <span className="block text-xs text-[var(--color-muted)]">
+                        {new Date(t.performed_at).toLocaleDateString('en-US', {
+                          timeZone,
+                        })}
+                      </span>
+                    </span>
+                    <Badge
+                      tone={
+                        t.result === 'pass'
+                          ? 'success'
+                          : t.result === 'fail'
+                            ? 'danger'
+                            : 'warning'
+                      }
+                    >
+                      {t.result}
+                    </Badge>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           {/* Analytics */}
           <section className="border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
@@ -451,16 +615,21 @@ export default async function ClientDetailPage({ params }: Props) {
             </dl>
             {analytics && analytics.length > 0 && (
               <div className="border-t border-[var(--color-border)] pt-4">
-                <h4 className="label-caps mb-3 text-xs text-[var(--color-muted)]">Recent Activity</h4>
+                <h4 className="label-caps mb-3 text-xs text-[var(--color-muted)]">
+                  Recent Activity
+                </h4>
                 <ul className="max-h-48 space-y-2 overflow-y-auto text-xs">
                   {analytics.slice(0, 15).map((event, i) => (
                     <li key={i} className="flex items-center gap-2 text-[var(--color-muted)]">
                       <Activity className="h-3 w-3 shrink-0" />
                       <span className="min-w-0 flex-1 truncate">
-                        {event.event === 'pageview' ? `Viewed ${event.path}` : event.event.replace(/_/g, ' ')}
+                        {event.event === 'pageview'
+                          ? `Viewed ${event.path}`
+                          : event.event.replace(/_/g, ' ')}
                       </span>
                       <span className="shrink-0 text-[10px]">
                         {new Date(event.created_at).toLocaleDateString('en-US', {
+                          timeZone,
                           month: 'short',
                           day: 'numeric',
                         })}
@@ -471,30 +640,6 @@ export default async function ClientDetailPage({ params }: Props) {
               </div>
             )}
           </section>
-          </section>
-
-          {(patchTests?.length ?? 0) > 0 && (
-            <section className="border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
-              <h3 className="label-caps mb-5 text-[var(--color-accent)]">Patch tests</h3>
-              <ul className="space-y-2.5 text-sm">
-                {(patchTests ?? []).map((t) => (
-                  <li key={t.id} className="flex items-center justify-between gap-3">
-                    <span>
-                      {(t.services as { name: string } | null)?.name ?? t.product ?? 'Test'}
-                      <span className="block text-xs text-[var(--color-muted)]">
-                        {new Date(t.performed_at).toLocaleDateString()}
-                      </span>
-                    </span>
-                    <Badge
-                      tone={t.result === 'pass' ? 'success' : t.result === 'fail' ? 'danger' : 'warning'}
-                    >
-                      {t.result}
-                    </Badge>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
         </aside>
       </div>
     </div>
@@ -506,6 +651,21 @@ function Row({ label, value }: { label: string; value: string }) {
     <div className="flex justify-between gap-4">
       <dt className="text-[var(--color-muted)]">{label}</dt>
       <dd className="text-right">{value}</dd>
+    </div>
+  )
+}
+
+function Stat({ label, value, tone }: { label: string; value: string; tone?: 'warning' }) {
+  return (
+    <div>
+      <dt className="label-caps text-[var(--color-muted)]">{label}</dt>
+      <dd
+        className={`mt-1 text-lg tabular-nums ${
+          tone === 'warning' ? 'text-amber-700 dark:text-amber-400' : ''
+        }`}
+      >
+        {value}
+      </dd>
     </div>
   )
 }

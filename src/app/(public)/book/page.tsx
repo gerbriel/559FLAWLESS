@@ -3,6 +3,12 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { Container, Section } from '@/components/ui/section'
 import { BookingFlow, type BookableService, type BookableProvider } from '@/components/booking/BookingFlow'
+import {
+  LocationBookingBar,
+  LocationBookingStep,
+  bookableAtLocation,
+  resolveBookingLocation,
+} from '@/components/layout/LocationBooking'
 
 export const dynamic = 'force-dynamic'
 
@@ -12,12 +18,16 @@ export const metadata: Metadata = {
 }
 
 interface Props {
-  searchParams: Promise<{ service?: string }>
+  searchParams: Promise<{ service?: string; location?: string }>
 }
 
 export default async function BookPage({ searchParams }: Props) {
-  const { service: serviceSlug } = await searchParams
+  const { service: serviceSlug, location: locationSlug } = await searchParams
   const supabase = await createClient()
+
+  // Which studio. With one location this resolves to `single` without a second
+  // query and nothing below changes — no step, no bar, no filtering.
+  const locationScope = await resolveBookingLocation(locationSlug)
 
   const {
     data: { user },
@@ -129,6 +139,14 @@ export default async function BookPage({ searchParams }: Props) {
     service_ids: servicesByProvider.get(p.id) ?? [],
   }))
 
+  // A chosen studio narrows the menu to what that room offers and the list to
+  // the people who work there. Both are null for a single-location studio, so
+  // this is two no-op filters and no extra round trip.
+  const { serviceIds: offeredHere, providerIds: worksHere } =
+    await bookableAtLocation(locationScope)
+  const scopedServices = offeredHere ? services.filter((s) => offeredHere.has(s.id)) : services
+  const scopedProviders = worksHere ? providers.filter((p) => worksHere.has(p.id)) : providers
+
   const profile = profileRes?.data as
     | {
         role: string
@@ -143,7 +161,12 @@ export default async function BookPage({ searchParams }: Props) {
   // Booking requires an account. The studio holds treatment history, consent
   // signatures and health answers against a person, and a guest booking has
   // nowhere to put any of it — the record would start over every visit.
-  const bookingUrl = `/book${serviceSlug ? `?service=${encodeURIComponent(serviceSlug)}` : ''}`
+  // The chosen studio rides along, so signing in does not drop them back to the
+  // location step they just completed.
+  const bookingParams = new URLSearchParams()
+  if (locationSlug) bookingParams.set('location', locationSlug)
+  if (serviceSlug) bookingParams.set('service', serviceSlug)
+  const bookingUrl = `/book${bookingParams.size ? `?${bookingParams}` : ''}`
   if (!user) {
     redirect(`/login?next=${encodeURIComponent(bookingUrl)}`)
   }
@@ -169,18 +192,29 @@ export default async function BookPage({ searchParams }: Props) {
           </p>
         </div>
 
-        {services.length === 0 || providers.length === 0 ? (
+        {/* Only ever rendered when a second studio is open and none is chosen. */}
+        {locationScope.mode === 'choose' && (
+          <LocationBookingStep locations={locationScope.locations} serviceSlug={serviceSlug} />
+        )}
+
+        {locationScope.mode === 'selected' && (
+          <LocationBookingBar location={locationScope.location} serviceSlug={serviceSlug} />
+        )}
+
+        {locationScope.mode === 'choose' ? null : scopedServices.length === 0 ||
+          scopedProviders.length === 0 ? (
           <div className="border border-[var(--color-border)] bg-[var(--color-surface)] p-10 text-center">
             <p className="display text-2xl">Online booking is not open yet.</p>
             <p className="mt-3 text-sm text-[var(--color-muted)]">
-              Once a provider sets their schedule and marks themselves bookable, times
-              will appear here. In the meantime, please get in touch.
+              {locationScope.mode === 'selected'
+                ? 'Nothing is bookable online at this location yet. Please pick another studio, or get in touch and we will find you a time.'
+                : 'Once a provider sets their schedule and marks themselves bookable, times will appear here. In the meantime, please get in touch.'}
             </p>
           </div>
         ) : (
           <BookingFlow
-            services={services}
-            providers={providers}
+            services={scopedServices}
+            providers={scopedProviders}
             initialServiceSlug={serviceSlug}
             // Everything the profile already holds, so the details step can ask
             // for what is missing and nothing else — and write back whatever

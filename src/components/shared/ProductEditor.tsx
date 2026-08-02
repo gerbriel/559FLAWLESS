@@ -7,6 +7,7 @@ import { X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Field, Input, Select } from '@/components/ui/field'
+import { BarcodeField } from './BarcodeField'
 import type { StockReason } from '@/types/database'
 
 const REASONS: { value: StockReason; label: string }[] = [
@@ -254,6 +255,10 @@ export function ProductEditor({ product }: { product: EditableProduct }) {
             shipped. That price is theirs and is not shown here.
           </p>
         )}
+      </div>
+
+      <div className="space-y-3 border-t border-[var(--color-border)] pt-5">
+        <BarcodeField productId={product.id} productName={product.name} />
       </div>
 
       <div className="space-y-3 border-t border-[var(--color-border)] pt-5">

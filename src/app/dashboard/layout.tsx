@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { DashboardNav } from '@/components/layout/DashboardNav'
 import { SignOutButton } from '@/components/layout/SignOutButton'
 import { NotificationBell } from '@/components/layout/NotificationBell'
+import { LocationSwitcher } from '@/components/layout/LocationSwitcher'
 import { isStaff, ROLE_LABELS, type UserRole } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
@@ -63,6 +64,8 @@ export default async function DashboardLayout({
           </div>
 
           <div className="flex items-center gap-5">
+            {/* Renders nothing at all while there is one studio. */}
+            <LocationSwitcher />
             <NotificationBell count={unreadNotifications ?? 0} />
             <Link
               href="/"

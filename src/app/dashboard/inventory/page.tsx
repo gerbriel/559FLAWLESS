@@ -4,13 +4,16 @@ import { AlertTriangle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
 import { ProductEditor } from '@/components/shared/ProductEditor'
+import { BarcodeField } from '@/components/shared/BarcodeField'
+import { BarcodeInventoryScan } from '@/components/shared/BarcodeInventoryScan'
 import { formatMoney } from '@/lib/utils'
 import { isManager, type UserRole } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
 
 interface Props {
-  searchParams: Promise<{ filter?: string }>
+  /** `focus` is set by the scanner when the code it read is outside the filter. */
+  searchParams: Promise<{ filter?: string; focus?: string }>
 }
 
 const FILTERS = [
@@ -21,8 +24,9 @@ const FILTERS = [
 ]
 
 export default async function InventoryPage({ searchParams }: Props) {
-  const { filter } = await searchParams
+  const { filter, focus } = await searchParams
   const active = filter ?? 'all'
+  const focusId = /^\d+$/.test(focus ?? '') ? Number(focus) : null
 
   const supabase = await createClient()
   const {
@@ -43,7 +47,7 @@ export default async function InventoryPage({ searchParams }: Props) {
 
   let query = supabase
     .from('products')
-    .select('id, sku, name, unit, stock_qty, low_stock_threshold, price_cents, cost_cents, is_retail, is_professional, is_active, external_url, brands(name)')
+    .select('id, sku, barcode, name, unit, stock_qty, low_stock_threshold, price_cents, cost_cents, is_retail, is_professional, is_active, external_url, brands(name)')
     .eq('is_active', true)
     .is('archived_at', null)
     .order('name')
@@ -92,6 +96,18 @@ export default async function InventoryPage({ searchParams }: Props) {
         ))}
       </nav>
 
+      <BarcodeInventoryScan
+        focusId={focusId}
+        rows={rows.map((p) => ({
+          id: p.id,
+          name: p.name,
+          barcode: p.barcode,
+          sku: p.sku,
+          stock_qty: Number(p.stock_qty),
+          unit: p.unit,
+        }))}
+      />
+
       {rows.length === 0 ? (
         <p className="mt-10 border border-[var(--color-border)] bg-[var(--color-surface)] p-8 text-sm text-[var(--color-muted)]">
           Nothing here yet.
@@ -127,13 +143,22 @@ export default async function InventoryPage({ searchParams }: Props) {
                 const low = Number(p.stock_qty) <= Number(p.low_stock_threshold)
 
                 return (
-                  <tr key={p.id} className="border-b border-[var(--color-border)]">
+                  <tr
+                    key={p.id}
+                    data-product-row={p.id}
+                    className="border-b border-[var(--color-border)] transition-colors"
+                  >
                     <td className="px-3 py-3">
                       <span className="block">{p.name}</span>
                       <span className="text-xs text-[var(--color-muted)]">
                         {brand?.name ? `${brand.name} · ` : ''}
                         {p.sku}
                       </span>
+                      {p.barcode && (
+                        <span className="block text-xs tabular-nums text-[var(--color-muted)]">
+                          {p.barcode}
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-3">
                       <span className="flex flex-wrap gap-1.5">
@@ -159,20 +184,32 @@ export default async function InventoryPage({ searchParams }: Props) {
                       </td>
                     )}
                     <td className="w-72 px-3 py-3 text-right align-top">
-                      <ProductEditor
-                        product={{
-                          id: p.id,
-                          name: p.name,
-                          unit: p.unit,
-                          stock_qty: Number(p.stock_qty),
-                          low_stock_threshold: Number(p.low_stock_threshold),
-                          is_retail: p.is_retail,
-                          is_professional: p.is_professional,
-                          price_cents: p.price_cents,
-                          cost_cents: p.cost_cents,
-                          external_url: p.external_url,
-                        }}
-                      />
+                      <div data-product-edit>
+                        <ProductEditor
+                          product={{
+                            id: p.id,
+                            name: p.name,
+                            unit: p.unit,
+                            stock_qty: Number(p.stock_qty),
+                            low_stock_threshold: Number(p.low_stock_threshold),
+                            is_retail: p.is_retail,
+                            is_professional: p.is_professional,
+                            price_cents: p.price_cents,
+                            cost_cents: p.cost_cents,
+                            external_url: p.external_url,
+                          }}
+                        />
+                      </div>
+                      {/* Until the barcode field can live inside ProductEditor
+                          itself, it sits directly under it — same cell, same
+                          row, one click from the product it describes. */}
+                      <div className="mt-2">
+                        <BarcodeField
+                          productId={p.id}
+                          productName={p.name}
+                          initialBarcode={p.barcode}
+                        />
+                      </div>
                     </td>
                   </tr>
                 )

@@ -8,8 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "tsx scripts/availability.test.ts && tsx scripts/announcements.test.ts",
-    "check": "npm run typecheck && npm run lint && npm run test",
+    "test": "tsx scripts/availability.test.ts && tsx scripts/scheduling.test.ts && tsx scripts/announcements.test.ts",
+    "check": "node scripts/check-database-types.mjs && npm run typecheck && npm run lint && npm run test",
     "mobile": "node scripts/mobile-audit.mjs",
     "seed:clients": "node scripts/seed-test-clients.mjs"
   },

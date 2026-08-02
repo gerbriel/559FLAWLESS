@@ -82,6 +82,23 @@ export default async function SettingsPage() {
       </section>
 
       <section className="mt-14">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h2 className="display text-2xl">Scheduling</h2>
+            <p className="mt-2 max-w-prose text-sm text-[var(--color-muted)]">
+              Which bookings need a look before they are confirmed, how much idle time to
+              leave between clients, and which services have processing time in the middle.
+            </p>
+          </div>
+          <Link href="/dashboard/settings/scheduling">
+            <Button variant="outline" size="sm">
+              Open
+            </Button>
+          </Link>
+        </div>
+      </section>
+
+      <section className="mt-14">
         <div className="flex items-center justify-between">
           <h2 className="display text-2xl">Staff</h2>
           {userIsAdmin && (

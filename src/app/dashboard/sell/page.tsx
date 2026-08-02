@@ -28,7 +28,7 @@ export default async function SellPage() {
   const [{ data: products }, { data: clients }, { data: rateSetting }] = await Promise.all([
     supabase
       .from('products')
-      .select('id, name, sku, price_cents, stock_qty, unit, external_url, brands(name)')
+      .select('id, name, sku, barcode, price_cents, stock_qty, unit, external_url, brands(name)')
       .eq('is_active', true)
       .eq('is_retail', true)
       .is('archived_at', null)
@@ -56,6 +56,8 @@ export default async function SellPage() {
     id: p.id,
     name: p.name,
     sku: p.sku,
+    // Loaded up front so the common scan never touches the network.
+    barcode: p.barcode,
     price_cents: p.price_cents,
     stock_qty: Number(p.stock_qty),
     unit: p.unit,

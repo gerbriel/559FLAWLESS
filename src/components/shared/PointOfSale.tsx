@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { toast } from 'sonner'
@@ -8,12 +8,24 @@ import { Search, Plus, Minus, Trash2, ExternalLink, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Field, Input, Select } from '@/components/ui/field'
+import { createClient } from '@/lib/supabase/client'
 import { formatMoney } from '@/lib/utils'
+import {
+  barcodeVariants,
+  matchProductByBarcode,
+  resolveScan,
+  type ScannableProduct,
+  type ScanResolution,
+} from '@/types/barcode'
+import { BarcodeScanHint, useBarcodeScanner } from './BarcodeScanner'
+import { BarcodeCameraScanner } from './BarcodeCameraScanner'
 
 export interface SellableProduct {
   id: number
   name: string
   sku: string | null
+  /** The code on the packaging. Optional so an older page keeps compiling. */
+  barcode?: string | null
   price_cents: number
   stock_qty: number
   unit: string
@@ -70,6 +82,8 @@ export function PointOfSale({
   const [notes, setNotes] = useState('')
   const [busy, setBusy] = useState(false)
   const [receipt, setReceipt] = useState<Receipt | null>(null)
+  const [lastScan, setLastScan] = useState<string | null>(null)
+  const [camera, setCamera] = useState(false)
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -78,6 +92,7 @@ export function PointOfSale({
       (p) =>
         p.name.toLowerCase().includes(q) ||
         p.sku?.toLowerCase().includes(q) ||
+        p.barcode?.includes(q) ||
         p.brand?.toLowerCase().includes(q)
     )
   }, [products, search])
@@ -99,6 +114,116 @@ export function PointOfSale({
       return [...cur, { product, qty: 1 }]
     })
   }
+
+  /**
+   * What a scan does at the till.
+   *
+   * Every refusal here is one the sale endpoint would give anyway — no price,
+   * no stock, not sold to clients — said at the moment the bottle is scanned
+   * rather than after the customer has been told a total. The endpoint still
+   * re-checks all of it; this is the courtesy, not the guard.
+   */
+  const applyScan = useCallback((result: ScanResolution) => {
+    switch (result.kind) {
+      case 'unknown':
+        toast.error(`Nothing on file for ${result.code}.`, {
+          description: 'Save that barcode against the product under Inventory first.',
+        })
+        return
+      case 'not_for_sale':
+        toast.error(`${result.product.name} is back-bar stock, not something clients buy.`)
+        return
+      case 'unpriced':
+        toast.error(`${result.product.name} has no price yet.`, {
+          description: 'Set one under Inventory before selling it.',
+        })
+        return
+      case 'out_of_stock':
+        toast.error(`No ${result.product.name} left on the shelf.`, {
+          description: result.product.external_url
+            ? 'It can be shipped from the Rhonda Allison store instead.'
+            : undefined,
+        })
+        return
+      case 'match': {
+        const p = result.product
+        // Checked here rather than left to `add`, which refuses inside a state
+        // updater — scanning a fourth of three would otherwise show the refusal
+        // and a cheerful confirmation side by side.
+        const inCart = lines.find((l) => l.product.id === p.id)?.qty ?? 0
+        if (inCart >= p.stock_qty) {
+          toast.error(
+            `Only ${p.stock_qty} ${p.unit} of ${p.name} on the shelf, and it is all in this sale.`
+          )
+          return
+        }
+        add({
+          id: p.id,
+          name: p.name,
+          sku: p.sku,
+          barcode: p.barcode,
+          price_cents: p.price_cents,
+          stock_qty: p.stock_qty,
+          unit: p.unit,
+          external_url: p.external_url,
+          brand: products.find((row) => row.id === p.id)?.brand ?? null,
+        })
+        toast.success(`${p.name} — ${formatMoney(p.price_cents)}`)
+      }
+    }
+  }, [products, lines])
+
+  const handleScan = useCallback(
+    async (code: string) => {
+      setLastScan(code)
+
+      // The till already holds every active retail product, so the common case
+      // never touches the network — and keeps working if it is down.
+      const local = matchProductByBarcode(code, products)
+      if (local) {
+        applyScan(
+          resolveScan(code, [
+            { ...local, barcode: local.barcode ?? null, is_active: true, is_retail: true },
+          ])
+        )
+        return
+      }
+
+      // Not in the retail list. It may still be on file, and "that one is back
+      // bar" is a far more useful answer than "unknown barcode".
+      const { data, error } = await createClient()
+        .from('products')
+        .select('id, name, sku, barcode, price_cents, stock_qty, unit, external_url, is_active, is_retail, archived_at')
+        .in('barcode', barcodeVariants(code))
+        .limit(1)
+
+      if (error) {
+        toast.error('Could not look that barcode up.')
+        return
+      }
+
+      const row = (data ?? [])[0] as
+        | (ScannableProduct & { archived_at: string | null })
+        | undefined
+
+      if (!row || row.archived_at) {
+        applyScan({ kind: 'unknown', code })
+        return
+      }
+
+      applyScan(resolveScan(code, [{ ...row, stock_qty: Number(row.stock_qty) }]))
+    },
+    [products, applyScan]
+  )
+
+  useBarcodeScanner({
+    // The receipt screen is a full stop; a scan there should not quietly begin
+    // a new sale behind it.
+    enabled: !receipt && !camera,
+    onScan: (scan) => {
+      void handleScan(scan.code)
+    },
+  })
 
   function setQty(productId: number, qty: number) {
     setLines((cur) =>
@@ -204,6 +329,25 @@ export function PointOfSale({
   return (
     <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_22rem]">
       <div>
+        <BarcodeScanHint
+          className="mb-5"
+          label="Scan a bottle to add it to the sale."
+          lastCode={lastScan}
+          onOpenCamera={() => setCamera(true)}
+        />
+
+        {camera && (
+          <BarcodeCameraScanner
+            title="Scan to add"
+            onClose={() => setCamera(false)}
+            onDetect={(code) => {
+              // Stay open: at a counter you are usually ringing up more than one.
+              void handleScan(code)
+              return false
+            }}
+          />
+        )}
+
         <label className="relative block">
           <span className="sr-only">Search products</span>
           <Search
@@ -214,7 +358,7 @@ export function PointOfSale({
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by name, brand or SKU"
+            placeholder="Search by name, brand, SKU or barcode"
             className="w-full border border-[var(--color-border)] bg-[var(--color-surface)] py-3 pl-10 pr-3 text-sm outline-none focus:border-[var(--color-accent)]"
           />
         </label>

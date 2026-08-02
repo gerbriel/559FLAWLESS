@@ -9,6 +9,53 @@
  * Until then this file is the contract the app compiles against.
  */
 
+import type {
+  Resource,
+  ServiceResource,
+  AppointmentResource,
+  WaitlistEntry,
+  WaitlistServiceLink,
+  WaitlistSettings,
+  ResourceKind,
+  WaitlistStatus,
+} from '@/types/resources'
+import type {
+  Expense,
+  ExpenseCategory,
+  ExpenseCategoryTotal,
+  ExpenseCadence,
+  ProfitSummary,
+  RecurringExpense,
+} from '@/types/expenses'
+import type {
+  StaffProfile,
+  StaffCredential,
+  StaffEmployment,
+} from '@/types/team'
+import type {
+  NotificationTemplate,
+  NotificationSchedule,
+  NotificationQueueItem,
+} from '@/types/notifications'
+import type {
+  BreakType,
+  TimeEntry,
+  TimeEntryBreak,
+  TimeEntryEdit,
+  TimesheetEntry,
+  ReminderCandidate,
+} from '@/types/timetracking'
+import type {
+  SchedulingPolicy,
+  ProviderSchedulingSettings,
+} from '@/types/scheduling'
+import type {
+  ClientBan,
+  ClientTimelineEntry,
+  AppointmentPhotoPrompt,
+  ClientPhotoStatus,
+} from '@/types/clientprofile'
+
 export type Json =
   | string
   | number
@@ -53,6 +100,7 @@ export type StockReason =
   | 'returned'
   | 'count_correction'
 export type NotificationType =
+  | 'waitlist_offer'
   | 'appointment_booked'
   | 'appointment_reminder'
   | 'appointment_changed'
@@ -140,6 +188,14 @@ export type Service = {
   min_age: number
   requires_consultation: boolean
   requires_intake: boolean
+  /** 036: dead time mid-service when the provider is free but the room is not. */
+  processing_start_minutes: number
+  processing_minutes: number
+  /** 036: route this service's bookings to the approval queue. */
+  requires_booking_approval: boolean
+  /** 039: prompt for before/after photographs on this service. */
+  photo_documentation: boolean
+  photo_followup_days: number
   patch_test_hours: number
   deposit_cents: number
   cancellation_window_hours: number
@@ -165,6 +221,8 @@ export type ServiceAddon = {
 
 export type Room = {
   id: number
+  /** Which studio. Added in 032; defaults to the primary location. */
+  location_id: number
   name: string
   category_ids: number[]
   is_active: boolean
@@ -182,6 +240,8 @@ export type ProviderService = {
 
 export type ProviderSchedule = {
   id: number
+  /** Which studio. Added in 032; defaults to the primary location. */
+  location_id: number
   provider_id: string
   day_of_week: number
   start_time: string
@@ -193,6 +253,8 @@ export type ProviderSchedule = {
 
 export type AvailabilityBlock = {
   id: number
+  /** Which studio. Added in 032; defaults to the primary location. */
+  location_id: number
   provider_id: string
   block_date: string
   start_time: string | null
@@ -206,6 +268,8 @@ export type AvailabilityBlock = {
 
 export type Closure = {
   id: number
+  /** Which studio. Added in 032; defaults to the primary location. */
+  location_id: number
   closure_date: string
   reason: string
   created_at: string
@@ -242,6 +306,52 @@ export type CalendarBusy = {
   summary: string | null
 }
 
+// ── Multi-location, added in 032 ──────────────────────────────
+export type Location = {
+  id: number
+  name: string
+  slug: string
+  address_line1: string | null
+  city: string | null
+  state: string | null
+  postal: string | null
+  /** Authoritative for this site's wall-clock. Never hardcode a zone. */
+  timezone: string
+  phone: string | null
+  email: string | null
+  is_active: boolean
+  sort_order: number
+}
+
+/** Staff work across sites, so this is a link table rather than a column. */
+export type StaffLocation = {
+  profile_id: string
+  location_id: number
+  is_primary: boolean
+  created_at: string
+}
+
+export type ServiceLocation = {
+  service_id: number
+  location_id: number
+  /** Integer cents, or null to charge the catalogue price. */
+  price_cents_override: number | null
+  is_active: boolean
+}
+
+/**
+ * Stock per site. `products.stock_qty` is a trigger-maintained mirror of the
+ * PRIMARY location's row — not a roll-up, so a till at a second site reads zero
+ * and refuses rather than selling stock sitting in another building.
+ */
+export type ProductStock = {
+  product_id: number
+  location_id: number
+  qty: number
+  low_stock_threshold: number | null
+  updated_at: string
+}
+
 export type BookingSettings = {
   id: number
   min_lead_minutes: number
@@ -256,6 +366,8 @@ export type BookingSettings = {
 
 export type Appointment = {
   id: string
+  /** Which studio. Added in 032; defaults to the primary location. */
+  location_id: number
   provider_id: string
   room_id: number | null
   client_id: string | null
@@ -296,6 +408,20 @@ export type Appointment = {
    */
   intake_completed_at: string | null
   intake_reminder_sent_at: string | null
+
+  // ── Scheduling mechanics, added in 036 ──────────────────────
+  /** Minute offsets of the processing gaps, as an int4multirange literal. */
+  processing_windows: string
+  /**
+   * `slot` minus each processing gap — the provider's ACTIVE time, and what
+   * the exclusion constraint now guards. Maintained by trigger; never write it.
+   */
+  provider_slot: string
+  /** Staff-only escape hatch. A CHECK forbids it on an online booking. */
+  allows_overlap: boolean
+  overlap_reason: string | null
+  overlap_authorized_by: string | null
+  approval_reason: string | null
 
   created_at: string
   updated_at: string
@@ -481,6 +607,12 @@ export type Notification = {
 export type Product = {
   id: number
   sku: string
+  /**
+   * The GTIN printed on the packaging (UPC-A / EAN-13 / EAN-8 / ITF-14),
+   * digits only. Distinct from `sku`, which is the studio's own code.
+   * Added in 040.
+   */
+  barcode: string | null
   name: string
   slug: string
   category_id: number | null
@@ -522,6 +654,8 @@ export type ProductCategory = {
 
 export type InventoryLog = {
   id: number
+  /** Where the movement happened. Added in 032. */
+  location_id: number
   product_id: number
   change_qty: number
   balance_after: number | null
@@ -554,6 +688,8 @@ export type InventoryChangeRequest = {
 
 export type Order = {
   id: number
+  /** Which studio. Added in 032; defaults to the primary location. */
+  location_id: number
   order_number: string | null
   client_id: string | null
   guest_email: string | null
@@ -784,6 +920,8 @@ export type SiteContent = {
 }
 
 export type BusinessHours = {
+  /** Part of the primary key since 032 — hours are per studio. */
+  location_id: number
   day_of_week: number
   opens_at: string | null
   closes_at: string | null
@@ -886,6 +1024,11 @@ export type AppointmentEvent = {
 export type ClientTag = {
   id: number
   name: string
+  /** 039: what the tag means, shown to staff on the client record. */
+  description: string | null
+  sort_order: number
+  /** 039: surfaces prominently — "allergic to lidocaine", not "likes tea". */
+  is_alert: boolean
   color: string
   created_at: string
 }
@@ -1060,6 +1203,88 @@ export type Invitation = {
   created_at: string
   updated_at: string
 }
+
+// ── Permissions and commissions, added in 034 ────────────────
+export type Permission = {
+  key: string
+  label: string
+  description: string
+  category: string
+  /** Admin-only to grant, whatever else the studio configures. */
+  is_sensitive: boolean
+  sort_order: number
+}
+
+export type RolePermission = {
+  role: UserRole
+  permission: string
+}
+
+export type StaffPermission = {
+  id: number
+  profile_id: string
+  permission: string
+  /** true grants what the role withholds; false takes away what it gives. */
+  granted: boolean
+  reason: string | null
+  /** Null only once that account is gone; required on every write. */
+  granted_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** Rates are basis points so nothing here is ever a float: 4000 is 40.00%. */
+export type CommissionPlan = {
+  id: number
+  name: string
+  description: string | null
+  service_rate_bp: number
+  retail_rate_bp: number
+  service_flat_cents: number
+  is_active: boolean
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type CommissionCategoryRate = {
+  plan_id: number
+  category_id: number
+  rate_bp: number | null
+  flat_cents: number | null
+}
+
+export type CommissionServiceRate = {
+  plan_id: number
+  service_id: number
+  rate_bp: number | null
+  flat_cents: number | null
+}
+
+export type CommissionTier = {
+  id: number
+  plan_id: number
+  applies_to: 'service' | 'retail'
+  min_period_cents: number
+  rate_bp: number
+}
+
+export type StaffCommissionPlan = {
+  id: number
+  profile_id: string
+  plan_id: number
+  location_id: number
+  /** Wall-clock dates in the location's zone — 'YYYY-MM-DD'. */
+  effective_from: string
+  effective_to: string | null
+  note: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+
+      // ── Added in 034 ────────────────────────────────────────
 
 // ── Supabase client contract ──────────────────────────────────
 /**
@@ -1360,6 +1585,240 @@ export type Database = {
       >
       broadcasts: TableDef<Broadcast, [ToProfile<'broadcasts', 'sent_by'>]>
 
+      // ── Multi-location, added in 032 ────────────────────────
+      locations: TableDef<Location>
+      // ── Resources and waitlist, added in 037 ────────────────
+      resources: TableDef<
+        Resource,
+        [
+          Rel<'resources_location_id_fkey', ['location_id'], 'locations', ['id']>,
+          Rel<'resources_room_id_fkey', ['room_id'], 'rooms', ['id']>,
+        ]
+      >
+      service_resources: TableDef<
+        ServiceResource,
+        [
+          Rel<'service_resources_service_id_fkey', ['service_id'], 'services', ['id']>,
+          Rel<'service_resources_resource_id_fkey', ['resource_id'], 'resources', ['id']>,
+        ]
+      >
+      appointment_resources: TableDef<
+        AppointmentResource,
+        [
+          Rel<'appointment_resources_appointment_id_fkey', ['appointment_id'], 'appointments', ['id']>,
+          Rel<'appointment_resources_resource_id_fkey', ['resource_id'], 'resources', ['id']>,
+        ]
+      >
+      waitlist_settings: TableDef<WaitlistSettings>
+      waitlist_entries: TableDef<
+        WaitlistEntry,
+        [
+          Rel<'waitlist_entries_location_id_fkey', ['location_id'], 'locations', ['id']>,
+          ToProfile<'waitlist_entries', 'client_id'>,
+          ToProfile<'waitlist_entries', 'preferred_provider_id'>,
+          Rel<'waitlist_entries_last_offer_appointment_id_fkey', ['last_offer_appointment_id'], 'appointments', ['id']>,
+          Rel<'waitlist_entries_converted_appointment_id_fkey', ['converted_appointment_id'], 'appointments', ['id']>,
+        ]
+      >
+      waitlist_services: TableDef<
+        WaitlistServiceLink,
+        [
+          Rel<'waitlist_services_entry_id_fkey', ['entry_id'], 'waitlist_entries', ['id']>,
+          Rel<'waitlist_services_service_id_fkey', ['service_id'], 'services', ['id']>,
+        ]
+      >
+      permissions: TableDef<Permission>
+      role_permissions: TableDef<
+        RolePermission,
+        [Rel<'role_permissions_permission_fkey', ['permission'], 'permissions', ['key']>]
+      >
+      staff_permissions: TableDef<
+        StaffPermission,
+        [
+          ToProfile<'staff_permissions', 'profile_id'>,
+          ToProfile<'staff_permissions', 'granted_by'>,
+          Rel<'staff_permissions_permission_fkey', ['permission'], 'permissions', ['key']>,
+        ]
+      >
+      commission_plans: TableDef<CommissionPlan, [ToProfile<'commission_plans', 'created_by'>]>
+      commission_category_rates: TableDef<
+        CommissionCategoryRate,
+        [
+          Rel<'commission_category_rates_plan_id_fkey', ['plan_id'], 'commission_plans', ['id']>,
+          Rel<'commission_category_rates_category_id_fkey', ['category_id'], 'service_categories', ['id']>,
+        ]
+      >
+      commission_service_rates: TableDef<
+        CommissionServiceRate,
+        [
+          Rel<'commission_service_rates_plan_id_fkey', ['plan_id'], 'commission_plans', ['id']>,
+          Rel<'commission_service_rates_service_id_fkey', ['service_id'], 'services', ['id']>,
+        ]
+      >
+      commission_tiers: TableDef<
+        CommissionTier,
+        [Rel<'commission_tiers_plan_id_fkey', ['plan_id'], 'commission_plans', ['id']>]
+      >
+      // Two FKs to profiles (profile_id, created_by), so an embed has to name
+      // the constraint: profiles!staff_commission_plans_profile_id_fkey(...).
+      staff_commission_plans: TableDef<
+        StaffCommissionPlan,
+        [
+          ToProfile<'staff_commission_plans', 'profile_id'>,
+          ToProfile<'staff_commission_plans', 'created_by'>,
+          Rel<'staff_commission_plans_plan_id_fkey', ['plan_id'], 'commission_plans', ['id']>,
+          Rel<'staff_commission_plans_location_id_fkey', ['location_id'], 'locations', ['id']>,
+        ]
+      >
+      /**
+       * Does the caller hold this permission? The per-person override wins,
+       * then the role default, then no. An admin holds everything.
+       */
+      staff_locations: TableDef<
+        StaffLocation,
+        [
+          ToProfile<'staff_locations', 'profile_id'>,
+          Rel<'staff_locations_location_id_fkey', ['location_id'], 'locations', ['id']>,
+        ]
+      >
+      service_locations: TableDef<
+        ServiceLocation,
+        [
+          Rel<'service_locations_service_id_fkey', ['service_id'], 'services', ['id']>,
+          Rel<'service_locations_location_id_fkey', ['location_id'], 'locations', ['id']>,
+        ]
+      >
+      product_stock: TableDef<
+        ProductStock,
+        [
+          Rel<'product_stock_product_id_fkey', ['product_id'], 'products', ['id']>,
+          Rel<'product_stock_location_id_fkey', ['location_id'], 'locations', ['id']>,
+        ]
+      >
+
+      // ── Notification scheduling, added in 038 ───────────────
+      notification_templates: TableDef<
+        NotificationTemplate,
+        [
+          Rel<'notification_templates_location_id_fkey', ['location_id'], 'locations', ['id']>,
+          ToProfile<'notification_templates', 'updated_by'>,
+        ]
+      >
+      notification_schedules: TableDef<
+        NotificationSchedule,
+        [
+          Rel<'notification_schedules_location_id_fkey', ['location_id'], 'locations', ['id']>,
+          Rel<'notification_schedules_service_id_fkey', ['service_id'], 'services', ['id']>,
+          Rel<'notification_schedules_category_id_fkey', ['category_id'], 'service_categories', ['id']>,
+        ]
+      >
+      notification_queue: TableDef<
+        NotificationQueueItem,
+        [
+          Rel<'notification_queue_location_id_fkey', ['location_id'], 'locations', ['id']>,
+          Rel<'notification_queue_schedule_id_fkey', ['schedule_id'], 'notification_schedules', ['id']>,
+          Rel<'notification_queue_template_id_fkey', ['template_id'], 'notification_templates', ['id']>,
+          ToProfile<'notification_queue', 'recipient_id'>,
+          Rel<'notification_queue_appointment_id_fkey', ['appointment_id'], 'appointments', ['id']>,
+          Rel<'notification_queue_notification_id_fkey', ['notification_id'], 'notifications', ['id']>,
+          Rel<'notification_queue_thread_id_fkey', ['thread_id'], 'message_threads', ['id']>,
+        ]
+      >
+
+      // ── Time tracking, added in 035 ─────────────────────────
+      break_types: TableDef<
+        BreakType,
+        [Rel<'break_types_location_id_fkey', ['location_id'], 'locations', ['id']>]
+      >
+      time_entries: TableDef<
+        TimeEntry,
+        [
+          ToProfile<'time_entries', 'staff_id'>,
+          Rel<'time_entries_location_id_fkey', ['location_id'], 'locations', ['id']>,
+          Rel<'time_entries_clock_out_location_id_fkey', ['clock_out_location_id'], 'locations', ['id']>,
+        ]
+      >
+      time_entry_breaks: TableDef<
+        TimeEntryBreak,
+        [
+          Rel<'time_entry_breaks_time_entry_id_fkey', ['time_entry_id'], 'time_entries', ['id']>,
+          Rel<'time_entry_breaks_break_type_id_fkey', ['break_type_id'], 'break_types', ['id']>,
+        ]
+      >
+      time_entry_edits: TableDef<
+        TimeEntryEdit,
+        [
+          Rel<'time_entry_edits_time_entry_id_fkey', ['time_entry_id'], 'time_entries', ['id']>,
+          ToProfile<'time_entry_edits', 'staff_id'>,
+          ToProfile<'time_entry_edits', 'edited_by'>,
+        ]
+      >
+
+      // ── Scheduling mechanics, added in 036 ──────────────────
+      scheduling_policies: TableDef<
+        SchedulingPolicy,
+        [Rel<'scheduling_policies_location_id_fkey', ['location_id'], 'locations', ['id']>]
+      >
+      provider_scheduling_settings: TableDef<
+        ProviderSchedulingSettings,
+        [
+          ToProfile<'provider_scheduling_settings', 'provider_id'>,
+          Rel<'provider_scheduling_settings_location_id_fkey', ['location_id'], 'locations', ['id']>,
+        ]
+      >
+
+      // ── Client bans, added in 039 ───────────────────────────
+      client_bans: TableDef<
+        ClientBan,
+        [
+          ToProfile<'client_bans', 'client_id'>,
+          ToProfile<'client_bans', 'banned_by'>,
+          ToProfile<'client_bans', 'lifted_by'>,
+          Rel<'client_bans_location_id_fkey', ['location_id'], 'locations', ['id']>,
+        ]
+      >
+
+      // ── Team profiles, added in 041 ─────────────────────────
+      // Three tables, not one wide one: RLS is ROW-level, so once a role can
+      // read a row it reads every column. "The internet may see the bio but not
+      // the emergency contact" is only expressible by splitting them.
+      staff_profiles: TableDef<StaffProfile, [ToProfile<'staff_profiles', 'profile_id'>]>
+      staff_credentials: TableDef<
+        StaffCredential,
+        [
+          ToProfile<'staff_credentials', 'profile_id'>,
+          ToProfile<'staff_credentials', 'verified_by'>,
+        ]
+      >
+      staff_employment: TableDef<
+        StaffEmployment,
+        [
+          ToProfile<'staff_employment', 'profile_id'>,
+          ToProfile<'staff_employment', 'updated_by'>,
+        ]
+      >
+
+      // ── Expenses, added in 033 ──────────────────────────────
+      expense_categories: TableDef<ExpenseCategory>
+      expenses: TableDef<
+        Expense,
+        [
+          Rel<'expenses_category_id_fkey', ['category_id'], 'expense_categories', ['id']>,
+          Rel<'expenses_vendor_id_fkey', ['vendor_id'], 'vendors', ['id']>,
+          Rel<'expenses_purchase_order_id_fkey', ['purchase_order_id'], 'purchase_orders', ['id']>,
+          Rel<'expenses_recurring_id_fkey', ['recurring_id'], 'recurring_expenses', ['id']>,
+          ToProfile<'expenses', 'recorded_by'>,
+        ]
+      >
+      recurring_expenses: TableDef<
+        RecurringExpense,
+        [
+          Rel<'recurring_expenses_category_id_fkey', ['category_id'], 'expense_categories', ['id']>,
+          Rel<'recurring_expenses_vendor_id_fkey', ['vendor_id'], 'vendors', ['id']>,
+          ToProfile<'recurring_expenses', 'created_by'>,
+        ]
+      >
+
       // ── Added in 030 ────────────────────────────────────────
       // No Relationships on deleted_accounts: it carries a bare uuid rather
       // than a foreign key, precisely so it survives the row it names.
@@ -1376,10 +1835,15 @@ export type Database = {
         ]
       >
     }
-    // `{ [_ in never]: never }`, not `Record<string, never>` — the latter is an
-    // index signature that matches EVERY key, so the client's relation lookup
-    // resolves each table to `never` and every query result collapses.
-    Views: { [_ in never]: never }
+    // Read-only projections. Insert/Update are deliberately absent — a view
+    // that accepted writes would bypass the RLS on the tables beneath it.
+    // Read-only projections, added in 039. Insert/Update are deliberately
+    // absent: a writable view would bypass the RLS on the tables beneath it.
+    Views: {
+      client_timeline: { Row: ClientTimelineEntry; Relationships: [] }
+      appointment_photo_prompts: { Row: AppointmentPhotoPrompt; Relationships: [] }
+      client_photo_status: { Row: ClientPhotoStatus; Relationships: [] }
+    }
     Functions: {
       /** The single entry point for changing stock. See 007_inventory.sql. */
       adjust_stock: {
@@ -1389,6 +1853,8 @@ export type Database = {
           p_reason: StockReason
           p_note?: string | null
           p_appointment?: string | null
+          /** Added in 032. Omitted = the primary location. */
+          p_location?: number | null
         }
         Returns: number
       }
@@ -1473,6 +1939,285 @@ export type Database = {
           click_rate: number
         }[]
       }
+      // ── Multi-location, added in 032 ────────────────────────
+      default_location_id: { Args: Record<PropertyKey, never>; Returns: number }
+      works_at: { Args: { p_location: number }; Returns: boolean }
+      staff_location_ids: { Args: Record<PropertyKey, never>; Returns: number[] }
+      my_location_id: { Args: Record<PropertyKey, never>; Returns: number }
+      service_price_at: {
+        Args: { p_service: number; p_location?: number | null }
+        Returns: number
+      }
+      stock_on_hand: {
+        Args: { p_product_id: number; p_location?: number | null }
+        Returns: number
+      }
+
+      // ── Notification scheduling, added in 038 ───────────────
+      dispatch_notifications: {
+        Args: {
+          p_now?: string
+          p_horizon_minutes?: number
+          p_lookback_minutes?: number
+          p_limit?: number
+        }
+        Returns: Json
+      }
+      materialise_due_notifications: {
+        Args: { p_now?: string; p_horizon_minutes?: number; p_lookback_minutes?: number }
+        Returns: number
+      }
+      deliver_due_notifications: { Args: { p_now?: string; p_limit?: number }; Returns: Json }
+      preview_notification_template: {
+        Args: { p_title: string; p_body: string; p_link?: string | null; p_vars?: Json | null }
+        Returns: Json
+      }
+      render_notification_template: { Args: { p_template: string; p_vars: Json }; Returns: string }
+      notification_sample_vars: { Args: Record<PropertyKey, never>; Returns: Json }
+      notify_waitlist_opening: {
+        Args: {
+          p_client: string
+          p_entry_id: string
+          p_starts_at: string
+          p_service?: string | null
+          p_location?: number | null
+          p_opened_at?: string
+        }
+        Returns: number
+      }
+      mark_notification_sent: {
+        Args: { p_queue_id: number; p_error?: string | null }
+        Returns: boolean
+      }
+
+      // ── Time tracking, added in 035 ─────────────────────────
+      clock_in: { Args: { p_location_id?: number | null }; Returns: number }
+      clock_out: {
+        Args: { p_location_id?: number | null; p_note?: string | null }
+        Returns: number
+      }
+      start_break: { Args: { p_break_type_id: number }; Returns: number }
+      end_break: { Args: Record<PropertyKey, never>; Returns: number }
+      correct_time_entry: {
+        Args: {
+          p_entry_id: number
+          p_clocked_in: string
+          p_clocked_out: string | null
+          p_reason: string
+          p_location_id?: number | null
+        }
+        Returns: number
+      }
+      timesheet_entries: {
+        Args: { p_from: string; p_to: string; p_staff?: string | null; p_location?: number | null }
+        Returns: TimesheetEntry[]
+      }
+      worked_minutes: {
+        Args: { p_staff: string; p_from: string; p_to: string; p_location?: number | null }
+        Returns: number
+      }
+      timeclock_whole_minutes: { Args: { p_from: string; p_to: string }; Returns: number }
+      time_clock_reminder_candidates: {
+        Args: { p_late_in_minutes?: number; p_late_out_minutes?: number; p_orphan_hours?: number }
+        Returns: ReminderCandidate[]
+      }
+      send_time_clock_reminders: {
+        Args: { p_late_in_minutes?: number; p_late_out_minutes?: number; p_orphan_hours?: number }
+        Returns: number
+      }
+
+      // ── Scheduling mechanics, added in 036 ──────────────────
+      provider_scheduling_config: {
+        Args: { p_provider: string; p_location?: number | null }
+        Returns: {
+          location_id: number
+          min_gap_minutes: number
+          max_gap_minutes: number | null
+          min_fragment_minutes: number
+          allow_processing_overlap: boolean
+        }[]
+      }
+      provider_busy_segments: {
+        Args: { p_provider: string; p_from: string; p_to: string }
+        Returns: { starts_at: string; ends_at: string; is_processing: boolean }[]
+      }
+      provider_home_location_id: { Args: { p_provider: string }; Returns: number }
+      booking_review_reason: {
+        Args: {
+          p_client_id: string | null
+          p_guest_email: string | null
+          p_guest_phone: string | null
+          p_service_ids?: number[] | null
+          p_location_id?: number | null
+        }
+        Returns: string | null
+      }
+      booking_review_label: { Args: { p_reason: string | null }; Returns: string }
+
+      // ── Barcodes, added in 040 ──────────────────────────────
+      /** Resolve a scanned GTIN to a product id, zero-padding-insensitive. */
+      product_id_for_barcode: { Args: { p_code: string }; Returns: number | null }
+
+      // ── Client bans + photo consent, added in 039 ───────────
+      client_is_banned: {
+        Args: { p_client_id: string; p_location_id?: number | null }
+        Returns: boolean
+      }
+      client_photo_consent_ok: {
+        Args: { p_client_id: string; p_intimate?: boolean }
+        Returns: boolean
+      }
+
+      // ── Team profiles, added in 041 ─────────────────────────
+      notify_expiring_licences: { Args: Record<PropertyKey, never>; Returns: number }
+      licence_status: {
+        Args: { p_expires_on: string | null; p_soon_days?: number }
+        Returns: string
+      }
+      is_listable_staff: { Args: { p_profile_id: string }; Returns: boolean }
+
+      // ── Expenses, added in 033 ──────────────────────────────
+      /** Today's date in the studio's own timezone — the SQL mirror of dateKeyInTimeZone. */
+      studio_today: { Args: Record<PropertyKey, never>; Returns: string }
+      recurring_expense_dates: {
+        Args: {
+          p_starts_on: string
+          p_cadence: ExpenseCadence
+          p_ends_on: string | null
+          p_through: string
+        }
+        Returns: string[]
+      }
+      generate_recurring_expenses: { Args: { p_through?: string | null }; Returns: number }
+      recurring_expense_next_due: { Args: { p_rule: number }; Returns: string | null }
+      expense_totals: { Args: { p_from: string; p_to: string }; Returns: ExpenseCategoryTotal[] }
+      profit_summary: { Args: { p_from: string; p_to: string }; Returns: ProfitSummary[] }
+
+      has_permission: {
+        Args: { p_permission: string }
+        Returns: boolean
+      }
+      /** The same question about somebody else. Admin or manage_permissions. */
+      profile_has_permission: {
+        Args: { p_profile: string; p_permission: string }
+        Returns: boolean
+      }
+      /**
+       * Grant (true), revoke (false), or clear the override (null) for one
+       * person. Returns what they hold afterwards. The guard trigger behind it
+       * refuses a self-grant and anything the caller does not hold themselves.
+       */
+      set_staff_permission: {
+        Args: {
+          p_profile: string
+          p_permission: string
+          p_granted: boolean | null
+          p_reason?: string | null
+        }
+        Returns: boolean
+      }
+      /** Everything a person effectively holds, and whether it came from their role. */
+      effective_permissions: {
+        Args: { p_profile: string }
+        Returns: {
+          permission: string
+          label: string
+          category: string
+          granted: boolean
+          source: 'role' | 'override'
+          sort_order: number
+        }[]
+      }
+      /** Which rate card covered this person, at this site, on this date. */
+      commission_plan_on: {
+        Args: { p_profile: string; p_location: number; p_on: string }
+        Returns: number | null
+      }
+      /**
+       * Commission earned on one appointment, in integer cents, priced against
+       * the card in force on its own date and against money actually taken.
+       * p_location defaults to the primary site.
+       */
+      commission_for_appointment: {
+        Args: { p_appointment: string; p_location?: number | null }
+        Returns: number
+      }
+      /** The same for a counter sale, on the goods and not the sales tax. */
+      commission_for_order: {
+        Args: { p_order: number; p_location?: number | null }
+        Returns: number
+      }
+      /** Totals over a window. p_location null means every site. */
+      commission_for_period: {
+        Args: {
+          p_profile: string
+          p_from: string
+          p_to: string
+          p_location?: number | null
+        }
+        Returns: { service_cents: number; retail_cents: number; total_cents: number }[]
+      }
+      // ── Resources and waitlist, added in 037 ────────────────
+      resource_conflicts: {
+        Args: {
+          p_location_id: number | null
+          p_starts_at: string
+          p_ends_at: string
+          p_service_ids: number[]
+          p_exclude_appointment?: string | null
+        }
+        Returns: {
+          resource_id: number
+          resource_name: string
+          kind: ResourceKind
+          capacity: number
+          required: number
+          peak_in_use: number
+        }[]
+      }
+      resource_busy_intervals: {
+        Args: {
+          p_location_id: number | null
+          p_from: string
+          p_to: string
+          p_service_ids: number[]
+          p_exclude_appointment?: string | null
+        }
+        Returns: { starts_at: string; ends_at: string }[]
+      }
+      appointment_location_id: { Args: { p_appointment: string }; Returns: number }
+      join_waitlist: {
+        Args: {
+          p_service_ids: number[]
+          p_earliest_date: string
+          p_latest_date: string
+          p_provider_id?: string | null
+          p_days_of_week?: number[]
+          p_earliest_time?: string | null
+          p_latest_time?: string | null
+          p_note?: string | null
+          p_client_id?: string | null
+          p_location_id?: number | null
+        }
+        Returns: string
+      }
+      waitlist_matches: {
+        Args: { p_appointment: string }
+        Returns: {
+          entry_id: string
+          client_id: string
+          client_name: string | null
+          waiting_since: string
+          status: WaitlistStatus
+          offers_sent: number
+        }[]
+      }
+      waitlist_notify_for_appointment: {
+        Args: { p_appointment: string; p_limit?: number | null }
+        Returns: number
+      }
+      waitlist_release_expired: { Args: Record<PropertyKey, never>; Returns: number }
+      waitlist_sweep: { Args: Record<PropertyKey, never>; Returns: number }
       appointment_balance_cents: {
         Args: { p_appointment: string }
         Returns: number
