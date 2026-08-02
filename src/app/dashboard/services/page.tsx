@@ -1,4 +1,3 @@
-import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { Clock, ShieldCheck } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
@@ -64,23 +63,6 @@ export default async function ServicesPage() {
           <ServiceEditor categories={options} isAdmin={admin} />
         )}
       </div>
-
-      {canEdit && (
-        <nav className="mt-8 flex flex-wrap gap-x-7 gap-y-2" aria-label="View">
-          <Link
-            href="/dashboard/services"
-            className="label-caps border-b border-[var(--color-foreground)] pb-1"
-          >
-            Services
-          </Link>
-          <Link
-            href="/dashboard/services/forms"
-            className="label-caps pb-1 text-[var(--color-muted)]"
-          >
-            Consent forms
-          </Link>
-        </nav>
-      )}
 
       {canEdit && !admin && (
         <p className="mt-8 border-l-2 border-[var(--color-accent)] bg-[var(--color-clay-soft)] p-4 text-sm text-[var(--color-muted)] dark:bg-[var(--color-surface)]">

@@ -1,4 +1,3 @@
-import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { FileText, Lock } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
@@ -80,28 +79,13 @@ export default async function ConsentFormsPage() {
   return (
     <div>
       <div className="flex flex-wrap items-baseline justify-between gap-4">
-        <div>
-          <h1 className="display text-3xl">Consent forms</h1>
-          <p className="mt-2 max-w-prose text-sm text-[var(--color-muted)]">
-            What clients read and agree to before treatment. Once a version has been
-            signed its wording is fixed — editing it publishes a new version and keeps
-            the old one on record.
-          </p>
-        </div>
+        <p className="max-w-prose text-sm text-[var(--color-muted)]">
+          What clients read and agree to before treatment. Once a version has been
+          signed its wording is fixed — editing it publishes a new version and keeps
+          the old one on record.
+        </p>
         <ConsentFormEditor categories={options} />
       </div>
-
-      <nav className="mt-8 flex flex-wrap gap-x-7 gap-y-2" aria-label="View">
-        <Link href="/dashboard/services" className="label-caps pb-1 text-[var(--color-muted)]">
-          Services
-        </Link>
-        <Link
-          href="/dashboard/services/forms"
-          className="label-caps border-b border-[var(--color-foreground)] pb-1"
-        >
-          Consent forms
-        </Link>
-      </nav>
 
       {bySlug.size === 0 ? (
         <p className="mt-10 border border-[var(--color-border)] bg-[var(--color-surface)] p-8 text-sm text-[var(--color-muted)]">

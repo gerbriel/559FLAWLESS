@@ -17,11 +17,11 @@ import {
   Settings,
   Clock,
   ClipboardList,
-  Inbox,
   Timer,
   MapPin,
   Receipt,
   ClipboardCheck,
+  FileSignature,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { isFrontDesk, isManager, isAdmin, type UserRole } from '@/types/database'
@@ -85,6 +85,15 @@ const ITEMS: NavItem[] = [
     label: 'Services',
     icon: Scissors,
     visible: (r) => isFrontDesk(r),
+  },
+  {
+    // Everyone sees it: the Outstanding tab is a provider's list of who is
+    // arriving without paperwork. The template tabs behind it are manager-gated
+    // by their own pages, and by RLS.
+    href: '/dashboard/forms',
+    label: 'Forms',
+    icon: FileSignature,
+    visible: () => true,
   },
   {
     href: '/dashboard/inventory',

@@ -1911,6 +1911,22 @@ export type Database = {
         }
         Returns: number
       }
+      /**
+       * Supersede an intake form rather than mutating it. Answers are keyed by
+       * question id, so changing the questions of a form somebody has already
+       * filled in leaves their answers with nothing recording what was asked.
+       * Added in 046.
+       */
+      publish_intake_version: {
+        Args: {
+          p_form_id: number
+          p_title: string
+          p_questions: Json
+          p_service_ids?: number[] | null
+          p_category_ids?: number[] | null
+        }
+        Returns: number
+      }
       /** A fraction, not a percentage — 0.0835 is 8.35%. Added in 026. */
       set_sales_tax_rate: {
         Args: { p_rate: number }
