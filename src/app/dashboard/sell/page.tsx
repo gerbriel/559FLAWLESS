@@ -1,6 +1,11 @@
+import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { PointOfSale, type SellableProduct } from '@/components/shared/PointOfSale'
+import {
+  PointOfSale,
+  type SellableProduct,
+  type SellablePackage,
+} from '@/components/shared/PointOfSale'
 import { isFrontDesk, type UserRole } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
@@ -25,7 +30,8 @@ export default async function SellPage() {
     redirect('/dashboard')
   }
 
-  const [{ data: products }, { data: clients }, { data: rateSetting }] = await Promise.all([
+  const [{ data: products }, { data: clients }, { data: rateSetting }, { data: packages }] =
+    await Promise.all([
     supabase
       .from('products')
       .select('id, name, sku, barcode, price_cents, stock_qty, unit, external_url, image_url, brands(name)')
@@ -46,6 +52,16 @@ export default async function SellPage() {
       .eq('key', 'sales_tax_rate')
       .eq('is_active', true)
       .maybeSingle(),
+    // Prepaid courses, on the same counter behind a switch. Fetched here so
+    // the till does not have to ask for them from the browser after it has
+    // already painted — PointOfSale falls back to its own request only when
+    // this prop is absent.
+    supabase
+      .from('service_packages')
+      .select('id, name, description, session_count, price_cents, valid_days, services(name)')
+      .eq('is_active', true)
+      .order('sort_order')
+      .order('name'),
   ])
 
   const parsedRate = Number(rateSetting?.text_value)
@@ -73,6 +89,16 @@ export default async function SellPage() {
     email: c.email,
   }))
 
+  const sellablePackages: SellablePackage[] = (packages ?? []).map((p) => ({
+    id: p.id,
+    name: p.name,
+    description: p.description,
+    service_name: (p.services as { name: string } | null)?.name ?? null,
+    session_count: p.session_count,
+    price_cents: p.price_cents,
+    valid_days: p.valid_days,
+  }))
+
   return (
     <div>
       <h1 className="display text-3xl">Sell</h1>
@@ -82,7 +108,23 @@ export default async function SellPage() {
         the Rhonda Allison store instead.
       </p>
 
-      <PointOfSale products={sellable} customers={customers} taxRate={taxRate} />
+      <p className="mt-3 max-w-prose text-sm text-[var(--color-muted)]">
+        Prepaid courses are sold here too, under Packages —{' '}
+        <Link
+          href="/dashboard/packages"
+          className="underline underline-offset-4 hover:text-[var(--color-foreground)]"
+        >
+          the catalogue and everyone&rsquo;s balances
+        </Link>{' '}
+        live on their own screen.
+      </p>
+
+      <PointOfSale
+        products={sellable}
+        customers={customers}
+        taxRate={taxRate}
+        packages={sellablePackages}
+      />
     </div>
   )
 }

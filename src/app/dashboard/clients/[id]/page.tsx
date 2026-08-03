@@ -8,6 +8,8 @@ import { ClientNoteForm } from '@/components/shared/ClientNoteForm'
 import { ClientBanPanel } from '@/components/shared/ClientBanPanel'
 import { ClientTagPicker, type ClientTagOption } from '@/components/shared/ClientTagPicker'
 import { ClientTimeline } from '@/components/shared/ClientTimeline'
+import { ClientMembershipPanel } from '@/components/shared/ClientMembershipPanel'
+import { PackageBalanceCard } from '@/components/shared/PackageBalanceCard'
 import { PhotoReminderCard } from '@/components/shared/PhotoReminderCard'
 import { PhotoReminderPrompt } from '@/components/shared/PhotoReminderPrompt'
 import { formatMoney } from '@/lib/utils'
@@ -478,6 +480,30 @@ export default async function ClientDetailPage({ params }: Props) {
 
         {/* ── Sidebar ─────────────────────────────────── */}
         <aside className="space-y-10">
+          {/* Fetches for itself rather than joining the batches above — those
+              are already close enough to TS2589 that a seventeenth select
+              string in the destructure is what finds it. */}
+          <ClientMembershipPanel
+            clientId={client.id}
+            canManage={isManager(role)}
+            timeZone={timeZone}
+            now={now}
+          />
+
+          {/* Front desk and up only, and that is not a taste decision:
+              `client_packages` is `client_id = auth.uid()` or `is_front_desk()`
+              (008), so a provider's query comes back empty and the card would
+              say "Nothing prepaid" about somebody holding six facials. Silence
+              is honest where a zero would be a lie. */}
+          {isFrontDesk(role) && (
+            <PackageBalanceCard
+              clientId={client.id}
+              timeZone={timeZone}
+              canRedeem
+              now={now}
+            />
+          )}
+
           <section className="border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
             <h3 className="label-caps mb-5 text-[var(--color-accent)]">Skin profile</h3>
             <dl className="space-y-3 text-sm">

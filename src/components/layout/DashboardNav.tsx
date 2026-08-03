@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
+  Layers,
   BarChart3,
   CalendarDays,
   ChevronDown,
@@ -251,7 +252,16 @@ const TREE: NavEntry[] = [
         icon: Scissors,
         visible: (r) => isFrontDesk(r),
       },
-      { href: '/dashboard/inventory', label: 'Inventory', icon: Package, visible: () => true },
+      {
+          href: '/dashboard/packages',
+          label: 'Packages',
+          icon: Layers,
+          // isFrontDesk, not isStaff: client_packages is front-desk-and-above
+          // for select, so a provider following this would get a heading over
+          // an empty list.
+          visible: (r) => isFrontDesk(r),
+        },
+        { href: '/dashboard/inventory', label: 'Inventory', icon: Package, visible: () => true },
     ],
   },
   {
@@ -347,7 +357,12 @@ const BOTTOM: NavEntry[] = [
       { href: '/dashboard/settings/permissions', label: 'Permissions', visible: (r) => isAdmin(r) },
       { href: '/dashboard/settings/commissions', label: 'Commission', visible: (r) => isAdmin(r) },
       { href: '/dashboard/settings/locations', label: 'Locations', visible: (r) => isAdmin(r) },
-      { href: '/dashboard/settings/legal', label: 'Legal', visible: (r) => isAdmin(r) },
+      {
+          href: '/dashboard/settings/data',
+          label: 'Import & export',
+          visible: (r) => isManager(r),
+        },
+        { href: '/dashboard/settings/legal', label: 'Legal', visible: (r) => isAdmin(r) },
       { href: '/dashboard/settings/admin', label: 'Announcements', visible: (r) => isAdmin(r) },
     ],
   },

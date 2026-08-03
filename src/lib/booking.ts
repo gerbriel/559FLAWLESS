@@ -24,6 +24,7 @@
 import 'server-only'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { syncAppointmentToCalendar } from '@/lib/calendar-push'
+import { applyMembershipBenefit } from '@/lib/memberships'
 import { generateSlots, type AvailabilityInput } from '@/lib/availability'
 import { dateKeyInTimeZone, isValidTimeZone, MINUTE_MS } from '@/lib/time'
 
@@ -504,11 +505,61 @@ export async function createBooking(req: BookingRequest): Promise<BookingOutcome
   // on what this row is, and a second copy of that decision in application code
   // is how the two drift apart. If the read fails, the insert's own value is
   // still the truth for every other reason.
+  //
+  // `client_id` comes back for the same reason: `appointment_match_client`
+  // (004) backfills it when a guest booking's email or phone matches an
+  // existing account, so the person entitled to a member discount is sometimes
+  // one the request never named.
   const { data: routed } = await supabase
     .from('appointments')
-    .select('status')
+    .select('status, client_id')
     .eq('id', appointment.id)
     .maybeSingle()
+
+  // A membership is applied after the lines exist, because an included session
+  // is claimed from the database rather than decided here. See
+  // src/lib/memberships.ts. Nothing about this can fail the booking: a client
+  // who loses the race for the last included facial is still booked, and pays
+  // the ordinary price.
+  const applied = await applyMembershipBenefit({
+    appointmentId: appointment.id,
+    clientId: routed?.client_id ?? req.clientId,
+    lines: services.map((s) => ({ serviceId: s.id, priceCents: s.price_cents })),
+    subtotalCents: priced.totalCents,
+    now,
+  })
+
+  // A membership can take the total below the deposit, and a deposit larger
+  // than the whole appointment is not a deposit — it is asking somebody to
+  // prepay more than they owe. `deposit_cents` was written at insert, before
+  // the benefit was claimed, because claiming it needs the lines to exist. So
+  // it is capped here, once the real total is known, and the row is corrected
+  // rather than the response quietly disagreeing with the database.
+  //
+  // Integer cents throughout: `Math.min` on two integers, never a rate.
+  const finalTotalCents = Math.max(
+    priced.totalCents - (applied ? applied.coveredCents + applied.discountCents : 0),
+    0
+  )
+  let depositAfterBenefit = appointment.deposit_cents
+  if (depositAfterBenefit > finalTotalCents) {
+    depositAfterBenefit = finalTotalCents
+    const { error: capError } = await supabase
+      .from('appointments')
+      .update({
+        deposit_cents: depositAfterBenefit,
+        deposit_status: depositAfterBenefit > 0 ? 'pending' : 'none',
+      })
+      .eq('id', appointment.id)
+
+    // A booking that is already committed must not fail over this. Worst case
+    // the client is asked for a deposit that is too large and the studio
+    // refunds it — visible and fixable, unlike losing the appointment.
+    if (capError) {
+      console.error('deposit cap failed for', appointment.id, capError.message)
+      depositAfterBenefit = appointment.deposit_cents
+    }
+  }
 
   // Mirror it into the provider's Google Calendar. Deliberately not awaited
   // into the response path: the booking is already committed and the client is
@@ -523,8 +574,11 @@ export async function createBooking(req: BookingRequest): Promise<BookingOutcome
       startsAt: appointment.starts_at,
       endsAt: appointment.ends_at,
       status: routed?.status ?? appointment.status,
-      depositCents: appointment.deposit_cents,
-      totalCents: priced.totalCents,
+      depositCents: depositAfterBenefit,
+      totalCents: Math.max(
+        finalTotalCents,
+        0
+      ),
       timezone: provider.timezone,
     },
   }
@@ -695,6 +749,17 @@ export async function createStaffBooking(req: StaffBookingRequest): Promise<Book
     return failure('booking_failed', 500)
   }
 
+  // The same benefit as an online booking. A member who rings up rather than
+  // using the website is still a member, and the front desk should never have
+  // to remember to take the discount off by hand.
+  const applied = await applyMembershipBenefit({
+    appointmentId: appointment.id,
+    clientId: req.clientId,
+    lines: services.map((s) => ({ serviceId: s.id, priceCents: s.price_cents })),
+    subtotalCents: outcome.priced.totalCents,
+    now,
+  })
+
   void syncAppointmentToCalendar(appointment.id)
 
   // No notification is written here: the appointment_notify trigger already
@@ -707,7 +772,10 @@ export async function createStaffBooking(req: StaffBookingRequest): Promise<Book
       endsAt: appointment.ends_at,
       status: appointment.status,
       depositCents: 0,
-      totalCents: outcome.priced.totalCents,
+      totalCents: Math.max(
+        outcome.priced.totalCents - (applied ? applied.coveredCents + applied.discountCents : 0),
+        0
+      ),
       timezone: provider.timezone,
     },
   }

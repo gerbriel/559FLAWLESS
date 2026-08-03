@@ -5,12 +5,14 @@ import { useRouter } from 'next/navigation'
 import Image from 'next/image'
 import Link from 'next/link'
 import { toast } from 'sonner'
-import { Search, Plus, Minus, Trash2, ExternalLink, Check, Package } from 'lucide-react'
+import { Search, Plus, Minus, Trash2, ExternalLink, Check, Package, Layers } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Field, Input, Select } from '@/components/ui/field'
 import { createClient } from '@/lib/supabase/client'
 import { cn, formatMoney } from '@/lib/utils'
+import { sellPackage } from '@/app/dashboard/packages/actions'
+import { packageErrorMessage } from '@/app/dashboard/packages/errors'
 import {
   barcodeVariants,
   matchProductByBarcode,
@@ -36,6 +38,25 @@ export interface SellableProduct {
   brand: string | null
 }
 
+/**
+ * A prepaid course, on the same counter as the bottles.
+ *
+ * The till is handed the id, the name and enough to read the tile; the price
+ * it charges is re-read from `service_packages` by the server action. Same
+ * rule as the retail side, where the sale endpoint re-reads `products`.
+ */
+export interface SellablePackage {
+  id: number
+  name: string
+  description: string | null
+  /** What a session buys. Null is an open package — any service on the visit. */
+  service_name: string | null
+  session_count: number
+  price_cents: number
+  /** 0 means it never lapses. */
+  valid_days: number
+}
+
 export interface CustomerOption {
   id: string
   name: string
@@ -53,6 +74,8 @@ interface Receipt {
   tax_cents: number
   total_cents: number
   customer: string
+  /** Set when the sale was a package rather than things off the shelf. */
+  prepaid?: { name: string; sessions: number; expiresAt: string | null } | null
 }
 
 /**
@@ -87,15 +110,30 @@ interface Cue {
  * Out-of-stock items stay visible rather than disappearing, because the useful
  * answer is not "we don't have it" but "we can ship it to you" — the studio's
  * Rhonda Allison storefront handles that, so the link is right there.
+ *
+ * Packages sit behind a switch rather than in the same basket, and that is a
+ * decision rather than a shortcut. A prepaid course is not a thing off a shelf:
+ * no stock moves, no sales tax is due on it (it buys service time, and services
+ * are not taxable here), and it cannot be sold to a walk-in because the balance
+ * has to belong to an account somebody can spend it from later. Mixing the two
+ * into one basket would mean one receipt quietly holding two different sets of
+ * rules. Two sales, two receipts, and each is what it says it is.
  */
 export function PointOfSale({
   products,
   customers,
   taxRate,
+  packages,
 }: {
   products: SellableProduct[]
   customers: CustomerOption[]
   taxRate: number
+  /**
+   * Optional so a page that has never heard of packages still compiles and
+   * still renders exactly the till it rendered before — with none passed, the
+   * switch is not drawn at all.
+   */
+  packages?: SellablePackage[]
 }) {
   const router = useRouter()
   const [search, setSearch] = useState('')
@@ -110,6 +148,57 @@ export function PointOfSale({
   const [camera, setCamera] = useState(false)
   const [cue, setCue] = useState<Cue | null>(null)
   const cueSeq = useRef(0)
+
+  /**
+   * The package list, handed down or fetched.
+   *
+   * A page that knows about packages passes them and this never runs. A page
+   * that does not — the till predates the feature — gets them anyway, because
+   * `service_packages` is readable by any authenticated session when it is
+   * active (008), and a switch that cannot be made to appear is worse than one
+   * extra request on a screen that is open all day. Passing the prop from the
+   * server is the better version of this, not a different one.
+   */
+  const [fetchedPackages, setFetchedPackages] = useState<SellablePackage[] | null>(null)
+
+  useEffect(() => {
+    if (packages !== undefined) return
+    let alive = true
+
+    void (async () => {
+      const { data } = await createClient()
+        .from('service_packages')
+        .select('id, name, description, session_count, price_cents, valid_days, services(name)')
+        .eq('is_active', true)
+        .order('sort_order')
+        .order('name')
+
+      if (!alive) return
+      setFetchedPackages(
+        (data ?? []).map((p) => ({
+          id: p.id,
+          name: p.name,
+          description: p.description,
+          service_name: (p.services as { name: string } | null)?.name ?? null,
+          session_count: p.session_count,
+          price_cents: p.price_cents,
+          valid_days: p.valid_days,
+        }))
+      )
+    })()
+
+    return () => {
+      alive = false
+    }
+  }, [packages])
+
+  const packageList = packages ?? fetchedPackages ?? []
+  const [mode, setMode] = useState<'retail' | 'prepaid'>('retail')
+  const [packageId, setPackageId] = useState<number | null>(null)
+  // A package sale is one package. Two courses for the same person are two
+  // balances, and two balances are two sales — there is no quantity here.
+  const chosenPackage = packageList.find((p) => p.id === packageId) ?? null
+  const sellingPackage = packageList.length > 0 && mode === 'prepaid'
 
   // One cue at a time, cleared a beat after the animation ends. Guarded by seq
   // so a later tap's timer is the only one that can retire it.
@@ -137,8 +226,16 @@ export function PointOfSale({
     )
   }, [products, search])
 
-  const subtotal = lines.reduce((s, l) => s + l.product.price_cents * l.qty, 0)
-  const tax = Math.round(subtotal * taxRate)
+  const retailSubtotal = lines.reduce((s, l) => s + l.product.price_cents * l.qty, 0)
+  // Integer cents in, integer cents out — the rate is the only fraction in the
+  // building and it never survives past this line.
+  const retailTax = Math.round(retailSubtotal * taxRate)
+
+  // No tax on a package: it buys service time, and services are not taxable in
+  // California. Writing 8.35% of it into the order would invent a liability
+  // nobody will ever be asked for.
+  const subtotal = sellingPackage ? (chosenPackage?.price_cents ?? 0) : retailSubtotal
+  const tax = sellingPackage ? 0 : retailTax
   const total = subtotal + tax
 
   /**
@@ -287,8 +384,10 @@ export function PointOfSale({
 
   useBarcodeScanner({
     // The receipt screen is a full stop; a scan there should not quietly begin
-    // a new sale behind it.
-    enabled: !receipt && !camera,
+    // a new sale behind it. Neither should one while a package is on the
+    // counter — a package has nothing to scan, and a stray keystroke burst
+    // should not silently switch what is being sold.
+    enabled: !receipt && !camera && !sellingPackage,
     onScan: (scan) => {
       void handleScan(scan.code)
     },
@@ -302,7 +401,69 @@ export function PointOfSale({
     )
   }
 
+  /**
+   * Ring up a package.
+   *
+   * The browser sends WHICH package and to whom; `sellPackage` reads the price
+   * out of `service_packages`, writes the order, the balance and the ledger
+   * row, and hands back what it actually charged. Nothing about the money on
+   * this screen is believed by the server.
+   */
+  async function ringUpPackage() {
+    if (!chosenPackage) {
+      toast.error('Pick a package first.')
+      return
+    }
+    if (!customerId) {
+      toast.error('A package needs a client account.', {
+        description:
+          'The sessions belong to a person and get spent at a later visit, so a walk-in name is not enough to hang them on.',
+      })
+      return
+    }
+
+    setBusy(true)
+    try {
+      const result = await sellPackage({
+        packageId: chosenPackage.id,
+        clientId: customerId,
+        paymentMethod: method,
+        note: notes.trim() || null,
+      })
+
+      if (!result.ok) {
+        toast.error(packageErrorMessage(result.error))
+        return
+      }
+
+      setReceipt({
+        order_number: result.data.orderNumber,
+        subtotal_cents: result.data.totalCents,
+        tax_cents: 0,
+        total_cents: result.data.totalCents,
+        customer: customers.find((c) => c.id === customerId)?.name ?? 'Client',
+        prepaid: {
+          name: result.data.name,
+          sessions: result.data.sessions,
+          expiresAt: result.data.expiresAt,
+        },
+      })
+      setPackageId(null)
+      setCustomerId('')
+      setNotes('')
+      router.refresh()
+    } catch {
+      toast.error('Could not reach the server.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function ringUp() {
+    if (sellingPackage) {
+      await ringUpPackage()
+      return
+    }
     if (lines.length === 0) {
       toast.error('Add something to the sale first.')
       return
@@ -371,10 +532,20 @@ export function PointOfSale({
             <dt className="text-[var(--color-muted)]">Subtotal</dt>
             <dd className="tabular-nums">{formatMoney(receipt.subtotal_cents)}</dd>
           </div>
-          <div className="flex justify-between">
-            <dt className="text-[var(--color-muted)]">Tax</dt>
-            <dd className="tabular-nums">{formatMoney(receipt.tax_cents)}</dd>
-          </div>
+          {/* A package carries no sales tax, so the line would read $0 and say
+              nothing. The retail sale always has one, even when it is zero. */}
+          {!receipt.prepaid && (
+            <div className="flex justify-between">
+              <dt className="text-[var(--color-muted)]">Tax</dt>
+              <dd className="tabular-nums">{formatMoney(receipt.tax_cents)}</dd>
+            </div>
+          )}
+          {receipt.prepaid && (
+            <div className="flex justify-between">
+              <dt className="text-[var(--color-muted)]">Sessions</dt>
+              <dd className="tabular-nums">{receipt.prepaid.sessions}</dd>
+            </div>
+          )}
           <div className="flex justify-between border-t border-[var(--color-border)] pt-2 text-base">
             <dt>Total</dt>
             <dd className="tabular-nums">{formatMoney(receipt.total_cents)}</dd>
@@ -382,14 +553,31 @@ export function PointOfSale({
         </dl>
 
         <p className="mt-5 text-sm text-[var(--color-muted)]">
-          Stock has been updated and this is on the customer&rsquo;s history.
+          {receipt.prepaid ? (
+            <>
+              {receipt.prepaid.sessions} sessions of {receipt.prepaid.name} are on{' '}
+              {receipt.customer}&rsquo;s account
+              {receipt.prepaid.expiresAt
+                ? `, good until ${new Date(receipt.prepaid.expiresAt).toLocaleDateString('en-US')}`
+                : ', with no expiry'}
+              . Spend one at checkout and it comes off what that visit owes.
+            </>
+          ) : (
+            <>Stock has been updated and this is on the customer&rsquo;s history.</>
+          )}
         </p>
 
         <div className="mt-6 flex flex-wrap gap-3">
           <Button onClick={() => setReceipt(null)}>New sale</Button>
-          <Link href="/dashboard/orders">
-            <Button variant="subtle">All orders</Button>
-          </Link>
+          {receipt.prepaid ? (
+            <Link href="/dashboard/packages/balances">
+              <Button variant="subtle">Balances</Button>
+            </Link>
+          ) : (
+            <Link href="/dashboard/orders">
+              <Button variant="subtle">All orders</Button>
+            </Link>
+          )}
         </div>
       </div>
     )
@@ -398,6 +586,111 @@ export function PointOfSale({
   return (
     <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_22rem]">
       <div>
+        {/* Drawn only when there is something behind it. A studio that has
+            never priced a package sees the till exactly as it was. */}
+        {packageList.length > 0 && (
+          <div
+            data-ui="tile"
+            role="group"
+            aria-label="What is being sold"
+            className="mb-6 inline-flex border border-[var(--color-border)] p-1"
+          >
+            {(
+              [
+                { value: 'retail', label: 'Products', icon: Package },
+                { value: 'prepaid', label: 'Packages', icon: Layers },
+              ] as const
+            ).map((tab) => {
+              const on = mode === tab.value
+              const Icon = tab.icon
+              return (
+                <button
+                  key={tab.value}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => setMode(tab.value)}
+                  data-ui="button"
+                  className={cn(
+                    'label-caps flex min-h-10 items-center gap-2 px-5',
+                    on
+                      ? 'bg-[var(--color-foreground)] text-[var(--color-background)]'
+                      : 'text-[var(--color-muted)] hover:text-[var(--color-foreground)]'
+                  )}
+                >
+                  <Icon className="h-4 w-4" strokeWidth={1.75} aria-hidden />
+                  {tab.label}
+                </button>
+              )
+            })}
+          </div>
+        )}
+
+        {sellingPackage ? (
+          <>
+            <p className="max-w-prose text-sm text-[var(--color-muted)]">
+              A course paid for once and drawn down a session at a time. It goes on the
+              client&rsquo;s account, so it needs a client — and no sales tax is charged,
+              because what they are buying is treatment time.
+            </p>
+
+            <ul className="mt-5 grid gap-px border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-2 xl:grid-cols-3">
+              {packageList.map((p) => {
+                const on = packageId === p.id
+                const sessions = Math.max(p.session_count, 1)
+                // Display only, never charged — the server re-reads
+                // `price_cents` and that is the figure that moves.
+                const perSessionCents = Math.round(p.price_cents / sessions)
+
+                return (
+                  <li key={p.id} className="bg-[var(--color-surface)]">
+                    <button
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() => setPackageId(on ? null : p.id)}
+                      className={cn(
+                        'flex h-full w-full flex-col items-start p-5 text-left transition-colors hover:bg-[var(--color-linen)] dark:hover:bg-[var(--color-background)]',
+                        on && 'shadow-[inset_0_0_0_2px_var(--color-accent)]'
+                      )}
+                    >
+                      <span className="flex w-full items-start justify-between gap-3">
+                        <span className="text-base leading-snug">{p.name}</span>
+                        {on && (
+                          <Check
+                            className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-accent)]"
+                            strokeWidth={2.5}
+                            aria-hidden
+                          />
+                        )}
+                      </span>
+
+                      <span className="mt-1 block text-xs text-[var(--color-muted)]">
+                        {p.session_count} × {p.service_name ?? 'any service'}
+                        {' · '}
+                        {p.valid_days > 0 ? `${p.valid_days} days` : 'no expiry'}
+                      </span>
+
+                      {p.description && (
+                        <span className="mt-3 line-clamp-3 text-sm leading-relaxed text-[var(--color-muted)]">
+                          {p.description}
+                        </span>
+                      )}
+
+                      <span className="mt-auto pt-4">
+                        <span className="display block text-xl tabular-nums">
+                          {formatMoney(p.price_cents)}
+                        </span>
+                        <span className="mt-0.5 block text-xs tabular-nums text-[var(--color-muted)]">
+                          {formatMoney(perSessionCents)} a session
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </>
+        ) : (
+          <>
         <BarcodeScanHint
           className="mb-5"
           label="Scan a bottle to add it to the sale."
@@ -593,13 +886,43 @@ export function PointOfSale({
         <p className="sr-only" role="status" aria-live="polite">
           {cue?.said ?? ''}
         </p>
+          </>
+        )}
       </div>
 
       <aside className="lg:sticky lg:top-24 lg:self-start">
         <div className="border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
           <h2 className="label-caps text-[var(--color-muted)]">This sale</h2>
 
-          {lines.length === 0 ? (
+          {sellingPackage ? (
+            chosenPackage === null ? (
+              <p className="mt-4 text-sm text-[var(--color-muted)]">No package picked yet.</p>
+            ) : (
+              <div className="mt-4 flex items-start gap-2.5 text-sm">
+                <span
+                  data-ui="tile"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center bg-[var(--color-linen)] dark:bg-[var(--color-background)]"
+                >
+                  <Layers className="h-4 w-4 text-[var(--color-muted)]" strokeWidth={1.25} aria-hidden />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <span className="block">{chosenPackage.name}</span>
+                  <span className="text-xs text-[var(--color-muted)]">
+                    {chosenPackage.session_count} sessions ·{' '}
+                    {chosenPackage.service_name ?? 'any service'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPackageId(null)}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center text-[var(--color-muted)] hover:text-red-700"
+                  aria-label={`Remove ${chosenPackage.name}`}
+                >
+                  <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+                </button>
+              </div>
+            )
+          ) : lines.length === 0 ? (
             <p className="mt-4 text-sm text-[var(--color-muted)]">Nothing added yet.</p>
           ) : (
             <ul className="mt-4 space-y-3">
@@ -672,9 +995,17 @@ export function PointOfSale({
             </div>
             <div className="flex justify-between">
               <dt className="text-[var(--color-muted)]">
-                Tax {(taxRate * 100).toFixed(2).replace(/\.?0+$/, '')}%
+                {sellingPackage
+                  ? 'Tax'
+                  : `Tax ${(taxRate * 100).toFixed(2).replace(/\.?0+$/, '')}%`}
               </dt>
-              <dd className="tabular-nums">{formatMoney(tax)}</dd>
+              <dd className="tabular-nums">
+                {sellingPackage ? (
+                  <span className="text-[var(--color-muted)]">Not taxable</span>
+                ) : (
+                  formatMoney(tax)
+                )}
+              </dd>
             </div>
             <div className="flex justify-between pt-1 text-base">
               <dt>Total</dt>
@@ -684,13 +1015,21 @@ export function PointOfSale({
         </div>
 
         <div className="mt-5 space-y-4 border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
-          <Field label="Client" htmlFor="pos_client" hint="Leave blank for a walk-in.">
+          <Field
+            label="Client"
+            htmlFor="pos_client"
+            hint={
+              sellingPackage
+                ? 'Required — the sessions live on their account.'
+                : 'Leave blank for a walk-in.'
+            }
+          >
             <Select
               id="pos_client"
               value={customerId}
               onChange={(e) => setCustomerId(e.target.value)}
             >
-              <option value="">Walk-in</option>
+              <option value="">{sellingPackage ? 'Pick a client' : 'Walk-in'}</option>
               {customers.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
@@ -700,7 +1039,7 @@ export function PointOfSale({
             </Select>
           </Field>
 
-          {!customerId && (
+          {!customerId && !sellingPackage && (
             <Field label="Walk-in name" htmlFor="pos_walkin">
               <Input
                 id="pos_walkin"
@@ -733,9 +1072,20 @@ export function PointOfSale({
             />
           </Field>
 
-          <Button onClick={ringUp} disabled={busy || lines.length === 0} className="w-full">
+          <Button
+            onClick={ringUp}
+            disabled={busy || (sellingPackage ? chosenPackage === null : lines.length === 0)}
+            className="w-full"
+          >
             {busy ? 'Ringing up…' : `Take ${formatMoney(total)}`}
           </Button>
+
+          {sellingPackage && (
+            <p className="text-xs leading-relaxed text-[var(--color-muted)]">
+              Taking this opens the balance straight away. The sessions can be spent from
+              the client&rsquo;s record or at the end of any visit it covers.
+            </p>
+          )}
         </div>
       </aside>
     </div>

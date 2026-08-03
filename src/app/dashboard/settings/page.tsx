@@ -223,6 +223,13 @@ export default async function SettingsPage() {
           visible: userIsAdmin,
         },
         {
+          href: '/dashboard/settings/memberships',
+          label: 'Memberships',
+          description:
+            'Standing arrangements: what a member pays each period and what holding one grants — a discount on every visit, some treatments included, or both. Nothing here charges a card. Each period is recorded by hand from the member’s own record, and a membership stops granting its benefit the day its period runs out.',
+          visible: userIsManager,
+        },
+        {
           href: '/dashboard/settings/legal',
           label: 'Legal content',
           description:
@@ -235,6 +242,13 @@ export default async function SettingsPage() {
           description:
             'Announcement banners and the analytics and pixel scripts on the public site. It also carries its own policy editors, which write somewhere the website never reads — edit those under Legal content.',
           visible: userIsAdmin,
+        },
+        {
+          href: '/dashboard/settings/data',
+          label: 'Import and export',
+          description:
+            'Spreadsheets in and out: the client list, the service menu, the product list, and sales and appointment history as a download. Every file is previewed against the real data before a single row is written, a blank cell leaves what is already on file alone, and clinical records travel in neither direction. Importing clients needs an admin.',
+          visible: userIsManager,
         },
       ],
     },

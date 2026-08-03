@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import Image from 'next/image'
+import Link from 'next/link'
 import { toast } from 'sonner'
 import { Check, Clock, ExternalLink, Link2, Scissors, SearchX, ShieldCheck } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -381,8 +382,14 @@ export function ServicesCatalogue({
           )}
 
           <p className="mt-4 text-xs leading-relaxed text-[var(--color-muted)]">
-            A service&rsquo;s category is chosen when you edit it. Creating and renaming
-            categories is not something this screen does yet.
+            A service&rsquo;s category is chosen when you edit it.{' '}
+            <Link
+              href="/dashboard/services/categories"
+              className="underline underline-offset-4 hover:text-[var(--color-foreground)]"
+            >
+              Categories
+            </Link>{' '}
+            is where they are added, renamed, reordered and hidden.
           </p>
         </Panel>
 

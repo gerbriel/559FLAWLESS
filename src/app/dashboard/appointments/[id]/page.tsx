@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { AppointmentStatusControl } from '@/components/shared/AppointmentStatusControl'
 import { ClientNoteForm } from '@/components/shared/ClientNoteForm'
 import { TakePayment, type PaymentRecord } from '@/components/shared/TakePayment'
+import { PackageVisitCredit } from '@/components/shared/PackageVisitCredit'
 import { PhotoReminderPrompt } from '@/components/shared/PhotoReminderPrompt'
 import { formatMoney, formatDuration } from '@/lib/utils'
 import { formatDateTimeInTimeZone } from '@/lib/time'
@@ -27,7 +28,7 @@ export default async function StaffAppointmentPage({ params }: Props) {
   const { data: appointment } = await supabase
     .from('appointments')
     .select(
-      'id, starts_at, ends_at, status, source, total_cents, deposit_cents, deposit_status, client_notes, staff_notes, client_id, guest_first_name, guest_last_name, guest_email, guest_phone, age_attested_at, profiles!appointments_client_id_fkey(first_name, last_name, email, phone), appointment_services(id, name_snapshot, price_cents, duration_minutes, sort_order)'
+      'id, starts_at, ends_at, status, source, subtotal_cents, total_cents, membership_covered_cents, membership_discount_cents, deposit_cents, deposit_status, client_notes, staff_notes, client_id, guest_first_name, guest_last_name, guest_email, guest_phone, age_attested_at, profiles!appointments_client_id_fkey(first_name, last_name, email, phone), appointment_services(id, name_snapshot, price_cents, duration_minutes, sort_order)'
     )
     .eq('id', id)
     .maybeSingle()
@@ -156,6 +157,34 @@ export default async function StaffAppointmentPage({ params }: Props) {
           ))}
         </ul>
 
+        {/* The lines are list price and stay that way — they are a snapshot of
+            what was booked. A membership comes off underneath them, which is
+            why the total below is smaller than they add up to. Saying nothing
+            here would make the receipt look wrong. */}
+        {(appointment.membership_covered_cents > 0 ||
+          appointment.membership_discount_cents > 0) && (
+          <ul className="divide-y divide-[var(--color-border)] border-b border-[var(--color-border)] text-sm">
+            {appointment.membership_covered_cents > 0 && (
+              <li className="flex justify-between gap-6 py-3">
+                <span className="text-[var(--color-muted)]">
+                  Included with their membership
+                </span>
+                <span className="tabular-nums text-[var(--color-muted)]">
+                  &minus;{formatMoney(appointment.membership_covered_cents)}
+                </span>
+              </li>
+            )}
+            {appointment.membership_discount_cents > 0 && (
+              <li className="flex justify-between gap-6 py-3">
+                <span className="text-[var(--color-muted)]">Member discount</span>
+                <span className="tabular-nums text-[var(--color-muted)]">
+                  &minus;{formatMoney(appointment.membership_discount_cents)}
+                </span>
+              </li>
+            )}
+          </ul>
+        )}
+
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap gap-2">
             {appointment.deposit_cents > 0 && (
@@ -167,6 +196,19 @@ export default async function StaffAppointmentPage({ params }: Props) {
           </div>
           <span className="tabular-nums">{formatMoney(appointment.total_cents)}</span>
         </div>
+      </div>
+
+      {/* "Is any of this already covered?" comes before "what do they owe".
+          Spending a session writes a `payments` row, which is what drops the
+          balance TakePayment renders below — so this has to sit above it.
+          Renders nothing unless a live package of theirs pays for a line on
+          this visit, and nothing at all for a provider, whose read of
+          `client_packages` is empty by policy (008). */}
+      <div className="mt-8 empty:mt-0">
+        <PackageVisitCredit
+          appointmentId={appointment.id}
+          clientId={appointment.client_id}
+        />
       </div>
 
       <div className="mt-8">

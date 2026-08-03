@@ -36,7 +36,7 @@ export default async function AppointmentDetailPage({ params, searchParams }: Pr
   const { data: appointment } = await supabase
     .from('appointments')
     .select(
-      'id, starts_at, ends_at, status, total_cents, deposit_cents, deposit_status, client_notes, cancellation_reason, profiles!appointments_provider_id_fkey(display_name, first_name, bio), appointment_services(id, name_snapshot, price_cents, duration_minutes, sort_order)'
+      'id, starts_at, ends_at, status, total_cents, membership_covered_cents, membership_discount_cents, deposit_cents, deposit_status, client_notes, cancellation_reason, profiles!appointments_provider_id_fkey(display_name, first_name, bio), appointment_services(id, name_snapshot, price_cents, duration_minutes, sort_order)'
     )
     .eq('id', id)
     .eq('client_id', user.id)
@@ -207,6 +207,32 @@ export default async function AppointmentDetailPage({ params, searchParams }: Pr
             </li>
           ))}
         </ul>
+        {/* The lines are the menu price. What a membership takes off comes
+            after them, named, so the total is never a smaller number with no
+            explanation attached to it. */}
+        {(appointment.membership_covered_cents > 0 ||
+          appointment.membership_discount_cents > 0) && (
+          <ul className="divide-y divide-[var(--color-border)] border-t border-[var(--color-border)]">
+            {appointment.membership_covered_cents > 0 && (
+              <li className="flex items-baseline justify-between gap-6 px-6 py-4">
+                <span className="text-[var(--color-muted)]">
+                  Included with your membership
+                </span>
+                <span className="tabular-nums text-[var(--color-muted)]">
+                  &minus;{formatMoney(appointment.membership_covered_cents)}
+                </span>
+              </li>
+            )}
+            {appointment.membership_discount_cents > 0 && (
+              <li className="flex items-baseline justify-between gap-6 px-6 py-4">
+                <span className="text-[var(--color-muted)]">Member discount</span>
+                <span className="tabular-nums text-[var(--color-muted)]">
+                  &minus;{formatMoney(appointment.membership_discount_cents)}
+                </span>
+              </li>
+            )}
+          </ul>
+        )}
         <div className="flex items-baseline justify-between gap-6 border-t border-[var(--color-border)] px-6 py-4">
           <span className="label-caps">Total</span>
           <span className="tabular-nums">{formatMoney(appointment.total_cents)}</span>

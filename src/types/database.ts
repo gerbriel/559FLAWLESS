@@ -55,6 +55,14 @@ import type {
   AppointmentPhotoPrompt,
   ClientPhotoStatus,
 } from '@/types/clientprofile'
+import type {
+  Membership,
+  MembershipService,
+  MembershipStatus,
+  MembershipCharge,
+  MembershipRedemption,
+  ClientMembership,
+} from '@/types/memberships'
 
 export type Json =
   | string
@@ -434,6 +442,14 @@ export type Appointment = {
   overlap_reason: string | null
   overlap_authorized_by: string | null
   approval_reason: string | null
+
+  // ── Membership benefit, added in 050 ────────────────────────
+  /** Which membership paid for part of this visit, if any. */
+  client_membership_id: number | null
+  /** List value of the lines an included session covered, integer cents. */
+  membership_covered_cents: number
+  /** The member percentage off the rest of the visit, integer cents. */
+  membership_discount_cents: number
 
   created_at: string
   updated_at: string
@@ -977,6 +993,21 @@ export type ClientPackage = {
   purchased_at: string
   expires_at: string | null
   order_id: number | null
+}
+
+/**
+ * One session spent, against one appointment.
+ *
+ * `unique (appointment_id, client_package_id)` in 008 is what stops a single
+ * visit eating two sessions of the same balance; nothing in the app checks
+ * first, it inserts and reads 23505 back. `sessions_remaining` on the parent
+ * row is decremented separately — 008 ships no trigger tying the two together.
+ */
+export type PackageRedemption = {
+  id: number
+  client_package_id: number
+  appointment_id: string
+  redeemed_at: string
 }
 
 export type GiftCard = {
@@ -1564,6 +1595,24 @@ export type Database = {
         [
           ToProfile<'client_packages', 'client_id'>,
           Rel<'client_packages_package_id_fkey', ['package_id'], 'service_packages', ['id']>,
+          Rel<'client_packages_order_id_fkey', ['order_id'], 'orders', ['id']>,
+        ]
+      >
+      package_redemptions: TableDef<
+        PackageRedemption,
+        [
+          Rel<
+            'package_redemptions_client_package_id_fkey',
+            ['client_package_id'],
+            'client_packages',
+            ['id']
+          >,
+          Rel<
+            'package_redemptions_appointment_id_fkey',
+            ['appointment_id'],
+            'appointments',
+            ['id']
+          >,
         ]
       >
       // ── Added in 014–016 ────────────────────────────────────
@@ -1851,6 +1900,57 @@ export type Database = {
           ToProfile<'invitations', 'invited_by'>,
           ToProfile<'invitations', 'accepted_by'>,
           ToProfile<'invitations', 'revoked_by'>,
+        ]
+      >
+
+      // ── Memberships, added in 050 ───────────────────────────
+      // `client_memberships` has two FKs to profiles (client_id, created_by),
+      // so an embed has to name the constraint:
+      // profiles!client_memberships_client_id_fkey(...).
+      memberships: TableDef<Membership>
+      membership_services: TableDef<
+        MembershipService,
+        [
+          Rel<'membership_services_membership_id_fkey', ['membership_id'], 'memberships', ['id']>,
+          Rel<'membership_services_service_id_fkey', ['service_id'], 'services', ['id']>,
+        ]
+      >
+      client_memberships: TableDef<
+        ClientMembership,
+        [
+          ToProfile<'client_memberships', 'client_id'>,
+          ToProfile<'client_memberships', 'created_by'>,
+          Rel<'client_memberships_membership_id_fkey', ['membership_id'], 'memberships', ['id']>,
+        ]
+      >
+      membership_redemptions: TableDef<
+        MembershipRedemption,
+        [
+          Rel<
+            'membership_redemptions_client_membership_id_fkey',
+            ['client_membership_id'],
+            'client_memberships',
+            ['id']
+          >,
+          Rel<
+            'membership_redemptions_appointment_id_fkey',
+            ['appointment_id'],
+            'appointments',
+            ['id']
+          >,
+          Rel<'membership_redemptions_service_id_fkey', ['service_id'], 'services', ['id']>,
+        ]
+      >
+      membership_charges: TableDef<
+        MembershipCharge,
+        [
+          Rel<
+            'membership_charges_client_membership_id_fkey',
+            ['client_membership_id'],
+            'client_memberships',
+            ['id']
+          >,
+          ToProfile<'membership_charges', 'recorded_by'>,
         ]
       >
     }
@@ -2353,6 +2453,34 @@ export type Database = {
         Args: { p_token: string; p_user: string }
         Returns: UserRole
       }
+
+      // ── Memberships, added in 050 ───────────────────────────
+      /**
+       * The benefit test: status is 'active' AND the period has not run out.
+       * `membershipIsCurrent` in src/types/memberships.ts is the UI copy — it
+       * hides buttons, this one is what the database believes.
+       */
+      membership_is_current: {
+        Args: { p_status: MembershipStatus; p_period_end: string }
+        Returns: boolean
+      }
+      /**
+       * Settle one membership period. Manager only, and idempotent — a second
+       * press, or a retried Stripe invoice.paid, finds it paid and stops.
+       */
+      mark_membership_charge_paid: {
+        Args: { p_charge: number; p_method?: string; p_note?: string | null }
+        Returns: number
+      }
+      /**
+       * Advance a membership one period and raise the `due` charge for it.
+       * Takes no money — nothing in this schema can. Honours
+       * cancel_at_period_end by ending the membership instead.
+       */
+      renew_membership: {
+        Args: { p_client_membership: number }
+        Returns: string
+      }
     }
     Enums: {
       user_role: UserRole
@@ -2364,6 +2492,7 @@ export type Database = {
       notification_type: NotificationType
       stock_reason: StockReason
       subscriber_status: SubscriberStatus
+      membership_status: MembershipStatus
     }
     CompositeTypes: { [_ in never]: never }
   }
