@@ -1,11 +1,16 @@
 import { redirect } from 'next/navigation'
-import { ClipboardList, Lock, Flag } from 'lucide-react'
+import { ClipboardList, Lock, Flag, AlertTriangle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
 import {
   IntakeFormEditor,
   type EditableIntakeForm,
 } from '@/components/shared/IntakeFormEditor'
+import {
+  FORM_APPLIES_TO_NOTHING,
+  describeFormTargeting,
+  formTargetsNothing,
+} from '@/lib/forms'
 import { isManager, type UserRole, type IntakeQuestion } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
@@ -92,7 +97,10 @@ export default async function IntakeFormsPage() {
             const current = versions.find((v) => v.is_active) ?? versions[0]
             const superseded = versions.filter((v) => v.id !== current.id)
             const flagged = current.questions.filter((q) => q.flag_when !== undefined).length
-            const targets = current.category_ids.map((id) => categoryName.get(id)).filter(Boolean)
+            // Only worth saying about a form that is otherwise live: a form
+            // switched off is already accounted for by "Not in use", and two
+            // badges saying the same absence would read as two problems.
+            const unreachable = current.is_active && formTargetsNothing(current)
 
             return (
               <section
@@ -121,13 +129,26 @@ export default async function IntakeFormsPage() {
                           {flagged} flagged
                         </Badge>
                       )}
+                      {unreachable && (
+                        <Badge tone="warning">
+                          <AlertTriangle className="h-3 w-3" strokeWidth={2} />
+                          Applies to nothing
+                        </Badge>
+                      )}
                     </div>
 
                     <p className="mt-2 text-sm text-[var(--color-muted)]">
                       {current.questions.length}{' '}
                       {current.questions.length === 1 ? 'question' : 'questions'} ·{' '}
-                      {targets.length > 0 ? `asked for ${targets.join(', ')}` : 'asked of everyone'}
+                      {describeFormTargeting(current, categoryName)}
                     </p>
+
+                    {unreachable && (
+                      <p className="mt-2 flex max-w-prose items-start gap-2 border-l-2 border-amber-600 bg-amber-50 p-3 text-xs text-amber-900 dark:bg-transparent dark:text-amber-300">
+                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+                        <span>{FORM_APPLIES_TO_NOTHING}</span>
+                      </p>
+                    )}
 
                     <ul className="mt-3 space-y-1">
                       {current.questions.slice(0, 6).map((q) => (

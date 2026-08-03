@@ -10,7 +10,6 @@ import {
   Eye,
   EyeOff,
   FolderTree,
-  Lock,
   Plus,
   Trash2,
   X,
@@ -20,11 +19,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button, ButtonLink } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/dashboard'
 import { Field, Input, Select, Textarea } from '@/components/ui/field'
-import {
-  categoryFormLinkIsTickable,
-  formLinkForCategory,
-  removingCategoryWouldTargetEveryone,
-} from '@/lib/forms'
+import { categoryFormLinkIsTickable, formLinkForCategory } from '@/lib/forms'
 import { formatMoney } from '@/lib/utils'
 import type { Service } from '@/types/database'
 import type { PostgrestError } from '@supabase/supabase-js'
@@ -521,11 +516,6 @@ export function ServiceCategoryManager({
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set())
   /** Titles the last save could not write. Empty is the normal state. */
   const [formsUnwritten, setFormsUnwritten] = useState<string[]>([])
-  /**
-   * Titles the last save deliberately left alone: unticking them would have
-   * emptied both of the form's arrays, which reads as "asked of everyone".
-   */
-  const [formsRefused, setFormsRefused] = useState<string[]>([])
   /** What is in each numeric gate's box, keyed by column. */
   const [gateDrafts, setGateDrafts] = useState<Record<string, string>>({})
   /** What the last apply did not manage to do, per service. */
@@ -560,7 +550,6 @@ export function ServiceCategoryManager({
     setMoveTarget('')
     setPicked(new Set())
     setFormsUnwritten([])
-    setFormsRefused([])
     setGateDrafts({})
     setGateReport(null)
     setEditing('new')
@@ -589,7 +578,6 @@ export function ServiceCategoryManager({
       )
     )
     setFormsUnwritten([])
-    setFormsRefused([])
     setGateDrafts(seedGateDrafts(servicesOf(category.id)))
     setGateReport(null)
     setEditing(category.id)
@@ -612,13 +600,9 @@ export function ServiceCategoryManager({
   /**
    * Add or remove this category's id on each form the picker actually controls.
    *
-   * Never on a studio-wide one. Both arrays empty is what makes a form
-   * studio-wide, and switching that off for one category would mean writing
-   * every OTHER category's id into `category_ids` — quietly redefining what all
-   * of them require. Never on a form that only names services inside this
-   * category either: ticking that would widen it from the few services it names
-   * to every service filed here, which is not what a tick next to "required for
-   * 2 of 4" looks like it does.
+   * Never on a form that only names services inside this category: ticking that
+   * would widen it from the few services it names to every service filed here,
+   * which is not what a tick next to "required for 2 of 4" looks like it does.
    *
    * Writing `category_ids` on a form that has been signed or answered is
    * allowed and does not need a new version — 026's guard trigger compares
@@ -626,10 +610,11 @@ export function ServiceCategoryManager({
    * `publish_consent_version()` would burn a version number on a change that
    * alters not one word anybody agreed to.
    *
-   * One untick is refused rather than written: the one that would empty both of
-   * the form's arrays, which is not a removal but the widest change the shape
-   * can express. `isOnlyTarget` disables that tick before it gets here; this
-   * catches the case where the arrays changed underneath us.
+   * Nothing is refused. Unticking a form's last category is a real removal —
+   * a form naming nothing is asked of nobody, the same answer 023's SQL gives —
+   * so it is written like any other untick. It does leave a form that applies
+   * to nothing, which the Forms screens flag for what it is rather than this
+   * panel blocking on the manager's behalf.
    *
    * Every tick is an UPDATE to a different row in a different table, so this
    * reports per form and the caller says out loud which ones did not land.
@@ -641,9 +626,8 @@ export function ServiceCategoryManager({
   ): Promise<{
     changed: number
     failed: string[]
-    refused: { key: string; title: string }[]
   }> {
-    const nothing = { changed: 0, failed: [] as string[], refused: [] as { key: string; title: string }[] }
+    const nothing = { changed: 0, failed: [] as string[] }
     if (!forms) return nothing
 
     const wanted = forms
@@ -653,24 +637,22 @@ export function ServiceCategoryManager({
 
     if (wanted.length === 0) return nothing
 
-    // Re-read the arrays immediately before rewriting them. The copy this page
-    // was rendered with may be minutes old, and these arrays are shared — a
-    // service editor or the form's own page may have changed one since. If the
-    // re-read fails we fall back to the rendered copy rather than abandoning
-    // the save. Both arrays, because the refusal below turns on the services.
-    const fresh = new Map<string, { service_ids: number[]; category_ids: number[] }>()
+    // Re-read the array immediately before rewriting it. The copy this page was
+    // rendered with may be minutes old, and it is shared — a service editor or
+    // the form's own page may have changed it since. If the re-read fails we
+    // fall back to the rendered copy rather than abandoning the save. Only
+    // `category_ids`: it is the one column this panel writes, and nothing here
+    // turns on what the services say any more.
+    const fresh = new Map<string, number[]>()
 
     const consentIds = wanted.filter((w) => w.template.kind === 'consent').map((w) => w.template.id)
     if (consentIds.length > 0) {
       const { data } = await supabase
         .from('consent_forms')
-        .select('id, service_ids, category_ids')
+        .select('id, category_ids')
         .in('id', consentIds)
       for (const row of data ?? []) {
-        fresh.set(`consent:${row.id}`, {
-          service_ids: row.service_ids ?? [],
-          category_ids: row.category_ids ?? [],
-        })
+        fresh.set(`consent:${row.id}`, row.category_ids ?? [])
       }
     }
 
@@ -678,25 +660,18 @@ export function ServiceCategoryManager({
     if (intakeIds.length > 0) {
       const { data } = await supabase
         .from('intake_forms')
-        .select('id, service_ids, category_ids')
+        .select('id, category_ids')
         .in('id', intakeIds)
       for (const row of data ?? []) {
-        fresh.set(`intake:${row.id}`, {
-          service_ids: row.service_ids ?? [],
-          category_ids: row.category_ids ?? [],
-        })
+        fresh.set(`intake:${row.id}`, row.category_ids ?? [])
       }
     }
 
     const outcomes = await Promise.all(
       wanted.map(async ({ template, on }) => {
         const key = templateKey(template)
-        const stored = fresh.get(key) ?? {
-          service_ids: template.service_ids,
-          category_ids: template.category_ids,
-        }
-        const current = stored.category_ids
-        const unchanged = { key, title: template.title, ok: true, wrote: false, refused: false }
+        const current = fresh.get(key) ?? template.category_ids
+        const unchanged = { key, title: template.title, ok: true, wrote: false }
 
         // Somebody else already made it so. Nothing to write.
         if (current.includes(categoryId) === on) return unchanged
@@ -704,11 +679,6 @@ export function ServiceCategoryManager({
         const next = on
           ? [...current, categoryId]
           : current.filter((id) => id !== categoryId)
-
-        // The one write that widens a form instead of narrowing it.
-        if (!on && next.length === 0 && stored.service_ids.length === 0) {
-          return { ...unchanged, refused: true }
-        }
 
         // `is_active` and the returned row together turn two silent misfires
         // into reported ones: a form superseded by publish_consent_version()
@@ -735,7 +705,6 @@ export function ServiceCategoryManager({
           title: template.title,
           ok: !error && (data?.length ?? 0) > 0,
           wrote: true,
-          refused: false,
         }
       })
     )
@@ -743,7 +712,6 @@ export function ServiceCategoryManager({
     return {
       changed: outcomes.filter((o) => o.ok && o.wrote).length,
       failed: outcomes.filter((o) => !o.ok).map((o) => o.title),
-      refused: outcomes.filter((o) => o.refused).map((o) => ({ key: o.key, title: o.title })),
     }
   }
 
@@ -817,14 +785,6 @@ export function ServiceCategoryManager({
     const links = await applyFormLinks(supabase, target, servicesOf(target).map((s) => s.id))
     setBusy(false)
 
-    // A refused untick left the form as it was, so the tick goes back — the
-    // checkbox has to show what is stored, not what was asked for.
-    if (links.refused.length > 0) {
-      const keys = new Set(links.refused.map((r) => r.key))
-      setPicked((cur) => new Set([...cur, ...keys]))
-    }
-    setFormsRefused(links.refused.map((r) => r.title))
-
     if (links.failed.length > 0) {
       // The category is saved and some of the forms are not. Name them, keep
       // the ticks as they were set and leave the panel open, so pressing Save
@@ -839,18 +799,6 @@ export function ServiceCategoryManager({
       return
     }
     setFormsUnwritten([])
-
-    if (links.refused.length > 0) {
-      // Saved. The panel stays open so the reason the tick came back is read
-      // rather than flashed past in a toast.
-      toast.error(
-        `${name} was saved, but ${
-          links.refused.length === 1 ? 'one form was' : `${links.refused.length} forms were`
-        } left as ${links.refused.length === 1 ? 'it was' : 'they were'}.`
-      )
-      router.refresh()
-      return
-    }
 
     toast.success(
       'Saved.' +
@@ -1091,8 +1039,9 @@ export function ServiceCategoryManager({
   /**
    * Every form, sorted by how it reaches this category.
    *
-   * The four answers are not two, so they are not four checkboxes. Only
-   * `tickable` gets one; the rest are shown for what they are.
+   * The three answers are not two, so they are not three checkboxes. Only
+   * `tickable` gets one; a form named on some of these services in their own
+   * right is shown with its count instead.
    */
   const formLinks =
     editingCategory && forms
@@ -1106,20 +1055,20 @@ export function ServiceCategoryManager({
         }))
       : []
   const tickableForms = formLinks.filter((l) => categoryFormLinkIsTickable(l.link))
-  const studioForms = formLinks.filter((l) => l.link === 'studio')
   const partialForms = formLinks.filter((l) => l.link === 'services')
 
   /**
-   * This category is the only thing the form names, and it names no service.
+   * Is this category the last thing the form names?
    *
-   * Judged against what is STORED, not what is ticked: reverting a tick made in
-   * this panel writes nothing, so there is nothing to refuse. Only a stored
-   * link is at risk, and emptying it asks the form of everyone.
+   * Not a refusal — unticking it is allowed and is written like any other. It
+   * is said next to the box because the outcome is worth knowing before the
+   * press: the form will apply to nothing and nobody will be asked for it.
    */
-  function isOnlyTarget(template: CategoryFormTemplate, categoryId: number): boolean {
+  function isLastTarget(template: CategoryFormTemplate, categoryId: number): boolean {
     return (
-      template.category_ids.includes(categoryId) &&
-      removingCategoryWouldTargetEveryone(template, categoryId)
+      template.service_ids.length === 0 &&
+      template.category_ids.length === 1 &&
+      template.category_ids[0] === categoryId
     )
   }
 
@@ -1284,23 +1233,6 @@ export function ServiceCategoryManager({
             </div>
           )}
 
-          {formsRefused.length > 0 && (
-            <div className="mt-4 border-l-2 border-[var(--color-accent)] bg-[var(--color-clay-soft)] p-4 text-sm dark:bg-[var(--color-background)]">
-              <p>These forms were left as they were:</p>
-              <ul className="mt-1.5 list-disc pl-5 text-[var(--color-muted)]">
-                {formsRefused.map((title) => (
-                  <li key={title}>{title}</li>
-                ))}
-              </ul>
-              <p className="mt-2 text-[var(--color-muted)]">
-                This category is the only thing each of them names, and they name no
-                service. A form that names nothing is asked of every client for every
-                service — so removing the last one would widen it, not switch it off.
-                Switch it off, or point it somewhere else, on its own page under Forms.
-              </p>
-            </div>
-          )}
-
           {forms === null ? (
             <p className="mt-4 text-sm text-[var(--color-muted)]">
               The forms could not be read with your account. Everything else here still
@@ -1317,10 +1249,10 @@ export function ServiceCategoryManager({
                 <div className="mt-4 space-y-3">
                   {tickableForms.map(({ template }) => {
                     const key = templateKey(template)
-                    // Ticked and locked: the only category it names, no service
-                    // behind it. Unticking would empty both arrays, and empty
-                    // means everyone.
-                    const onlyTarget = isOnlyTarget(template, editingCategory.id)
+                    // The last thing it names. Allowed, and said out loud —
+                    // unticking leaves the form applying to nothing.
+                    const lastTarget =
+                      picked.has(key) && isLastTarget(template, editingCategory.id)
                     // Named on some of these services in their own right, which
                     // unticking the category does not undo. Said here rather
                     // than discovered afterwards, when the row would reappear
@@ -1329,16 +1261,11 @@ export function ServiceCategoryManager({
                       template.service_ids.includes(s.id)
                     ).length
                     return (
-                      <label
-                        key={key}
-                        className={`flex items-start gap-2.5 text-sm ${
-                          onlyTarget ? '' : 'cursor-pointer'
-                        }`}
-                      >
+                      <label key={key} className="flex cursor-pointer items-start gap-2.5 text-sm">
                         <input
                           type="checkbox"
                           checked={picked.has(key)}
-                          disabled={onlyTarget || busy}
+                          disabled={busy}
                           onChange={(e) => toggleForm(key, e.target.checked)}
                           className="mt-0.5 h-4 w-4 accent-[var(--color-accent)] disabled:opacity-60"
                         />
@@ -1348,8 +1275,8 @@ export function ServiceCategoryManager({
                             {template.kind === 'consent'
                               ? 'Consent — signed before treatment'
                               : 'Intake — health and skin history'}
-                            {onlyTarget
-                              ? ' — the only category it asks. A form that names nothing is asked of everyone, so switch it off under Forms rather than here.'
+                            {lastTarget
+                              ? ' — the only thing it asks. Unticking it leaves the form applying to nothing, so nobody will be asked for it until it is pointed somewhere.'
                               : ''}
                             {namedHere > 0
                               ? ` It also names ${plural(
@@ -1391,32 +1318,6 @@ export function ServiceCategoryManager({
                           would ask it of all {total}, which is a bigger decision than this
                           box would look like. Change it on each service, or on the
                           form&rsquo;s own page under Forms.
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {studioForms.length > 0 && (
-                <div className="mt-5 border-l-2 border-[var(--color-border)] pl-4">
-                  <p className="label-caps text-[var(--color-muted)]">
-                    Already required, from elsewhere
-                  </p>
-                  <ul className="mt-3 space-y-3">
-                    {studioForms.map(({ template }) => (
-                      <li key={templateKey(template)} className="flex items-start gap-2.5 text-sm">
-                        <Lock
-                          className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-muted)]"
-                          strokeWidth={1.5}
-                          aria-hidden
-                        />
-                        <span>
-                          {template.title}
-                          <span className="block text-xs text-[var(--color-muted)]">
-                            Asked of every service in the studio. Not switchable from one
-                            category — change it on the form itself, under Forms.
-                          </span>
                         </span>
                       </li>
                     ))}
@@ -1800,7 +1701,7 @@ export function ServiceCategoryManager({
 
     if (forms) {
       const links = forms.map((f) => formLinkForCategory(f, category.id, ids))
-      const everywhere = links.filter((l) => l.link === 'studio' || l.link === 'category').length
+      const everywhere = links.filter((l) => l.link === 'category').length
       if (everywhere > 0) notes.push(plural(everywhere, 'form', 'forms'))
       if (links.some((l) => l.link === 'services')) notes.push('forms vary')
     }

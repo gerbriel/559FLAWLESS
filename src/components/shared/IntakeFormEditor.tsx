@@ -3,11 +3,16 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { X, Plus, Lock, Trash2, ArrowUp, ArrowDown, Flag } from 'lucide-react'
+import { X, Plus, Lock, Trash2, ArrowUp, ArrowDown, Flag, AlertTriangle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Field, Input, Select } from '@/components/ui/field'
+import {
+  FORM_APPLIES_TO_NOTHING,
+  FORM_TARGETING_HINT,
+  formTargetsNothing,
+} from '@/lib/forms'
 import type { IntakeQuestion } from '@/types/database'
 
 export interface EditableIntakeForm {
@@ -89,6 +94,20 @@ export function IntakeFormEditor({
   const questionsChanged =
     !isNew && JSON.stringify(questions) !== JSON.stringify(form.questions)
   const willVersion = answered && questionsChanged
+
+  /**
+   * What the targeting would be once this draft saved.
+   *
+   * `service_ids` is not edited here — a service names itself on the form from
+   * the services screen — but it counts, so a form reached only that way is not
+   * reported as applying to nothing.
+   */
+  const allPicked = categories.length > 0 && categories.every((c) => categoryIds.includes(c.id))
+  const namedServices = form?.service_ids?.length ?? 0
+  const appliesToNothing = formTargetsNothing({
+    service_ids: form?.service_ids ?? [],
+    category_ids: categoryIds,
+  })
 
   function addQuestion() {
     setQuestions((qs) => [...qs, { id: '', label: '', type: 'boolean' }])
@@ -247,9 +266,31 @@ export function IntakeFormEditor({
           />
         </Field>
 
-        {categories.length > 0 && (
-          <div>
-            <p className="label-caps mb-2 text-[var(--color-muted)]">Ask it for</p>
+        <div>
+          <div className="flex flex-wrap items-center justify-between gap-x-4">
+            <p className="label-caps text-[var(--color-muted)]">Ask it for</p>
+            {categories.length > 0 && (
+              <button
+                type="button"
+                // Union, not replace: `categories` is the ACTIVE list, and a
+                // form may already name one that has since been hidden.
+                // Widening the targeting must never narrow it behind the
+                // manager's back — a service under a hidden category is still
+                // bookable, so dropping the id would silently stop asking for
+                // the form there.
+                onClick={() =>
+                  setCategoryIds((cur) =>
+                    allPicked ? [] : [...new Set([...cur, ...categories.map((c) => c.id)])]
+                  )
+                }
+                className="-mr-2 flex min-h-11 items-center px-2 text-xs text-[var(--color-muted)] underline-offset-4 hover:text-[var(--color-foreground)] hover:underline"
+              >
+                {allPicked ? 'Clear all' : 'Every category'}
+              </button>
+            )}
+          </div>
+
+          {categories.length > 0 && (
             <div className="flex flex-wrap gap-x-5 gap-y-2">
               {categories.map((c) => (
                 <label key={c.id} className="flex min-h-11 cursor-pointer items-center gap-2 text-sm">
@@ -267,11 +308,24 @@ export function IntakeFormEditor({
                 </label>
               ))}
             </div>
-            <p className="mt-2 text-xs text-[var(--color-muted)]">
-              Tick nothing and every client is asked, whatever they book.
+          )}
+
+          <p className="mt-2 text-xs text-[var(--color-muted)]">
+            {FORM_TARGETING_HINT}
+            {namedServices > 0
+              ? ` ${namedServices} ${
+                  namedServices === 1 ? 'service names' : 'services name'
+                } this form in ${namedServices === 1 ? 'its' : 'their'} own right as well, set under Services.`
+              : ''}
+          </p>
+
+          {appliesToNothing && (
+            <p className="mt-2 flex items-start gap-2 border-l-2 border-amber-600 bg-amber-50 p-3 text-xs text-amber-900 dark:bg-transparent dark:text-amber-300">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+              <span>{FORM_APPLIES_TO_NOTHING}</span>
             </p>
-          </div>
-        )}
+          )}
+        </div>
 
         {/* ── Questions ──────────────────────────────── */}
         <div>

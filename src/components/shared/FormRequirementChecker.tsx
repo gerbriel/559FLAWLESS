@@ -39,11 +39,15 @@ const EXPIRY_WARNING_MS = 30 * DAY_MS
  * Which forms apply, and whether one still counts, are decided by `lib/forms`
  * and nothing else. The provider's readiness panel on the approval queue asks
  * the same module the same questions, so the two sides cannot disagree about
- * what is outstanding. They did once, in both directions: this component tested
- * `service_ids.includes(...) || category_ids.includes(...)`, which is false for
- * a studio-wide form — so a general waiver was permanently missing on the
- * provider's card and never once shown to the client who could have cleared it.
- * And it counted any signature at all as done, expired or not.
+ * what is outstanding. They did once: this component counted any signature at
+ * all as done, expired or not, so a two-year-old attestation about a body read
+ * as current.
+ *
+ * A form targeting nothing reaches nobody, so it never appears here. That is
+ * the same answer 023's `appointment_outstanding_forms` gives — `= any('{}')`
+ * is false — and for a week it was not the answer `formApplies` gave, which put
+ * an untargeted form on the staff screens as required of everyone while no
+ * client was ever actually asked for it.
  *
  * Nothing here gates anything. This lists what is outstanding and links to it;
  * whether a booking is confirmed, held for review, or approved is decided

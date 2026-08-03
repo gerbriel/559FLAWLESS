@@ -7,11 +7,7 @@ import { X, Trash2, Plus, Lock } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Field, Input, Select, Textarea } from '@/components/ui/field'
-import {
-  formLinkForService,
-  formLinkIsInherited,
-  removingServiceWouldTargetEveryone,
-} from '@/lib/forms'
+import { formLinkForService, formLinkIsInherited } from '@/lib/forms'
 
 export interface EditableService {
   id: number
@@ -158,11 +154,6 @@ export function ServiceEditor({
   /** Titles the last save could not write. Empty is the normal state. */
   const [unwritten, setUnwritten] = useState<string[]>([])
   /**
-   * Titles the last save deliberately left alone: unticking them would have
-   * emptied both of the form's arrays, which reads as "asked of everyone".
-   */
-  const [refused, setRefused] = useState<string[]>([])
-  /**
    * Set once an insert has succeeded. A retry after a form write failed must
    * update that row, not create the service a second time.
    */
@@ -227,7 +218,6 @@ export function ServiceEditor({
         )
       )
       setUnwritten([])
-      setRefused([])
     }
 
     void load()
@@ -258,7 +248,6 @@ export function ServiceEditor({
   function close() {
     setOpen(false)
     setUnwritten([])
-    setRefused([])
     if (isNew && createdId !== null) resetDraft()
   }
 
@@ -283,27 +272,12 @@ export function ServiceEditor({
   const categoryName = categories.find((c) => c.id === form.category_id)?.name ?? 'this category'
 
   /**
-   * This service is the only thing the form names, and it names no category.
-   *
-   * Judged against what is STORED, not what is ticked: reverting a tick made in
-   * this modal writes nothing, so there is nothing to refuse. Only a stored
-   * link is at risk, and emptying it asks the form of everyone.
-   */
-  function isOnlyTarget(template: FormTemplate): boolean {
-    return (
-      serviceId !== null &&
-      template.service_ids.includes(serviceId) &&
-      removingServiceWouldTargetEveryone(template, serviceId)
-    )
-  }
-
-  /**
    * Add or remove this service's id on each form the picker actually controls.
    *
-   * Never on an inherited one. A studio-wide form is one with both arrays
-   * empty, and switching it off for a single service would mean writing every
-   * OTHER service's id into `service_ids` — quietly redefining what all of them
-   * require. Same for a category. Those two are shown, not offered.
+   * Never on an inherited one: a form reached through this service's category
+   * would need every OTHER service's id written into `service_ids` to be
+   * switched off here, quietly redefining what all of them require. Those are
+   * shown, not offered.
    *
    * Writing `service_ids` on a form that has been signed or answered is allowed
    * and does not need a new version: 026's guard trigger compares `body`, 046's
@@ -313,13 +287,11 @@ export function ServiceEditor({
    * number on a change that alters not one word anybody agreed to, and orphan
    * the old row's targeting.
    *
-   * One untick is refused rather than written: the one that would empty both of
-   * the form's arrays. Empty and empty is not "nothing asks for this", it is
-   * the studio-wide case — `formApplies` returns true for every appointment —
-   * so that write would take a form off one service by putting it in front of
-   * every client of every other. `isOnlyTarget` disables the tick before it
-   * gets here; this catches the case where the array changed underneath us
-   * between the modal opening and the save.
+   * Nothing is refused. Unticking the form's last service is a real removal —
+   * a form naming nothing is asked of nobody, the same answer 023's SQL gives —
+   * so it is written like any other untick. It does leave a form that applies
+   * to nothing, which the Forms screens flag for what it is rather than this
+   * modal blocking on the manager's behalf.
    *
    * Every tick is an UPDATE to a different row in a different table and the
    * browser has no transaction to wrap them in, so this reports per form and
@@ -332,14 +304,12 @@ export function ServiceEditor({
   ): Promise<{
     changed: number
     failed: string[]
-    refused: { key: string; title: string }[]
     /** Each touched form's `service_ids` as they now stand in the database. */
     stored: Map<string, number[]>
   }> {
     const nothing = {
       changed: 0,
       failed: [] as string[],
-      refused: [] as { key: string; title: string }[],
       stored: new Map<string, number[]>(),
     }
     if (!templates) return nothing
@@ -351,25 +321,22 @@ export function ServiceEditor({
 
     if (wanted.length === 0) return nothing
 
-    // Re-read the arrays immediately before rewriting them. The copy loaded
-    // when the modal opened may be minutes old, and these arrays are shared —
-    // another service's editor, or the form's own page, may have added an id
-    // since. If the re-read fails we fall back to the loaded copy rather than
-    // abandoning the save.
-    // Both arrays, because the refusal below turns on the categories as well.
-    const fresh = new Map<string, { service_ids: number[]; category_ids: number[] }>()
+    // Re-read the array immediately before rewriting it. The copy loaded when
+    // the modal opened may be minutes old, and it is shared — another service's
+    // editor, or the form's own page, may have added an id since. If the
+    // re-read fails we fall back to the loaded copy rather than abandoning the
+    // save. Only `service_ids`: it is the one column this modal writes, and
+    // nothing here turns on what the categories say any more.
+    const fresh = new Map<string, number[]>()
 
     const consentIds = wanted.filter((w) => w.template.kind === 'consent').map((w) => w.template.id)
     if (consentIds.length > 0) {
       const { data } = await supabase
         .from('consent_forms')
-        .select('id, service_ids, category_ids')
+        .select('id, service_ids')
         .in('id', consentIds)
       for (const row of data ?? []) {
-        fresh.set(`consent:${row.id}`, {
-          service_ids: row.service_ids ?? [],
-          category_ids: row.category_ids ?? [],
-        })
+        fresh.set(`consent:${row.id}`, row.service_ids ?? [])
       }
     }
 
@@ -377,40 +344,27 @@ export function ServiceEditor({
     if (intakeIds.length > 0) {
       const { data } = await supabase
         .from('intake_forms')
-        .select('id, service_ids, category_ids')
+        .select('id, service_ids')
         .in('id', intakeIds)
       for (const row of data ?? []) {
-        fresh.set(`intake:${row.id}`, {
-          service_ids: row.service_ids ?? [],
-          category_ids: row.category_ids ?? [],
-        })
+        fresh.set(`intake:${row.id}`, row.service_ids ?? [])
       }
     }
 
     const outcomes = await Promise.all(
       wanted.map(async ({ template, on }) => {
         const key = templateKey(template)
-        const stored = fresh.get(key) ?? {
-          service_ids: template.service_ids,
-          category_ids: template.category_ids,
-        }
-        const current = stored.service_ids
+        const current = fresh.get(key) ?? template.service_ids
         const unchanged = { key, title: template.title, ok: true, wrote: false, stored: current }
 
         if (current.includes(savedId) === on) {
           // Somebody else already made it so. Nothing to write.
-          return { ...unchanged, refused: false }
+          return unchanged
         }
 
         const next = on
           ? [...current, savedId]
           : current.filter((id) => id !== savedId)
-
-        // The one write that widens a form instead of narrowing it. Refused,
-        // and named to the user — a silent no-op here would read as a save.
-        if (!on && next.length === 0 && stored.category_ids.length === 0) {
-          return { ...unchanged, refused: true }
-        }
 
         // `is_active` and the returned row together turn two silent misfires
         // into reported ones: a form superseded by publish_consent_version()
@@ -438,7 +392,6 @@ export function ServiceEditor({
           title: template.title,
           ok,
           wrote: true,
-          refused: false,
           // A write that did not land leaves the row as the re-read found it.
           stored: ok ? next : current,
         }
@@ -448,7 +401,6 @@ export function ServiceEditor({
     return {
       changed: outcomes.filter((o) => o.ok && o.wrote).length,
       failed: outcomes.filter((o) => !o.ok).map((o) => o.title),
-      refused: outcomes.filter((o) => o.refused).map((o) => ({ key: o.key, title: o.title })),
       stored: new Map(outcomes.map((o) => [o.key, o.stored])),
     }
   }
@@ -561,14 +513,6 @@ export function ServiceEditor({
       )
     }
 
-    // A refused untick left the form as it was, so the tick goes back — the
-    // checkbox has to show what is stored, not what was asked for.
-    if (forms.refused.length > 0) {
-      const keys = new Set(forms.refused.map((r) => r.key))
-      setPicked((cur) => new Set([...cur, ...keys]))
-    }
-    setRefused(forms.refused.map((r) => r.title))
-
     if (forms.failed.length > 0) {
       // The service is saved and some of the forms are not. Name them, keep the
       // ticks as the user set them and leave the modal open, so pressing Save
@@ -586,18 +530,6 @@ export function ServiceEditor({
     const formNote =
       forms.changed > 0 ? ` ${forms.changed} form${forms.changed === 1 ? '' : 's'} updated.` : ''
     setUnwritten([])
-
-    if (forms.refused.length > 0) {
-      // The service saved. Stay open so the reason the tick came back is read
-      // rather than flashed past in a toast.
-      toast.error(
-        `${payload.name} was saved, but ${
-          forms.refused.length === 1 ? 'one form was' : `${forms.refused.length} forms were`
-        } left as ${forms.refused.length === 1 ? 'it was' : 'they were'}.`
-      )
-      router.refresh()
-      return
-    }
 
     toast.success((isNew ? `${payload.name} added.` : 'Saved.') + formNote)
     setOpen(false)
@@ -678,23 +610,6 @@ export function ServiceEditor({
             <p className="mt-2 text-[var(--color-muted)]">
               Each form is a separate write, so the others went through. Save again to retry
               these, or set them from the form&rsquo;s own page under Forms.
-            </p>
-          </div>
-        )}
-
-        {refused.length > 0 && (
-          <div className="mt-4 border-l-2 border-[var(--color-accent)] bg-[var(--color-clay-soft)] p-4 text-sm dark:bg-[var(--color-background)]">
-            <p>These forms were left as they were:</p>
-            <ul className="mt-1.5 list-disc pl-5 text-[var(--color-muted)]">
-              {refused.map((title) => (
-                <li key={title}>{title}</li>
-              ))}
-            </ul>
-            <p className="mt-2 text-[var(--color-muted)]">
-              This service is the only thing each of them names, and they name no category. A
-              form that names nothing is asked of every client for every service — so removing
-              the last one would widen it, not switch it off. Switch it off, or point it at
-              something else, on its own page under Forms.
             </p>
           </div>
         )}
@@ -888,23 +803,22 @@ export function ServiceEditor({
                 <div className="mt-4 space-y-3">
                   {choosable.map(({ template }) => {
                     const key = templateKey(template)
-                    // Ticked-and-locked: the only service it names, no category
-                    // behind it. Unticking would empty both arrays, and empty
-                    // means everyone.
-                    const onlyTarget = isOnlyTarget(template)
+                    // The last tick a form has is unticked like any other: a
+                    // form naming nothing is asked of nobody, which is a way of
+                    // switching it off, not of widening it.
+                    const lastTarget =
+                      serviceId !== null &&
+                      picked.has(key) &&
+                      template.category_ids.length === 0 &&
+                      template.service_ids.length === 1 &&
+                      template.service_ids[0] === serviceId
                     return (
-                      <label
-                        key={key}
-                        className={`flex items-start gap-3 text-sm ${
-                          onlyTarget ? '' : 'cursor-pointer'
-                        }`}
-                      >
+                      <label key={key} className="flex cursor-pointer items-start gap-3 text-sm">
                         <input
                           type="checkbox"
                           checked={picked.has(key)}
-                          disabled={onlyTarget}
                           onChange={(e) => toggleForm(key, e.target.checked)}
-                          className="mt-0.5 h-4 w-4 accent-[var(--color-accent)] disabled:opacity-60"
+                          className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
                         />
                         <span>
                           {template.title}
@@ -912,8 +826,8 @@ export function ServiceEditor({
                             {template.kind === 'consent'
                               ? 'Consent — signed before treatment'
                               : 'Intake — health and skin history'}
-                            {onlyTarget
-                              ? ' — the only service it asks. A form that names nothing is asked of everyone, so switch it off under Forms rather than here.'
+                            {lastTarget
+                              ? ' — the only thing it asks. Unticking it leaves the form applying to nothing, so nobody will be asked for it until it is pointed somewhere.'
                               : ''}
                           </span>
                         </span>
@@ -929,7 +843,7 @@ export function ServiceEditor({
                     Already required, from elsewhere
                   </p>
                   <ul className="mt-3 space-y-3">
-                    {inherited.map(({ template, link }) => (
+                    {inherited.map(({ template }) => (
                       <li key={templateKey(template)} className="flex items-start gap-3 text-sm">
                         <Lock
                           className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-muted)]"
@@ -939,11 +853,8 @@ export function ServiceEditor({
                         <span>
                           {template.title}
                           <span className="block text-xs text-[var(--color-muted)]">
-                            {link === 'studio'
-                              ? 'Asked of every service.'
-                              : `Asked for all ${categoryName}.`}{' '}
-                            Not switchable from one service — change it on the form itself,
-                            under Forms.
+                            Asked for all {categoryName}. Not switchable from one service —
+                            change it on the form itself, under Forms.
                             {serviceId !== null && template.service_ids.includes(serviceId)
                               ? ' It names this service as well.'
                               : ''}

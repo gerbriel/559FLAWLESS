@@ -1,11 +1,16 @@
 import { redirect } from 'next/navigation'
-import { FileText, Lock } from 'lucide-react'
+import { FileText, Lock, AlertTriangle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
 import {
   ConsentFormEditor,
   type EditableConsentForm,
 } from '@/components/shared/ConsentFormEditor'
+import {
+  FORM_APPLIES_TO_NOTHING,
+  describeFormTargeting,
+  formTargetsNothing,
+} from '@/lib/forms'
 import { isManager, type UserRole } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
@@ -69,6 +74,7 @@ export default async function ConsentFormsPage() {
   }))
 
   const options = (categories ?? []).map((c) => ({ id: c.id, name: c.name }))
+  const categoryName = new Map(options.map((c) => [c.id, c.name]))
 
   // Group by slug so every version of a form sits together.
   const bySlug = new Map<string, EditableConsentForm[]>()
@@ -96,6 +102,10 @@ export default async function ConsentFormsPage() {
           {[...bySlug.entries()].map(([slug, versions]) => {
             const current = versions.find((v) => v.is_active) ?? versions[0]
             const superseded = versions.filter((v) => v.id !== current.id)
+            // Only worth saying about a form that is otherwise live: a form
+            // switched off is already accounted for by "Not in use", and two
+            // badges saying the same absence would read as two problems.
+            const unreachable = current.is_active && formTargetsNothing(current)
 
             return (
               <section key={slug} className="border border-[var(--color-border)] bg-[var(--color-surface)]">
@@ -115,14 +125,28 @@ export default async function ConsentFormsPage() {
                           {current.signature_count} signed
                         </Badge>
                       )}
+                      {unreachable && (
+                        <Badge tone="warning">
+                          <AlertTriangle className="h-3 w-3" strokeWidth={2} />
+                          Applies to nothing
+                        </Badge>
+                      )}
                     </div>
                     <p className="mt-2 line-clamp-2 max-w-prose text-sm text-[var(--color-muted)]">
                       {current.body}
                     </p>
                     <p className="mt-2 text-xs text-[var(--color-muted)]">
                       Re-signed every {current.revalidate_after_days} days
-                      {current.requires_initials ? ' · initials required' : ''}
+                      {current.requires_initials ? ' · initials required' : ''} ·{' '}
+                      {describeFormTargeting(current, categoryName)}
                     </p>
+
+                    {unreachable && (
+                      <p className="mt-2 flex max-w-prose items-start gap-2 border-l-2 border-amber-600 bg-amber-50 p-3 text-xs text-amber-900 dark:bg-transparent dark:text-amber-300">
+                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+                        <span>{FORM_APPLIES_TO_NOTHING}</span>
+                      </p>
+                    )}
                   </div>
 
                   <ConsentFormEditor form={current} categories={options} />
