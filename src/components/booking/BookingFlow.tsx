@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { Check, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
+import { Check, ChevronLeft, ChevronRight, Clock, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Field, Input, Textarea } from '@/components/ui/field'
@@ -16,6 +16,7 @@ import {
 } from '@/lib/time'
 import { trackEvent } from '@/components/shared/AnalyticsTracker'
 import { FormRequirementChecker } from '@/components/shared/FormRequirementChecker'
+import { DepositRedirect } from '@/components/shared/DepositRedirect'
 import { WaitlistJoin } from '@/components/booking/WaitlistJoin'
 import { SignedInAs, backfillProfile } from '@/components/shared/SignedInIdentity'
 
@@ -117,16 +118,22 @@ export function BookingFlow({
   const [confirmation, setConfirmation] = useState<{
     id: string
     startsAt: string
+    /**
+     * What the database made of it, not what was asked for. Approval routing
+     * lives in triggers (036), so an online booking can land as `pending` even
+     * though the request asked to confirm it — and the client is told which.
+     */
+    status: string
     depositCents: number
     totalCents: number
   } | null>(null)
-
   /**
-   * The first service chosen, used wherever a single one is still meaningful —
-   * the deep link, the category for form requirements. Aggregates below are
-   * what the booking actually costs and takes.
+   * Set when the automatic hop to Stripe did not happen and the client has to
+   * be given the tap instead. `submit` turns it on for a checkout session that
+   * would not open; a booking held for review never tries in the first place.
    */
-  const service = selected[0] ?? null
+  const [checkoutBlocked, setCheckoutBlocked] = useState(false)
+
   const hasSelection = selected.length > 0
 
   // Only providers who offer EVERY chosen service. Booking a facial and a wax
@@ -230,10 +237,11 @@ export function BookingFlow({
         setLoadingSlots(false)
       }
     },
-    // `selected`, not `service`. `service` is selected[0], so adding a SECOND
-    // service left this callback un-recreated and holding a stale closure —
-    // slots were then fetched for the first service's duration alone, and a
-    // client booking a facial plus a wax could take a slot too short for both.
+    // The whole of `selected`, not just its first entry. Keying this on
+    // selected[0] left the callback un-recreated when a SECOND service was
+    // added, holding a stale closure — slots were then fetched for the first
+    // service's duration alone, and a client booking a facial plus a wax could
+    // take a slot too short for both.
     [selected, hasSelection, provider, addonIds]
   )
 
@@ -288,9 +296,15 @@ export function BookingFlow({
         provider_id: provider.id,
       })
 
+      // An older server build that does not send this is treated as the status
+      // the studio has run on until now.
+      const status: string = data.booking.status ?? 'confirmed'
+      const heldForReview = status === 'pending'
+
       setConfirmation({
         id: data.booking.id,
         startsAt: data.booking.startsAt,
+        status,
         depositCents: data.booking.depositCents,
         totalCents: data.booking.totalCents,
       })
@@ -308,18 +322,36 @@ export function BookingFlow({
         })
       }
 
-      if (data.booking.depositCents > 0) {
-        // Send them straight to Stripe to secure the slot.
+      /**
+       * A booking the studio still has to approve is NOT thrown at Stripe.
+       *
+       * `window.location.assign` leaves before a browser has painted anything
+       * worth reading, so the screen below — the one that says this is not
+       * confirmed yet — existed only for bookings without a deposit. The client
+       * paying money was the single client who never got told, and they came
+       * back from Stripe with a receipt believing they had an appointment.
+       *
+       * So: it still comes to checkout, because a held slot is exactly what a
+       * deposit is for, but by a tap on a screen that has said what it is first.
+       * `heldForReview` is what the database made of the booking (036), not what
+       * was asked for.
+       */
+      if (data.booking.depositCents > 0 && !heldForReview) {
+        // Confirmed and paying: straight through, as before.
         const checkout = await fetch('/api/stripe/deposit', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ appointment_id: data.booking.id }),
         })
-        const checkoutData = await checkout.json()
-        if (checkout.ok && checkoutData.url) {
+        const checkoutData = await checkout.json().catch(() => null)
+        if (checkout.ok && checkoutData?.url) {
           window.location.assign(checkoutData.url)
           return
         }
+        // Checkout would not open. Say so and offer the tap — the alternative
+        // was "Taking you to secure checkout" sitting on screen for ever while
+        // nothing happened.
+        setCheckoutBlocked(true)
       }
 
       router.refresh()
@@ -332,14 +364,35 @@ export function BookingFlow({
 
   // ── Confirmation ─────────────────────────────────────────
   if (step === 'done' && confirmation) {
+    /**
+     * The database, not this component, decides whether a booking is confirmed:
+     * appointment_route_approval (036) holds an online booking for review when a
+     * rule says so, and `status` on the response is what it landed as.
+     *
+     * This is the one screen where getting that wrong is unrecoverable — the
+     * client reads "confirmed" here and "Awaiting confirmation" on
+     * /account/appointments, and only one of them can be true.
+     */
+    const heldForReview = confirmation.status === 'pending'
+
     return (
       <div className="mx-auto max-w-lg py-16 text-center">
         <div className="mx-auto flex h-14 w-14 items-center justify-center border border-[var(--color-accent)]">
-          <Check className="h-6 w-6 text-[var(--color-accent)]" strokeWidth={1.5} />
+          {heldForReview ? (
+            <Clock className="h-6 w-6 text-[var(--color-accent)]" strokeWidth={1.5} />
+          ) : (
+            <Check className="h-6 w-6 text-[var(--color-accent)]" strokeWidth={1.5} />
+          )}
         </div>
-        <h2 className="display mt-8 text-4xl">You&rsquo;re booked.</h2>
+        <h2 className="display mt-8 text-4xl">
+          {heldForReview ? 'Your time is held.' : <>You&rsquo;re booked.</>}
+        </h2>
+        {/* Every service that was booked, joined the way the approval queue
+            joins them. Naming only the first one described a three-service visit
+            as a single wax — the same class of untruth as calling a pending
+            booking confirmed, and on the one screen nobody comes back to. */}
         <p className="mt-4 text-[var(--color-muted)]">
-          {service?.name} with {provider?.display_name}
+          {selected.map((s) => s.name).join(' + ')} with {provider?.display_name}
         </p>
         <p className="mt-1 text-lg">
           {formatDateTime(confirmation.startsAt, timezone)}{' '}
@@ -348,28 +401,116 @@ export function BookingFlow({
           </span>
         </p>
 
-        {confirmation.depositCents > 0 && (
-          <p className="mt-8 border border-[var(--color-border)] bg-[var(--color-surface)] p-5 text-sm text-[var(--color-muted)]">
-            Taking you to secure checkout to pay the{' '}
-            {formatMoney(confirmation.depositCents)} deposit. Your slot is held until
-            then.
+        {/*
+          Every claim here is one the code keeps. The slot really is reserved —
+          the exclusion constraint covers everything that is not cancelled, so a
+          pending appointment holds its time exactly as a confirmed one does, and
+          declining it is what releases it. The notification on approval is
+          written by appointment_notify_review (049) and it is keyed to
+          client_id, so it only reaches someone with an account; a guest is
+          promised contact by a person, which is all the studio can actually do
+          — there is no mail or SMS sender in this codebase, so "notification"
+          here means the bell in the account header and nothing else. That bell
+          is mounted in src/app/account/layout.tsx; if it is ever removed, this
+          sentence goes back to being a promise the app cannot keep.
+        */}
+        {heldForReview && (
+          <p className="mt-8 border-l-2 border-[var(--color-accent)] bg-[var(--color-clay-soft)] p-5 text-left text-sm leading-relaxed text-[var(--color-muted)] dark:bg-[var(--color-surface)]">
+            This one is not confirmed yet. The studio looks at some website bookings
+            before confirming them and this is one of them. Your time stays reserved
+            on the calendar while that happens — nobody else can take it.{' '}
+            {signedIn
+              ? 'You will get a notification in your account as soon as it is confirmed. Until then it shows as awaiting confirmation on your appointments page.'
+              : 'We will call or email you as soon as it is confirmed.'}
           </p>
         )}
+
+        {/*
+          The deposit.
+
+          /api/stripe/deposit takes any appointment that is not cancelled, so a
+          booking held for review does come to checkout — but it gets here by a
+          tap, not by `submit` redirecting out from under the copy above. See the
+          comment on that branch for why.
+
+          What is promised here is deliberate and it is not enforced by any code:
+          if the studio declines, the deposit comes back in full. There is no
+          automatic refund in this app — the only thing that ever marks a deposit
+          refunded is the charge.refunded webhook reacting to a human — so the
+          matching obligation is put in front of that human instead:
+          PendingBookingActions makes whoever declines a paid booking tick a box
+          saying they will issue the refund themselves, and tells them where.
+          These two pieces of copy are a pair. Change one, change the other.
+        */}
+        {confirmation.depositCents > 0 &&
+          (heldForReview || checkoutBlocked ? (
+            <div className="mt-8 border border-[var(--color-border)] bg-[var(--color-surface)] p-5 text-left">
+              <p className="label-caps text-[var(--color-accent)]">
+                Deposit · {formatMoney(confirmation.depositCents)}
+              </p>
+              <p className="mt-3 text-sm leading-relaxed text-[var(--color-muted)]">
+                {heldForReview ? (
+                  <>
+                    This is not payment for a confirmed appointment. Your time is
+                    already held while the studio reviews the booking, so paying is
+                    not what reserves it — the studio asks for the deposit up front
+                    and it comes off your total on the day. If we cannot take this
+                    booking, it is returned to you in full.
+                  </>
+                ) : (
+                  <>
+                    We could not open secure checkout just now. Your appointment is
+                    booked — it is only the payment that did not start. The deposit
+                    comes off your total on the day.
+                  </>
+                )}
+              </p>
+              <div className="mt-5">
+                <DepositRedirect appointmentId={confirmation.id} />
+              </div>
+              {signedIn && (
+                <p className="mt-3 text-xs text-[var(--color-muted)]">
+                  You can also pay it later from your appointments page.
+                </p>
+              )}
+            </div>
+          ) : (
+            <p className="mt-8 border border-[var(--color-border)] bg-[var(--color-surface)] p-5 text-sm text-[var(--color-muted)]">
+              Taking you to secure checkout to pay the{' '}
+              {formatMoney(confirmation.depositCents)} deposit. Your slot is held
+              until then.
+            </p>
+          ))}
 
         {/*
           The paperwork comes after the slot is secured, not in front of it.
           Requiring two clinical forms before the Confirm button meant someone who
           came to reserve a time left without one. The forms are still required
           before treatment — this is a prompt with a deadline, not an optional extra.
+
+          When the booking is held for review the prompt stays and only the reason
+          changes. The review itself reads no form status — PendingBookingActions
+          writes the status and nothing else, and the queue does not query intake
+          or consent — so the copy must not sell these as what unlocks the
+          confirmation. The honest pitch is the waiting period itself.
+
+          Every service goes in, not just the first. The consent a booking owes
+          is the union over everything on it — an intimate-services form
+          attached to the second service was never put in front of the client,
+          while the provider's card went on showing it outstanding.
         */}
-        {service && (
+        {hasSelection && (
           <div className="mt-10 text-left">
             <FormRequirementChecker
-              serviceId={service.id}
-              categoryId={service.category_id}
+              serviceIds={selected.map((s) => s.id)}
+              categoryIds={selected.map((s) => s.category_id)}
               returnTo="/account/appointments"
-              heading="One more thing"
-              intro="Your appointment is confirmed. Please fill these in before your visit — it saves time in the room, and we need them to treat you."
+              heading={heldForReview ? 'While you wait' : 'One more thing'}
+              intro={
+                heldForReview
+                  ? 'Your booking is with the studio to confirm. Now is the time to fill these in — we need them before we can treat you either way, and it means nothing is left outstanding on your side by the time it is confirmed.'
+                  : 'Your appointment is confirmed. Please fill these in before your visit — it saves time in the room, and we need them to treat you.'
+              }
             />
           </div>
         )}
@@ -589,7 +730,11 @@ export function BookingFlow({
                 Continue
                 <ChevronRight className="h-4 w-4" strokeWidth={2} />
               </Button>
-              {service?.requires_age_verification && !ageConfirmed && (
+              {/* `requiresAge`, not the first service's flag: the button is
+                  disabled on the aggregate, so testing selected[0] left a
+                  client whose SECOND service is age-gated staring at a dead
+                  Continue with nothing explaining why. */}
+              {requiresAge && !ageConfirmed && (
                 <p className="mt-3 text-xs text-[var(--color-muted)]">
                   Please confirm your age to continue.
                 </p>

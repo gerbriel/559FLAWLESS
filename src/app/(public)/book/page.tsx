@@ -33,8 +33,14 @@ export default async function BookPage({ searchParams }: Props) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  const [{ data: rawServices }, { data: rawProviders }, { data: links }, { data: addonLinks }, profileRes] =
-    await Promise.all([
+  const [
+    { data: rawServices },
+    { data: rawProviders },
+    { data: links },
+    { data: addonLinks },
+    profileRes,
+    { data: bookingSettings },
+  ] = await Promise.all([
       supabase
         .from('services')
         // NB: one string literal, never `'a' + 'b'` — postgrest-js parses the
@@ -65,6 +71,9 @@ export default async function BookPage({ searchParams }: Props) {
             .eq('id', user.id)
             .maybeSingle()
         : Promise.resolve({ data: null }),
+      // Whether website bookings are confirmed on the spot. Publicly readable
+      // (003), and it is what the paragraph below is allowed to promise.
+      supabase.from('booking_settings').select('auto_confirm').eq('id', 1).maybeSingle(),
     ])
 
   // Map add-ons to their services once, rather than per render.
@@ -186,9 +195,36 @@ export default async function BookPage({ searchParams }: Props) {
         <div className="mb-14 max-w-2xl">
           <p className="label-caps mb-4 text-[var(--color-accent)]">Booking</p>
           <h1 className="display text-4xl sm:text-5xl">Reserve your time.</h1>
+          {/*
+            What this paragraph used to say was "you will get a confirmation by
+            email and a reminder before your visit", and neither half was true.
+            There is no mail or SMS sender in this codebase — every notification
+            is in-app — and with `auto_confirm` off the studio reviews website
+            bookings before confirming them, so the confirmation being promised
+            here is the very thing that has not happened yet. It is the first
+            sentence a client reads, and it set the expectation the booking
+            screen then has to walk back.
+
+            Both branches are checked against the code: the appointments page
+            genuinely does show the state (STATUS_LABEL in
+            account/appointments/_lib/status.ts), and the notification really
+            does arrive — in the bell in the account header.
+          */}
           <p className="mt-5 text-[var(--color-muted)]">
-            Pick your service, choose a time that works, and we will take it from there.
-            You will get a confirmation by email and a reminder before your visit.
+            {bookingSettings?.auto_confirm === false ? (
+              <>
+                Pick your service and choose a time. It is held for you the moment you
+                book, and the studio confirms website bookings themselves — so it shows
+                as awaiting confirmation on your appointments page until they do, and
+                you will be told there as soon as it is confirmed.
+              </>
+            ) : (
+              <>
+                Pick your service, choose a time that works, and we will take it from
+                there. Some bookings are checked by the studio before they are
+                confirmed; your appointments page always shows where yours stands.
+              </>
+            )}
           </p>
         </div>
 

@@ -1,8 +1,8 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { CalendarClient } from '@/components/shared/CalendarClient'
-import { addDaysToDateKey, dateKeyInTimeZone, zonedTimeToUtc } from '@/lib/time'
-import { isFrontDesk, type UserRole } from '@/types/database'
+import { addDaysToDateKey, dateKeyInTimeZone, requestNow, zonedTimeToUtc } from '@/lib/time'
+import { isFrontDesk, isManager, type UserRole } from '@/types/database'
 import type { CalendarView } from '@/components/shared/CalendarView'
 
 export const dynamic = 'force-dynamic'
@@ -31,7 +31,9 @@ export default async function CalendarPage({ searchParams }: Props) {
   const role = (profile?.role ?? 'provider') as UserRole
   const tz = profile?.timezone || STUDIO_TZ
 
-  const todayKey = dateKeyInTimeZone(new Date(), tz)
+  // requestNow() rather than a bare Date.now(): one named seam for the clock,
+  // and it keeps React's purity lint honest about a Server Component.
+  const todayKey = dateKeyInTimeZone(new Date(requestNow()), tz)
   const startKey = /^\d{4}-\d{2}-\d{2}$/.test(from ?? '') ? from! : todayKey
   
   // Determine view and date range
@@ -141,6 +143,13 @@ export default async function CalendarPage({ searchParams }: Props) {
         closures={closures ?? []}
         initialDate={startKey}
         initialView={view}
+        // Where the toolbar's gear goes. The studio's scheduling rules are
+        // manager-and-above and bounce anyone below to the Settings index, so
+        // everyone else gets the one scheduling page they can always open:
+        // their own hours, the tab next door.
+        settingsHref={
+          isManager(role) ? '/dashboard/settings/scheduling' : '/dashboard/calendar/hours'
+        }
         // The same gate /dashboard/appointments/book-for-client enforces on the
         // server. The diary is visible to every staff member, but only front
         // desk and above may book on someone else's behalf — so for a provider

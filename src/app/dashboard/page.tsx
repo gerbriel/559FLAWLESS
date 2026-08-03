@@ -196,9 +196,21 @@ export default async function DashboardHome() {
                       {a.deposit_cents > 0 && a.deposit_status !== 'paid' && (
                         <Badge tone="warning">Deposit due</Badge>
                       )}
-                      <Badge tone={a.status === 'checked_in' ? 'accent' : 'neutral'}>
-                        {a.status.replace('_', ' ')}
-                      </Badge>
+                      {/* A booking nobody has approved is on this list —
+                          `pending` holds its slot, so it is genuinely part of
+                          today's book — and it used to print the raw enum in
+                          the same grey chip as 'confirmed'. Whether the studio
+                          has agreed to see this person is the one thing worth
+                          reading off a day at a glance, so it gets its own
+                          words and the warning tone every other pending
+                          surface uses. */}
+                      {a.status === 'pending' ? (
+                        <Badge tone="warning">Awaiting approval</Badge>
+                      ) : (
+                        <Badge tone={a.status === 'checked_in' ? 'accent' : 'neutral'}>
+                          {a.status.replace('_', ' ')}
+                        </Badge>
+                      )}
                       <span className="tabular-nums text-sm">{formatMoney(a.total_cents)}</span>
                     </div>
                   </Link>

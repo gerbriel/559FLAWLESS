@@ -49,7 +49,9 @@ export default async function DashboardLayout({
   ])
 
   return (
-    <div className="flex min-h-screen flex-col">
+    // `dash` is the scope that softens this side of the app — rounded panels,
+    // pill controls. The storefront stays square. See globals.css.
+    <div className="dash flex min-h-screen flex-col">
       <header className="sticky top-0 z-30 border-b border-[var(--color-border)] bg-[var(--color-background)]">
         <div className="flex h-16 items-center justify-between gap-6 px-6">
           <div className="flex items-center gap-8">
@@ -83,7 +85,14 @@ export default async function DashboardLayout({
       </header>
 
       <div className="flex flex-1 flex-col lg:flex-row">
-        <DashboardNav role={role} unreadThreads={unreadThreads ?? 0} />
+        {/* The name the menu greets you with. `display_name` is what a provider
+            chose to be called; the first name is the fallback, and the last
+            one is for an account that has neither yet. */}
+        <DashboardNav
+          role={role}
+          unreadThreads={unreadThreads ?? 0}
+          userName={profile.display_name || profile.first_name || 'Team member'}
+        />
         <main className="min-w-0 flex-1 px-6 py-10 lg:px-10">{children}</main>
       </div>
     </div>

@@ -205,6 +205,27 @@ Inter for body. Warm porcelain-to-espresso neutrals with a rose-clay accent —
 deliberately not clinical white. Square corners; the only radius in the system
 is on chart data-ends.
 
+### The dashboard is softer
+
+That last sentence is the storefront's rule, and it stays. Staff spend hours a
+day on the other side of the login, so `/dashboard` rounds its surfaces and
+pills its controls — same palette, same typefaces, same labels, softer edges.
+
+The softening is one scope, not forty literals. `src/app/dashboard/layout.tsx`
+carries `.dash`, which defines `--radius-panel`, `--radius-tile` and
+`--radius-control` and rounds anything marked `data-ui="button" | "input" |
+"panel" | "tile"`. The shared `Button`, `ButtonLink`, `Input`, `Textarea` and
+`Select` primitives already carry the attribute, so a dashboard screen built
+from them is correct without knowing any of this exists — and the same
+component on the storefront is still square.
+
+The staff screens share a vocabulary in `src/components/ui/dashboard.tsx`
+(`PageHeader`, `Panel`, `HeroPanel`, `HowItWorks`, `ActionTile`, `EmptyState`,
+`StatTile`, `Avatar`, `Thumb`, `SearchField`, `Pagination`, `Toolbar`) and
+`dashboard-client.tsx` (`FilterPills`, `Stepper`). Compose those rather than
+rebuilding them per page — the reason no two screens agreed on padding before
+was that every one of them had its own copy.
+
 ---
 
 ## Lineage

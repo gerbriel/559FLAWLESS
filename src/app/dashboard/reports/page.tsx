@@ -1,15 +1,55 @@
-import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { SlidersHorizontal } from 'lucide-react'
+import {
+  Boxes,
+  CalendarDays,
+  CircleDollarSign,
+  Clock,
+  Download,
+  FileText,
+  Gauge,
+  Landmark,
+  Percent,
+  Receipt,
+  ShoppingBag,
+  Sparkles,
+  TrendingUp,
+  UserCheck,
+  Users,
+  Wallet,
+  type LucideIcon,
+} from 'lucide-react'
 import { listReports, REPORT_GROUPS } from '@/lib/reports/registry'
 import { filterQuery, resolveReportShell, type ReportSearchParams } from '@/lib/reports/shell'
 import { roleAtLeast } from '@/lib/reports/types'
+import { ActionTile, EmptyState, HowItWorks, PageHeader } from '@/components/ui/dashboard'
 import { ROLE_LABELS } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
 
 interface Props {
   searchParams: Promise<ReportSearchParams>
+}
+
+/**
+ * A face for each report, keyed by its registry key.
+ *
+ * Icons live here rather than on the module because a report module is a query
+ * and its arithmetic — it should not have to import from lucide to be listed.
+ * A key with no entry falls back to the plain document, so registering a report
+ * never depends on remembering to come back here.
+ */
+const REPORT_ICONS: Record<string, LucideIcon> = {
+  sales: TrendingUp,
+  'sales-tax': Landmark,
+  'transaction-detail': Receipt,
+  expenses: Wallet,
+  'retail-sales': ShoppingBag,
+  commissions: Percent,
+  appointments: CalendarDays,
+  'utilisation-retention': Gauge,
+  inventory: Boxes,
+  'most-valuable-clients': Users,
+  'staff-performance': UserCheck,
 }
 
 /**
@@ -32,47 +72,67 @@ export default async function ReportsPage({ searchParams }: Props) {
 
   if (visible.length === 0 && !canBuild) redirect('/dashboard')
 
+  // Front desk sees one card — Appointments, the only report carrying no money.
+  // A single half-width tile in a two-column grid reads like a page that failed
+  // to load, so on its own it takes the full width instead.
+  const sole = visible.length === 1
+
   return (
     <div>
-      <div className="flex flex-wrap items-baseline justify-between gap-4">
-        <h1 className="display text-3xl">Reports</h1>
-        <span className="label-caps text-[var(--color-muted)]">
-          {ROLE_LABELS[shell.viewer.role]} view
-        </span>
-      </div>
+      <PageHeader
+        title="Reports"
+        lede="Pick a report, set the window, export it if you need it in a spreadsheet."
+        actions={
+          <span className="label-caps rounded-full border border-[var(--color-border)] px-3 py-1.5 text-[var(--color-muted)]">
+            {ROLE_LABELS[shell.viewer.role]} view
+          </span>
+        }
+      />
 
-      <p className="mt-4 max-w-2xl text-sm text-[var(--color-muted)]">
-        Every figure below counts money that was actually taken, not money that was billed, and
-        reads its dates in the studio&rsquo;s own timezone. Pick a report, set the window, export
-        it if you need it in a spreadsheet.
-      </p>
+      {/* The builder leads the grid the way the reference's does: same shape as
+          a report card, tinted and accent-edged so it reads as the one that
+          makes the others. Managers and above only — see the gate on the page
+          it links to. */}
+      {canBuild && (
+        <ActionTile
+          icon={Sparkles}
+          title="Create a custom report"
+          subtitle="Ask for anything the studio records — pick a subject, choose columns, add filters, group and sort. Runs as you, against the same permissions you already have, so it cannot show you anything you could not already open. Save the ones you want back."
+          href="/dashboard/reports/custom"
+          className="mt-8 border-[var(--color-accent)] bg-[var(--color-clay-soft)] dark:bg-[var(--color-surface)]"
+        />
+      )}
 
       {REPORT_GROUPS.map((group) => {
         const inGroup = visible.filter((r) => r.group === group.key)
         if (inGroup.length === 0) return null
 
         return (
-          <section key={group.key} className="mt-12">
+          <section key={group.key} className="mt-10">
             <h2 className="label-caps text-[var(--color-accent)]">{group.title}</h2>
             <p className="mt-2 text-sm text-[var(--color-muted)]">{group.blurb}</p>
 
-            <div className="mt-5 grid gap-px border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-2 lg:grid-cols-3">
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
               {inGroup.map(({ report }) => (
-                <Link
+                <ActionTile
                   key={report.key}
+                  icon={REPORT_ICONS[report.key] ?? FileText}
+                  title={report.title}
+                  subtitle={report.description}
                   href={`/dashboard/reports/${report.key}?${filterQuery(shell, report.filters)}`}
-                  className="group flex flex-col bg-[var(--color-surface)] p-6 transition-colors hover:bg-[var(--color-linen)] dark:hover:bg-[var(--color-background)]"
-                >
-                  <span className="text-base group-hover:text-[var(--color-accent)]">
-                    {report.title}
-                  </span>
-                  <span className="mt-2 text-sm text-[var(--color-muted)]">
-                    {report.description}
-                  </span>
-                  {report.minRole === 'admin' && (
-                    <span className="label-caps mt-4 text-[var(--color-muted)]">Admin only</span>
-                  )}
-                </Link>
+                  // The only role worth marking on a card is one narrower than
+                  // the screen itself: everything here is already manager-and-
+                  // above bar Appointments, so saying so on ten of eleven cards
+                  // would be noise. An admin-only report is the exception.
+                  badge={
+                    report.minRole === 'admin' ? (
+                      <span className="label-caps rounded-full bg-[var(--color-linen)] px-2.5 py-1 text-[var(--color-muted)] dark:bg-[var(--color-background)]">
+                        Admin only
+                      </span>
+                    ) : undefined
+                  }
+                  className={sole ? 'md:col-span-2' : undefined}
+                />
               ))}
             </div>
           </section>
@@ -80,37 +140,35 @@ export default async function ReportsPage({ searchParams }: Props) {
       })}
 
       {visible.length === 0 && (
-        <p className="mt-10 border border-[var(--color-border)] bg-[var(--color-surface)] p-8 text-sm text-[var(--color-muted)]">
-          No standard reports are registered yet. The builder below still works.
-        </p>
+        <EmptyState
+          className="mt-10"
+          icon={FileText}
+          title="No standard reports are registered yet"
+          description="The builder above still works — it reaches the same data with the same permissions."
+        />
       )}
 
-      {canBuild && (
-        <section className="mt-12">
-          <h2 className="label-caps text-[var(--color-accent)]">Build your own</h2>
-          <div className="mt-5 border border-[var(--color-border)] bg-[var(--color-surface)]">
-            <Link
-              href="/dashboard/reports/custom"
-              className="group flex items-start gap-5 p-6 transition-colors hover:bg-[var(--color-linen)] dark:hover:bg-[var(--color-background)]"
-            >
-              <SlidersHorizontal
-                className="mt-0.5 h-5 w-5 shrink-0 text-[var(--color-muted)]"
-                strokeWidth={1.5}
-              />
-              <span>
-                <span className="block text-base group-hover:text-[var(--color-accent)]">
-                  Custom report
-                </span>
-                <span className="mt-2 block max-w-2xl text-sm text-[var(--color-muted)]">
-                  Pick a subject, choose columns, add filters, group and sort. Runs as you, against
-                  the same permissions you already have — it cannot show you anything you could not
-                  already open. Save the ones you want back.
-                </span>
-              </span>
-            </Link>
-          </div>
-        </section>
-      )}
+      <HowItWorks
+        className="mt-14"
+        title="How these read"
+        items={[
+          {
+            icon: CircleDollarSign,
+            title: 'Money taken, not money billed',
+            body: 'Every figure counts payments that actually settled. A booked appointment nobody paid for is in the appointment counts and out of the takings.',
+          },
+          {
+            icon: Clock,
+            title: 'Studio time, wherever you are',
+            body: 'Dates are read in the studio’s own timezone, so "this month" ends when the studio’s month ends and not when yours does.',
+          },
+          {
+            icon: Download,
+            title: 'Exports match the screen',
+            body: 'Every report exports to CSV with the window and filters you are looking at, and money arrives as a plain number a spreadsheet can add up.',
+          },
+        ]}
+      />
     </div>
   )
 }

@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { ChevronLeft, ChevronRight, Filter } from 'lucide-react'
+import { ChevronLeft, ChevronRight, CircleDashed, Filter } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { formatMoney } from '@/lib/utils'
@@ -14,6 +14,7 @@ import type {
 } from '@/lib/calendar-blocks'
 import {
   CalendarViewComponent,
+  isAwaitingApproval,
   type CalendarView,
   type CalendarAppointment,
 } from './CalendarView'
@@ -84,6 +85,8 @@ export function DragScheduleCalendar({ onMoved, ...props }: DragScheduleCalendar
     selectedProviders.length === 0
       ? appointments
       : appointments.filter((a) => selectedProviders.includes(a.provider_id))
+
+  const pendingCount = filtered.filter(isAwaitingApproval).length
 
   const heading =
     view === 'day'
@@ -218,6 +221,15 @@ export function DragScheduleCalendar({ onMoved, ...props }: DragScheduleCalendar
         <span className="tabular-nums">
           {formatMoney(filtered.reduce((n, a) => n + a.total_cents, 0))} total
         </span>
+        {/* The board keeps its own copy of this line rather than reaching into
+            CalendarView's, so the count has to be repeated here or the drag
+            view would be the one place that never mentions the queue. */}
+        {pendingCount > 0 && (
+          <span className="inline-flex items-center gap-1.5">
+            <CircleDashed className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} aria-hidden />
+            <span className="tabular-nums">{pendingCount}</span> awaiting approval
+          </span>
+        )}
         {selectedProviders.length > 0 && (
           <Badge tone="neutral">{selectedProviders.length} provider(s) filtered</Badge>
         )}

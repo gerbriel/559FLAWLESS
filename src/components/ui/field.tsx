@@ -9,21 +9,30 @@ const control =
   'text-[var(--color-foreground)] placeholder:text-[var(--color-muted)] ' +
   'focus:border-[var(--color-accent)] focus:outline-none disabled:opacity-50'
 
+// data-ui rounds these inside the dashboard and leaves them square on the
+// storefront — see the `.dash` scope in globals.css.
 export const Input = React.forwardRef<HTMLInputElement, React.ComponentProps<'input'>>(
   function Input({ className, ...props }, ref) {
-    return <input ref={ref} className={cn(control, className)} {...props} />
+    return <input ref={ref} data-ui="input" className={cn(control, className)} {...props} />
   }
 )
 
 export const Textarea = React.forwardRef<HTMLTextAreaElement, React.ComponentProps<'textarea'>>(
   function Textarea({ className, ...props }, ref) {
-    return <textarea ref={ref} className={cn(control, 'min-h-24 resize-y', className)} {...props} />
+    return (
+      <textarea
+        ref={ref}
+        data-ui="input"
+        className={cn(control, 'min-h-24 resize-y', className)}
+        {...props}
+      />
+    )
   }
 )
 
 export const Select = React.forwardRef<HTMLSelectElement, React.ComponentProps<'select'>>(
   function Select({ className, ...props }, ref) {
-    return <select ref={ref} className={cn(control, 'pr-8', className)} {...props} />
+    return <select ref={ref} data-ui="input" className={cn(control, 'pr-8', className)} {...props} />
   }
 )
 

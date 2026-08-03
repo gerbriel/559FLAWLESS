@@ -142,6 +142,34 @@
     background-color: var(--color-border);
   }
 
+  /* ── The dashboard is softer than the storefront ────────────
+     The public site is square by rule, and stays that way. Staff live in the
+     dashboard for hours at a stretch, so it rounds its surfaces and pills its
+     controls — one scope, one set of radii. Anything under `.dash` that uses
+     the shared Button and Input primitives gets it without asking, which is
+     what stops eight screens from each inventing their own corner. */
+  .dash {
+    --radius-panel: 0.875rem;
+    --radius-tile: 0.625rem;
+    --radius-control: 0.5rem;
+  }
+
+  .dash [data-ui='button'] {
+    border-radius: 9999px;
+  }
+
+  .dash [data-ui='input'] {
+    border-radius: var(--radius-control);
+  }
+
+  .dash [data-ui='panel'] {
+    border-radius: var(--radius-panel);
+  }
+
+  .dash [data-ui='tile'] {
+    border-radius: var(--radius-tile);
+  }
+
   /* ── The till ──────────────────────────────────────────────
      A tap on a product tile has to read from arm's length, mid-conversation,
      with a bottle in the other hand. `.pos-flash` washes the photo in accent

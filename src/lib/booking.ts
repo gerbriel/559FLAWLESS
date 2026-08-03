@@ -70,6 +70,11 @@ export interface BookingResult {
   id: string
   startsAt: string
   endsAt: string
+  /**
+   * What the DATABASE decided, not what this module asked for. Approval routing
+   * lives in triggers (036), so `'confirmed'` here can come back `'pending'`.
+   * The confirmation screen reads this to know which of those two it happened.
+   */
   status: string
   depositCents: number
   totalCents: number
@@ -429,7 +434,20 @@ export async function createBooking(req: BookingRequest): Promise<BookingOutcome
       starts_at: requested.toISOString(),
       ends_at: endsAt.toISOString(),
       buffer_minutes: bufferMinutes,
-      status: (settings?.auto_confirm ?? true) ? 'confirmed' : 'pending',
+      // What we ASK for, always. appointment_route_approval (036) is a BEFORE
+      // INSERT trigger and holds it for review when a rule says so; the
+      // RETURNING below reflects its decision, not this one.
+      //
+      // Do NOT pre-empt it by reading booking_settings.auto_confirm and writing
+      // 'pending' here. That trigger's first line is `if new.source <> 'online'
+      // or new.status <> 'confirmed' then return new`, so asking for 'pending'
+      // makes it return early: the booking is still held, but
+      // booking_review_reason() never runs and `approval_reason` is left null.
+      // The queue and the bell then read the fallback 'Held for review' instead
+      // of 'Every online booking is held for review', and the one reason the
+      // studio-wide switch exists to record is the one reason never recorded.
+      // One decision, in one place — the trigger.
+      status: 'confirmed',
       source: 'online',
       deposit_cents: depositCents,
       deposit_status: depositCents > 0 ? 'pending' : 'none',
@@ -476,6 +494,22 @@ export async function createBooking(req: BookingRequest): Promise<BookingOutcome
     return failure('booking_failed', 500)
   }
 
+  // Half of approval routing cannot run until the line items exist:
+  // appointment_services_route_approval (036) is an AFTER INSERT trigger on
+  // appointment_services, and it is what holds a booking whose service carries
+  // requires_booking_approval. That fires after the RETURNING above, so the
+  // status we read with the row is already stale for that one reason.
+  //
+  // Read it back rather than re-deriving it here. The trigger is the authority
+  // on what this row is, and a second copy of that decision in application code
+  // is how the two drift apart. If the read fails, the insert's own value is
+  // still the truth for every other reason.
+  const { data: routed } = await supabase
+    .from('appointments')
+    .select('status')
+    .eq('id', appointment.id)
+    .maybeSingle()
+
   // Mirror it into the provider's Google Calendar. Deliberately not awaited
   // into the response path: the booking is already committed and the client is
   // waiting. If Google is slow or down, the next sync reconciles rather than
@@ -488,7 +522,7 @@ export async function createBooking(req: BookingRequest): Promise<BookingOutcome
       id: appointment.id,
       startsAt: appointment.starts_at,
       endsAt: appointment.ends_at,
-      status: appointment.status,
+      status: routed?.status ?? appointment.status,
       depositCents: appointment.deposit_cents,
       totalCents: priced.totalCents,
       timezone: provider.timezone,

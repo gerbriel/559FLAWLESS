@@ -25,7 +25,19 @@ import {
   type CalendarBusyRow,
   type ClosureRow,
 } from '@/lib/calendar-blocks'
-import type { CalendarAppointment } from './CalendarView'
+// The board draws its own cards, so it has to be handed the same idea of what
+// "awaiting approval" looks like rather than growing a second one. CalendarView
+// exports these for exactly this reason: on a machine with a pointer, day and
+// week are drawn HERE and the calendar grid is never rendered, so a distinction
+// that lives only over there is a distinction the studio never sees.
+import {
+  isAwaitingApproval,
+  PENDING_CARD_CLASS,
+  PENDING_HATCH,
+  PENDING_TITLE,
+  PendingMark,
+  type CalendarAppointment,
+} from './CalendarView'
 import {
   useAppointmentMove,
   useDragCapable,
@@ -292,11 +304,18 @@ export function DragScheduleBoard({
     const movable = isMovable(a)
     const draggable = canDrag && movable
     const inFlight = movingId === a.id
+    // Held for review. The card stays at full strength — a pending booking
+    // holds its slot against the exclusion constraint exactly as a confirmed
+    // one does, so anything that made it read as faint would invite a
+    // double-booking. What changes is shape, texture and words.
+    const pending = isAwaitingApproval(a)
 
     return (
       <div
         key={a.id}
         draggable={draggable}
+        style={pending ? PENDING_HATCH : undefined}
+        title={pending ? PENDING_TITLE : undefined}
         onDragStart={(e) => {
           e.dataTransfer.setData(DRAG_MIME, a.id)
           e.dataTransfer.setData('text/plain', a.id)
@@ -309,8 +328,10 @@ export function DragScheduleBoard({
           setHoverKey(null)
         }}
         className={`group relative border-l-4 ${colorFor(a.provider_id)} ${
-          draggingId === a.id ? 'opacity-40' : ''
-        } ${inFlight ? 'animate-pulse' : ''} ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
+          pending ? PENDING_CARD_CLASS : ''
+        } ${draggingId === a.id ? 'opacity-40' : ''} ${
+          inFlight ? 'animate-pulse' : ''
+        } ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
       >
         <button
           type="button"
@@ -334,6 +355,12 @@ export function DragScheduleBoard({
             </span>
           )}
         </button>
+
+        {/* The words, under the card's own content so they read as a note about
+            it rather than as part of the client's name. A week column has no
+            room for four syllables, so there the label moves into
+            screen-reader text and the dashed ring and hatch carry the rest. */}
+        {pending && <PendingMark showLabel={!compact} className="px-2 pb-2" />}
 
         {movable && (
           <button
@@ -711,7 +738,19 @@ function MoveDialog({
             <Button type="button" size="sm" variant="subtle" onClick={onClose}>
               Cancel
             </Button>
-            <Badge tone="neutral">{appointment.status.replace('_', ' ')}</Badge>
+            {/* Named, not spelled out of the enum: "pending" in a neutral chip
+                reads like a payment state, and the one thing whoever is moving
+                this needs to know is that the client has not been told they
+                have this booking at all. Moving it does send them "your
+                appointment has moved" (038), which is why it is worth saying
+                here rather than after. */}
+            {isAwaitingApproval(appointment) ? (
+              <Badge tone="warning" title={PENDING_TITLE}>
+                Awaiting approval
+              </Badge>
+            ) : (
+              <Badge tone="neutral">{appointment.status.replace('_', ' ')}</Badge>
+            )}
           </div>
         </form>
       </div>

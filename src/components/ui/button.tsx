@@ -35,15 +35,22 @@ const buttonVariants = cva(
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> &
   VariantProps<typeof buttonVariants>
 
+// data-ui is how the dashboard rounds its controls without the storefront
+// hearing about it — see the `.dash` scope in globals.css. Set before the
+// spread so a caller can still override it.
 export function Button({ className, variant, size, ...props }: ButtonProps) {
-  return <button className={cn(buttonVariants({ variant, size }), className)} {...props} />
+  return (
+    <button data-ui="button" className={cn(buttonVariants({ variant, size }), className)} {...props} />
+  )
 }
 
 type ButtonLinkProps = React.ComponentProps<typeof Link> &
   VariantProps<typeof buttonVariants>
 
 export function ButtonLink({ className, variant, size, ...props }: ButtonLinkProps) {
-  return <Link className={cn(buttonVariants({ variant, size }), className)} {...props} />
+  return (
+    <Link data-ui="button" className={cn(buttonVariants({ variant, size }), className)} {...props} />
+  )
 }
 
 export { buttonVariants }

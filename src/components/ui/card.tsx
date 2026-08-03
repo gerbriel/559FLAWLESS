@@ -1,9 +1,13 @@
 import * as React from 'react'
 import { cn } from '@/lib/utils'
 
+// data-ui rounds this inside the dashboard's `.dash` scope and leaves it square
+// on the storefront — one attribute, so a Card used on a staff screen matches
+// the Panels around it without every caller opting in.
 export function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
+      data-ui="panel"
       className={cn(
         'border border-[var(--color-border)] bg-[var(--color-surface)]',
         className

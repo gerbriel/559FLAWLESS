@@ -153,7 +153,7 @@ export default async function SettingsPage() {
           href: '/dashboard/settings/scheduling',
           label: 'Scheduling',
           description:
-            'Which bookings wait for someone to look at them before they are confirmed, how much idle time to leave between clients, and which treatments have processing time in the middle.',
+            'Which bookings wait for someone to look at them before they are confirmed — a treatment at a time, or first-timers only — how much idle time to leave between clients, and which treatments have processing time in the middle. Holding every online booking is the one approval rule that is not there: it is on this page, under Booking policy.',
           visible: userIsManager,
         },
         {
@@ -314,13 +314,164 @@ export default async function SettingsPage() {
           is_manager() (029). Showing the form to a provider offered her controls
           the database would refuse on save. */}
       {userIsManager && (
-        <section className="mt-14">
+        <section id="booking-policy" className="mt-14 scroll-mt-8">
           <h2 className="display text-2xl">Booking policy</h2>
-          <p className="mt-2 text-sm text-[var(--color-muted)]">
+          <p className="mt-2 max-w-prose text-sm text-[var(--color-muted)]">
             These apply across every provider. Per-service deposits and cancellation
             windows are set on the service itself.
           </p>
-          <div className="mt-6">
+
+          {/* The approval feature is entirely built and entirely dormant. 003:108
+              defaults `auto_confirm` to true, so booking_review_reason() (036:535)
+              never returns 'studio_policy' and appointment_route_approval()
+              (036:610) never rewrites a status. One checkbox in the form below
+              turns all of it on, and it is labelled after the mechanism rather
+              than the consequence — so this is the consequence, sitting next to
+              the switch, because the switch was the part nobody could find.
+
+              The client-facing string quoted below is STATUS_LABEL.pending in
+              src/app/account/appointments/page.tsx; the queue is
+              /dashboard/appointments/pending, "Waiting on you" in the sidebar. */}
+          <div className="mt-6 border-l-2 border-[var(--color-accent)] pl-5">
+            <h3 className="label-caps text-[var(--color-muted)]">
+              Holding bookings for approval
+            </h3>
+
+            <p className="mt-3 max-w-prose text-sm">
+              Clearing <em>Confirm online bookings automatically</em> in the form below
+              means nothing booked on the website is a real appointment until a person
+              here says so. It is the whole of the approve-before-it-lands behaviour,
+              in one tick box.
+            </p>
+
+            {settings && (
+              <p className="mt-2 max-w-prose text-sm text-[var(--color-muted)]">
+                {settings.auto_confirm
+                  ? 'It is ticked today: a booking made on the website confirms itself the moment it is made, and nothing waits for anyone.'
+                  : 'It is clear today: every booking made on the website is waiting for someone to approve it.'}
+              </p>
+            )}
+
+            <h4 className="label-caps mt-6 text-[var(--color-muted)]">What happens then</h4>
+            <ul className="mt-3 max-w-prose space-y-2 text-sm text-[var(--color-muted)]">
+              <li>
+                The client’s appointments page reads{' '}
+                <span className="text-[var(--color-foreground)]">Awaiting confirmation</span>{' '}
+                rather than Confirmed, and stays that way until someone acts.
+              </li>
+              <li>
+                They can fill in their intake and consent forms while they wait — the forms
+                are prompted after booking either way, so the wait is time those come back
+                in before you have committed the hour.
+              </li>
+              <li>
+                The provider whose time was booked and the front desk are both told, and the
+                booking lands in{' '}
+                <Link
+                  href="/dashboard/appointments/pending"
+                  className="text-[var(--color-foreground)] underline"
+                >
+                  Waiting on you
+                </Link>{' '}
+                in the sidebar.
+              </li>
+              <li>
+                Approving it notifies the client that their appointment is confirmed.
+                Declining gives the time back.
+              </li>
+              <li>
+                Bookings you make yourself, from the calendar or a client’s record, are never
+                held — somebody already made that decision in person.
+              </li>
+            </ul>
+
+            <h4 className="label-caps mt-6 text-[var(--color-muted)]">What it costs</h4>
+            <p className="mt-3 max-w-prose text-sm text-[var(--color-muted)]">
+              A booking holds its slot from the moment it arrives, approved or not. That is
+              deliberate — it means approving one can never fail — but it also means an
+              hour nobody has looked at is an hour nobody else can book.
+            </p>
+            <p className="mt-2 max-w-prose text-sm text-[var(--color-muted)]">
+              Nothing expires it and nothing approves it for you. There is no sweep and no
+              timer anywhere in the schema: a request sits there until a person opens the
+              queue, and once its time has gone by it drops to <em>Already passed</em> and
+              waits to be declined. A client left on “Awaiting confirmation” for three days
+              hears nothing further in that time — and the booking notice the system already
+              sent them says they are booked in, so the silence reads as a yes. Only switch
+              this on if clearing that queue is part of somebody’s day.
+            </p>
+
+            <h4 className="label-caps mt-6 text-[var(--color-muted)]">
+              Narrower than all or nothing
+            </h4>
+            <p className="mt-3 max-w-prose text-sm text-[var(--color-muted)]">
+              The same held-for-review behaviour can be aimed at only the bookings that
+              warrant it, which is usually what a studio wants. One reason is recorded
+              against a booking, and it is the first of these that applies:
+            </p>
+            {/* The order below is the order a booking actually meets these, which is
+                not the order booking_review_reason() (036:535) reads them in. The
+                client-shaped rules are answered by appointment_route_approval before
+                the row is inserted; the per-service rule cannot be, because the line
+                items do not exist yet, so appointment_services_route_approval applies
+                it afterwards and only `where a.status = 'confirmed'`. A booking
+                already held for a first visit therefore keeps that reason. Both still
+                hold the booking — only the recorded reason differs — but this list is
+                about which reason you read in the queue, so it is listed as observed. */}
+            <ol className="mt-3 max-w-prose space-y-3 text-sm text-[var(--color-muted)]">
+              <li className="flex gap-3">
+                <span className="tabular-nums">1</span>
+                <span>
+                  <span className="text-[var(--color-foreground)]">This switch.</span> Every
+                  online booking, no exception. It short-circuits the three below — while it
+                  is holding everything, none of them can narrow anything.
+                </span>
+              </li>
+              <li className="flex gap-3">
+                <span className="tabular-nums">2</span>
+                <span>
+                  <span className="text-[var(--color-foreground)]">
+                    Someone booking for the first time.
+                  </span>{' '}
+                  Under Scheduling, in Who gets looked at first. A returning client is
+                  recognised by account, then email, then phone, so a guest who never made
+                  an account is not treated as new.
+                </span>
+              </li>
+              <li className="flex gap-3">
+                <span className="tabular-nums">3</span>
+                <span>
+                  <span className="text-[var(--color-foreground)]">
+                    Someone with missed appointments on record.
+                  </span>{' '}
+                  Same section, with a threshold you choose. Counted against an account, so
+                  a booking that cannot be matched to one never reaches it.
+                </span>
+              </li>
+              <li className="flex gap-3">
+                <span className="tabular-nums">4</span>
+                <span>
+                  <span className="text-[var(--color-foreground)]">
+                    A treatment that always needs a look.
+                  </span>{' '}
+                  Set per service under Scheduling, in the Per service list — a first
+                  Brazilian, anything that needs a patch test. Recorded last because it is
+                  settled once the treatments are on the booking, so a booking already held
+                  for one of the reasons above keeps that reason instead.
+                </span>
+              </li>
+            </ol>
+            <p className="mt-3 text-sm">
+              <Link
+                href="/dashboard/settings/scheduling"
+                className="underline hover:text-[var(--color-accent)]"
+              >
+                Set those three under Scheduling
+              </Link>
+            </p>
+          </div>
+
+          <div className="mt-8">
             {settings ? (
               <BookingSettingsForm settings={settings} />
             ) : (

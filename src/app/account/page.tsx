@@ -5,7 +5,13 @@ import { createClient } from '@/lib/supabase/server'
 import { ButtonLink } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { formatMoney } from '@/lib/utils'
-import { formatDateTimeInTimeZone } from '@/lib/time'
+import { formatDateTimeInTimeZone, requestNow } from '@/lib/time'
+import {
+  DEPOSIT_LABEL,
+  DEPOSIT_TONE,
+  STATUS_LABEL,
+  STATUS_TONE,
+} from './appointments/_lib/status'
 
 export const dynamic = 'force-dynamic'
 
@@ -18,7 +24,8 @@ export default async function AccountPage() {
   } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const now = new Date().toISOString()
+  // Server Component: the clock comes from the named seam, not a bare Date.
+  const now = new Date(requestNow()).toISOString()
 
   const [{ data: profile }, { data: upcoming }, { data: record }, { count: unreadMessages }] =
     await Promise.all([
@@ -57,7 +64,12 @@ export default async function AccountPage() {
 
       {next ? (
         <div className="mt-8 border border-[var(--color-border)] bg-[var(--color-surface)] p-8">
-          <p className="label-caps mb-4 text-[var(--color-accent)]">Your next appointment</p>
+          {/* The query admits 'pending', so this heading has to as well — a
+              booking the studio has not agreed to is not yet an appointment,
+              and calling it one here undercuts the badge three lines down. */}
+          <p className="label-caps mb-4 text-[var(--color-accent)]">
+            {next.status === 'confirmed' ? 'Your next appointment' : 'Your next booking'}
+          </p>
 
           <p className="display text-2xl">
             {formatDateTimeInTimeZone(new Date(next.starts_at), STUDIO_TZ)}
@@ -75,13 +87,14 @@ export default async function AccountPage() {
               'your provider'}
           </p>
 
+          {/* One vocabulary for the state of a booking, shared with the list
+              and the detail page. A fourth private copy of these words is how
+              they drifted apart the first time. */}
           <div className="mt-5 flex flex-wrap items-center gap-3">
-            <Badge tone={next.status === 'confirmed' ? 'success' : 'warning'}>
-              {next.status === 'confirmed' ? 'Confirmed' : 'Awaiting confirmation'}
-            </Badge>
+            <Badge tone={STATUS_TONE[next.status]}>{STATUS_LABEL[next.status]}</Badge>
             {next.deposit_cents > 0 && (
-              <Badge tone={next.deposit_status === 'paid' ? 'success' : 'warning'}>
-                Deposit {next.deposit_status === 'paid' ? 'paid' : 'due'}
+              <Badge tone={DEPOSIT_TONE[next.deposit_status]}>
+                {DEPOSIT_LABEL[next.deposit_status]}
               </Badge>
             )}
             <span className="text-sm tabular-nums text-[var(--color-muted)]">

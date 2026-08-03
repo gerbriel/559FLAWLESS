@@ -12,7 +12,11 @@ import {
   type SchedulableService,
 } from '@/components/shared/SchedulingServiceRules'
 import { isManager, type UserRole } from '@/types/database'
-import type { ProviderSchedulingSettings, SchedulingPolicy } from '@/types/scheduling'
+import {
+  REVIEW_REASON_LABELS,
+  type ProviderSchedulingSettings,
+  type SchedulingPolicy,
+} from '@/types/scheduling'
 
 export const dynamic = 'force-dynamic'
 
@@ -68,8 +72,19 @@ export default async function SchedulingSettingsPage({ searchParams }: Props) {
     )
   }
 
-  const [{ data: policy }, { data: providers }, { data: gapRows }, { data: services }] =
-    await Promise.all([
+  // `booking_settings.auto_confirm` is not edited here — it is the studio-wide
+  // switch on the Settings index — but it is read here because it decides
+  // whether anything on this page is doing anything. With it off, every online
+  // booking is held for 'studio_policy' before the narrower rules are even
+  // consulted (booking_review_reason, 036), so a page full of carefully aimed
+  // rules would be silently moot. 003 makes the row readable by everyone.
+  const [
+    { data: policy },
+    { data: providers },
+    { data: gapRows },
+    { data: services },
+    { data: bookingSettings },
+  ] = await Promise.all([
       supabase
         .from('scheduling_policies')
         .select(
@@ -97,7 +112,12 @@ export default async function SchedulingSettingsPage({ searchParams }: Props) {
         .eq('is_active', true)
         .order('sort_order')
         .order('name'),
+      supabase.from('booking_settings').select('auto_confirm').eq('id', 1).maybeSingle(),
     ])
+
+  // Absent row means migration 003 never ran; its default is true, and true is
+  // the behaviour that leaves this page in charge.
+  const holdsEverything = bookingSettings?.auto_confirm === false
 
   const settingsFor = new Map(
     (gapRows ?? []).map((r) => [r.provider_id, r as ProviderSchedulingSettings])
@@ -132,6 +152,17 @@ export default async function SchedulingSettingsPage({ searchParams }: Props) {
         Everything here starts switched off, and switched off is exactly how the booking
         page has always behaved. Turn one on and it applies to the next page load.
       </p>
+      <p className="mt-2 max-w-prose text-sm text-[var(--color-muted)]">
+        The one approval rule that is not on this page is holding <em>every</em> online
+        booking. That lives under{' '}
+        <Link
+          href="/dashboard/settings#booking-policy"
+          className="text-[var(--color-foreground)] underline"
+        >
+          Booking policy
+        </Link>{' '}
+        on the Settings index, and it overrides all of this.
+      </p>
 
       {sites.length > 1 && (
         <nav className="mt-8 flex flex-wrap gap-x-7 gap-y-2" aria-label="Location">
@@ -150,6 +181,80 @@ export default async function SchedulingSettingsPage({ searchParams }: Props) {
           ))}
         </nav>
       )}
+
+      {/* Precedence, because three of the four rules are on this page and the
+          bluntest one is not. The quoted strings are REVIEW_REASON_LABELS — the
+          same copy the queue and the notification bell show, so a reason read
+          there is recognisable here.
+
+          The ORDER is the order a booking meets these, which is not the order
+          booking_review_reason() (036:535) reads them in. That function checks
+          the per-service rule second, but only when it is given service ids, and
+          appointment_route_approval passes null: at BEFORE INSERT the line items
+          do not exist. The service rule is applied afterwards, by
+          appointment_services_route_approval, and only `where a.status =
+          'confirmed'` — so a booking already held for a first visit or a
+          no-show record keeps that reason and never records 'service_policy'.
+          Either way it is held; this list is about which reason is shown. */}
+      <section className="mt-10 border-l-2 border-[var(--color-border)] pl-5">
+        <h2 className="label-caps text-[var(--color-muted)]">Which rule wins</h2>
+        <p className="mt-3 max-w-prose text-sm text-[var(--color-muted)]">
+          A booking can match more than one of these. Only one reason is recorded against
+          it, and it is the first that applies:
+        </p>
+        <ol className="mt-3 max-w-prose space-y-3 text-sm text-[var(--color-muted)]">
+          <li className="flex gap-3">
+            <span className="tabular-nums">1</span>
+            <span>
+              <span className="text-[var(--color-foreground)]">
+                {REVIEW_REASON_LABELS.studio_policy}
+              </span>{' '}
+              — the studio-wide switch under Booking policy in Settings. Nothing below is
+              consulted while it is on.
+              {holdsEverything && (
+                <span className="mt-1 block text-[var(--color-foreground)]">
+                  It is on right now, so every rule on this page is currently moot.
+                </span>
+              )}
+            </span>
+          </li>
+          <li className="flex gap-3">
+            <span className="tabular-nums">2</span>
+            <span>
+              <span className="text-[var(--color-foreground)]">
+                {REVIEW_REASON_LABELS.first_visit}
+              </span>{' '}
+              — Who gets looked at first, below. Only when that box is ticked.
+            </span>
+          </li>
+          <li className="flex gap-3">
+            <span className="tabular-nums">3</span>
+            <span>
+              <span className="text-[var(--color-foreground)]">
+                {REVIEW_REASON_LABELS.no_show_history}
+              </span>{' '}
+              — same section, once the count is reached. Counted against an account, so a
+              booking that cannot be matched to one never reaches it.
+            </span>
+          </li>
+          <li className="flex gap-3">
+            <span className="tabular-nums">4</span>
+            <span>
+              <span className="text-[var(--color-foreground)]">
+                {REVIEW_REASON_LABELS.service_policy}
+              </span>{' '}
+              — set per treatment in the Per service list further down. Last because it is
+              settled once the treatments are on the booking: one already held for a reason
+              above keeps that reason.
+            </span>
+          </li>
+        </ol>
+        <p className="mt-3 max-w-prose text-sm text-[var(--color-muted)]">
+          None of it touches a booking made from the calendar or a client’s record. A held
+          booking keeps its slot while it waits, and nothing expires or approves it — it
+          sits in Waiting on you until a person decides.
+        </p>
+      </section>
 
       <section className="mt-10">
         {policy ? (

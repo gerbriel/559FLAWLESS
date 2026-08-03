@@ -5,29 +5,11 @@ import { Badge } from '@/components/ui/badge'
 import { ButtonLink } from '@/components/ui/button'
 import { formatMoney } from '@/lib/utils'
 import { formatDateTimeInTimeZone , requestNow } from '@/lib/time'
-import type { AppointmentStatus } from '@/types/database'
+import { STATUS_LABEL, STATUS_TONE } from './_lib/status'
 
 export const dynamic = 'force-dynamic'
 
 const STUDIO_TZ = 'America/Los_Angeles'
-
-const STATUS_TONE: Record<AppointmentStatus, 'neutral' | 'accent' | 'success' | 'warning' | 'danger'> = {
-  pending: 'warning',
-  confirmed: 'success',
-  checked_in: 'accent',
-  completed: 'neutral',
-  cancelled: 'danger',
-  no_show: 'danger',
-}
-
-const STATUS_LABEL: Record<AppointmentStatus, string> = {
-  pending: 'Awaiting confirmation',
-  confirmed: 'Confirmed',
-  checked_in: 'Checked in',
-  completed: 'Completed',
-  cancelled: 'Cancelled',
-  no_show: 'Missed',
-}
 
 export default async function AppointmentsPage() {
   const supabase = await createClient()

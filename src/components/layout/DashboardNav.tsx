@@ -4,41 +4,101 @@ import { useEffect, useId, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
-  LayoutDashboard,
+  BarChart3,
   CalendarDays,
-  Users,
-  MessageSquare,
-  FileBarChart,
-  Package,
-  Scissors,
-  ScanLine,
-  ShoppingBag,
-  Megaphone,
-  Settings,
-  ClipboardList,
-  Receipt,
+  ChevronDown,
   ClipboardCheck,
+  ClipboardList,
+  FileBarChart,
   FileSignature,
+  LayoutDashboard,
+  LayoutGrid,
+  Megaphone,
   Menu,
+  MessageSquare,
+  Package,
+  Receipt,
+  ScanLine,
+  Scissors,
+  Settings,
+  ShoppingBag,
+  SlidersHorizontal,
+  Users,
+  Wallet,
   X,
+  type LucideIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { isFrontDesk, isManager, isStaff, type UserRole } from '@/types/database'
+import { Avatar } from '@/components/ui/dashboard'
+import {
+  isAdmin,
+  isFrontDesk,
+  isManager,
+  isStaff,
+  ROLE_LABELS,
+  type UserRole,
+} from '@/types/database'
 
 interface NavItem {
   href: string
   label: string
-  icon: typeof LayoutDashboard
+  /** Top-level rows wear an icon; rows inside a group are indented instead. */
+  icon?: LucideIcon
   /** Lowest role that may see this item. */
   visible: (role: UserRole) => boolean
   badge?: 'threads'
 }
 
-const ITEMS: NavItem[] = [
+interface NavGroup {
+  id: string
+  label: string
+  icon: LucideIcon
+  /**
+   * Set only when the group is also somewhere to go. Calendar, Clients, Forms,
+   * Marketing and Settings each have a real page of their own, so their row
+   * navigates and the chevron beside it opens the section. Catalog, Payments
+   * and Insights are containers with no page behind them, and a row that looks
+   * like a link but only expands is a small lie told forty times a day.
+   */
+  href?: string
+  /** The gate on the section itself. Children carry their own on top of it. */
+  visible?: (role: UserRole) => boolean
+  children: NavItem[]
+}
+
+type NavEntry = NavItem | NavGroup
+
+const isGroup = (entry: NavEntry): entry is NavGroup => 'children' in entry
+
+/**
+ * The studio's work, grouped the way it is actually done.
+ *
+ * Fifteen flat rows made every screen equally important and buried the pages
+ * that have no row at all — the ones you could only find by landing on their
+ * parent and reading a tab bar. The children below are, deliberately, those
+ * tab bars: the section tabs keep working exactly as they did, and the sidebar
+ * now gives the same answer without having to be on the page already.
+ *
+ * Each row keeps the gate it always had, and each child records the gate its
+ * own page enforces — hiding a row is not a security control, the page-level
+ * checks and RLS are, but a menu that offers a door it will not open is worse
+ * than no menu.
+ */
+const TREE: NavEntry[] = [
   { href: '/dashboard', label: 'Today', icon: LayoutDashboard, visible: () => true },
-  // One entry, three tabs: the diary, your own hours, and your timesheet. They
-  // are one job — where your time goes — and were three sidebar rows saying so.
-  { href: '/dashboard/calendar', label: 'Calendar', icon: CalendarDays, visible: () => true },
+  {
+    id: 'calendar',
+    label: 'Calendar',
+    icon: CalendarDays,
+    href: '/dashboard/calendar',
+    // The diary, your own hours and the clock you punch are one job — where
+    // your time goes. They were three sidebar rows, then one row and three
+    // tabs; now the tabs are also here, which is where you look for them.
+    children: [
+      { href: '/dashboard/calendar/hours', label: 'My hours', visible: () => true },
+      { href: '/dashboard/calendar/timesheets', label: 'Timesheets', visible: () => true },
+    ],
+  },
   // Bookings the approval rules held back. A provider sees their own; front
   // desk and up see the studio's — RLS on `appointments` already draws that
   // line, so the item itself is visible to everyone.
@@ -49,10 +109,20 @@ const ITEMS: NavItem[] = [
     visible: () => true,
   },
   {
-    href: '/dashboard/clients',
+    id: 'clients',
     label: 'Clients',
     icon: Users,
+    href: '/dashboard/clients',
     visible: (r) => isFrontDesk(r) || r === 'provider',
+    // Someone can subscribe long before they ever book, which is why the list
+    // lives under Clients rather than under Marketing.
+    children: [
+      {
+        href: '/dashboard/clients/newsletter',
+        label: 'Newsletter',
+        visible: (r) => isFrontDesk(r),
+      },
+    ],
   },
   {
     href: '/dashboard/messages',
@@ -68,117 +138,300 @@ const ITEMS: NavItem[] = [
     visible: (r) => isFrontDesk(r),
   },
   {
+    id: 'forms',
+    label: 'Forms',
+    icon: FileSignature,
+    // Everyone sees the parent: the Outstanding list is a provider's list of
+    // who is arriving without paperwork. The two template pages end in an
+    // `is_manager` gate and redirect out, so they are gated here too — for a
+    // provider Forms *is* the outstanding list and the row is simply a row.
+    href: '/dashboard/forms',
+    visible: () => true,
+    children: [
+      {
+        href: '/dashboard/forms/consent',
+        label: 'Consent forms',
+        visible: (r) => isManager(r),
+      },
+      { href: '/dashboard/forms/intake', label: 'Intake forms', visible: (r) => isManager(r) },
+    ],
+  },
+  {
     href: '/dashboard/sell',
     label: 'Sell',
     icon: ScanLine,
     visible: (r) => isFrontDesk(r),
   },
   {
-    href: '/dashboard/services',
-    label: 'Services',
-    icon: Scissors,
-    visible: (r) => isFrontDesk(r),
+    // What the studio sells: time, and things. A provider sees neither the
+    // service editor nor a group wrapped around one row — see `resolve`.
+    id: 'catalog',
+    label: 'Catalog',
+    icon: LayoutGrid,
+    children: [
+      {
+        href: '/dashboard/services',
+        label: 'Services',
+        icon: Scissors,
+        visible: (r) => isFrontDesk(r),
+      },
+      { href: '/dashboard/inventory', label: 'Inventory', icon: Package, visible: () => true },
+    ],
   },
   {
-    // Everyone sees it: the Outstanding tab is a provider's list of who is
-    // arriving without paperwork. The template tabs behind it are manager-gated
-    // by their own pages, and by RLS.
-    href: '/dashboard/forms',
-    label: 'Forms',
-    icon: FileSignature,
-    visible: () => true,
+    // Money in and money out, side by side.
+    id: 'payments',
+    label: 'Payments',
+    icon: Wallet,
+    children: [
+      {
+        href: '/dashboard/orders',
+        label: 'Orders',
+        icon: ShoppingBag,
+        visible: (r) => isFrontDesk(r),
+      },
+      {
+        href: '/dashboard/expenses',
+        label: 'Expenses',
+        icon: Receipt,
+        // What the studio pays in rent is a term of the business, not
+        // something the front desk needs to run the day.
+        visible: (r) => isManager(r),
+      },
+    ],
   },
   {
-    href: '/dashboard/inventory',
-    label: 'Inventory',
-    icon: Package,
-    visible: () => true,
+    id: 'insights',
+    label: 'Insights',
+    icon: BarChart3,
+    children: [
+      {
+        href: '/dashboard/reports',
+        label: 'Reports',
+        icon: FileBarChart,
+        // Most reports show what the business earned or what it pays people,
+        // and those are manager-and-above. But the Appointments report is
+        // deliberately minRole 'front_desk' — it carries no money at all and
+        // the front desk runs the book. The page filters its own cards by each
+        // report's minRole and redirects anyone left with none, so opening the
+        // door this far shows the front desk exactly the one report that is
+        // theirs.
+        visible: (r) => isFrontDesk(r),
+      },
+      {
+        href: '/dashboard/reports/custom',
+        label: 'Custom report',
+        icon: SlidersHorizontal,
+        visible: (r) => isManager(r),
+      },
+    ],
   },
   {
-    href: '/dashboard/orders',
-    label: 'Orders',
-    icon: ShoppingBag,
-    visible: (r) => isFrontDesk(r),
-  },
-  {
-    href: '/dashboard/reports',
-    label: 'Reports',
-    icon: FileBarChart,
-    // Most reports here show what the business earned or what it pays people,
-    // and those are manager-and-above. But the Appointments report is
-    // deliberately minRole 'front_desk' — it carries no money at all and the
-    // front desk runs the book. The page filters its own cards by each report's
-    // minRole and redirects anyone left with none, so opening the door this far
-    // shows the front desk exactly the one report that is theirs.
-    visible: (r) => isFrontDesk(r),
-  },
-  {
-    href: '/dashboard/expenses',
-    label: 'Expenses',
-    icon: Receipt,
-    // What the studio pays in rent is a term of the business, not something the
-    // front desk needs to run the day.
-    visible: (r) => isManager(r),
-  },
-  {
-    href: '/dashboard/marketing',
+    id: 'marketing',
     label: 'Marketing',
     icon: Megaphone,
+    href: '/dashboard/marketing',
     visible: (r) => isManager(r),
-  },
-  {
-    href: '/dashboard/settings',
-    label: 'Settings',
-    icon: Settings,
-    // All staff, not just managers. Settings is now the only door to Locations
-    // (its own sidebar row is gone) and to your own team profile, which is
-    // deliberately isStaff so a provider can edit her bio and see her licence
-    // expiry. Every row inside is gated individually, so a provider opening
-    // this sees a short page rather than a wall of forms that reject her.
-    visible: (r) => isStaff(r),
+    // Site traffic and the booking funnel are marketing's own scoreboard, so
+    // Analytics stays under this section rather than under Insights, which is
+    // financial reporting. The section's tab bar says the same.
+    children: [
+      {
+        href: '/dashboard/marketing/analytics',
+        label: 'Analytics',
+        visible: (r) => isManager(r),
+      },
+      {
+        href: '/dashboard/marketing/broadcast',
+        label: 'Send newsletter',
+        visible: (r) => isManager(r),
+      },
+    ],
   },
 ]
 
 /**
- * One row of the menu, rendered twice: in the lg+ sidebar and in the phone
- * panel. The sidebar's class strings are byte-for-byte what they always were —
- * `panel` only adds the padding and the 56px target a thumb needs.
+ * Below the divider, the way the reference puts it.
+ *
+ * Settings pages have no tab bar of their own: moving from Scheduling to
+ * Locations meant going back to the index every time. The children here are
+ * the index's own list, in its own order, each carrying the gate its page
+ * enforces — the index keeps its descriptions and stays where the parent row
+ * goes, because a sentence about what a page decides does not fit in a sidebar.
+ *
+ * Commission is the one imperfect gate: its page admits an admin *or* anyone
+ * holding the `manage_staff` permission, and a permission is a database read
+ * this component has no business doing. It is listed for admins here and for
+ * everyone the RPC allows on the index, so nobody who may open it is left
+ * without a route to it.
+ */
+const BOTTOM: NavEntry[] = [
+  {
+    id: 'settings',
+    label: 'Settings',
+    icon: Settings,
+    href: '/dashboard/settings',
+    // All staff, not just managers. Settings is the only door to Locations and
+    // to your own team profile, which is deliberately isStaff so a provider can
+    // edit her bio and see her licence expiry.
+    visible: (r) => isStaff(r),
+    children: [
+      { href: '/dashboard/settings/scheduling', label: 'Scheduling', visible: (r) => isManager(r) },
+      {
+        href: '/dashboard/settings/resources',
+        label: 'Rooms & equipment',
+        visible: (r) => isManager(r),
+      },
+      { href: '/dashboard/settings/waitlist', label: 'Waitlist rules', visible: (r) => isAdmin(r) },
+      {
+        href: '/dashboard/settings/notifications',
+        label: 'Client notifications',
+        visible: (r) => isManager(r),
+      },
+      { href: '/dashboard/settings/team', label: 'Team', visible: (r) => isStaff(r) },
+      { href: '/dashboard/settings/users', label: 'Users', visible: (r) => isAdmin(r) },
+      { href: '/dashboard/settings/permissions', label: 'Permissions', visible: (r) => isAdmin(r) },
+      { href: '/dashboard/settings/commissions', label: 'Commission', visible: (r) => isAdmin(r) },
+      { href: '/dashboard/settings/locations', label: 'Locations', visible: (r) => isAdmin(r) },
+      { href: '/dashboard/settings/legal', label: 'Legal', visible: (r) => isAdmin(r) },
+      { href: '/dashboard/settings/admin', label: 'Announcements', visible: (r) => isAdmin(r) },
+    ],
+  },
+]
+
+type Resolved =
+  | { kind: 'item'; item: NavItem }
+  | { kind: 'group'; group: NavGroup; children: NavItem[] }
+
+/**
+ * The menu one role actually gets.
+ *
+ * Three collapses matter, and they are what stops the grouping from producing
+ * rows that lead nowhere:
+ *
+ * - a group whose own gate fails disappears whole;
+ * - a group with a page behind it and nothing left inside is a plain row;
+ * - a container with exactly one child left *becomes* that child, rather than
+ *   asking someone to open a drawer to find a single thing in it.
+ */
+function resolve(entries: NavEntry[], role: UserRole): Resolved[] {
+  const out: Resolved[] = []
+
+  for (const entry of entries) {
+    if (!isGroup(entry)) {
+      if (entry.visible(role)) out.push({ kind: 'item', item: entry })
+      continue
+    }
+
+    if (entry.visible && !entry.visible(role)) continue
+    const children = entry.children.filter((child) => child.visible(role))
+
+    if (entry.href) {
+      out.push(
+        children.length === 0
+          ? {
+              kind: 'item',
+              item: {
+                href: entry.href,
+                label: entry.label,
+                icon: entry.icon,
+                visible: () => true,
+              },
+            }
+          : { kind: 'group', group: entry, children }
+      )
+      continue
+    }
+
+    if (children.length === 0) continue
+    if (children.length === 1) out.push({ kind: 'item', item: children[0] })
+    else out.push({ kind: 'group', group: entry, children })
+  }
+
+  return out
+}
+
+/** Who is signed in, and where. The reference puts this above everything. */
+function StudioIdentity({
+  name,
+  role,
+  className,
+}: {
+  name: string
+  role: UserRole
+  className?: string
+}) {
+  return (
+    <div
+      data-ui="panel"
+      className={cn(
+        'flex min-w-0 items-center gap-3 bg-[var(--color-clay-soft)] px-3 py-3 dark:bg-[var(--color-surface)]',
+        className
+      )}
+    >
+      <Avatar name={name} size="sm" />
+      <div className="min-w-0">
+        <p className="display truncate text-base leading-tight">559 Flawless</p>
+        <p className="truncate text-xs text-[var(--color-muted)]">
+          {name} · {ROLE_LABELS[role]}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * One row of the menu, rendered in the lg+ sidebar and in the phone panel.
+ * `panel` adds the padding and the target a thumb needs; `depth` is what tells
+ * a row inside an open group apart from one at the top of the list — indented,
+ * no icon, and a quieter fill when it is the page you are on.
  */
 function NavRow({
-  item,
+  href,
+  label,
+  icon: Icon,
   active,
+  depth,
   count,
   variant,
   onNavigate,
 }: {
-  item: NavItem
+  href: string
+  label: string
+  icon?: LucideIcon
   active: boolean
+  depth: 0 | 1
   count: number
   variant: 'sidebar' | 'panel'
   onNavigate?: () => void
 }) {
-  const Icon = item.icon
   const panel = variant === 'panel'
 
   return (
     <Link
-      href={item.href}
+      href={href}
       onClick={onNavigate}
       aria-current={active ? 'page' : undefined}
       className={cn(
-        'flex items-center gap-3 whitespace-nowrap px-3 py-2.5 text-sm transition-colors',
-        panel && 'min-h-14 gap-4 px-6 py-4 text-base',
+        'flex min-h-11 items-center gap-3 whitespace-nowrap rounded-[var(--radius-tile)] pr-3 text-sm transition-colors',
+        panel && 'min-h-14 gap-4 pr-4 text-base',
+        // Spelled out rather than an indent added on top of `px-3`: which of
+        // two padding utilities wins is a question about stylesheet order, and
+        // this row is not the place to be asking it.
+        depth === 0 ? (panel ? 'pl-4' : 'pl-3') : panel ? 'pl-14' : 'pl-10',
         active
-          ? 'bg-[var(--color-linen)] text-[var(--color-foreground)] dark:bg-[var(--color-surface)]'
-          : 'text-[var(--color-muted)] hover:text-[var(--color-foreground)]'
+          ? depth === 0
+            ? 'bg-[var(--color-clay-soft)] text-[var(--color-clay-deep)] dark:bg-[var(--color-surface)] dark:text-[var(--color-accent)]'
+            : 'bg-[var(--color-linen)] text-[var(--color-foreground)] dark:bg-[var(--color-surface)]'
+          : 'text-[var(--color-muted)] hover:bg-[var(--color-linen)] hover:text-[var(--color-foreground)] dark:hover:bg-[var(--color-surface)]'
       )}
     >
-      <Icon className={cn('h-4 w-4 shrink-0', panel && 'h-5 w-5')} strokeWidth={1.5} />
-      {item.label}
+      {Icon && <Icon className={cn('h-4 w-4 shrink-0', panel && 'h-5 w-5')} strokeWidth={1.5} />}
+      {label}
       {count > 0 && (
         <span
           className={cn(
-            'ml-auto flex h-4 min-w-4 items-center justify-center bg-[var(--color-accent)] px-1 text-[0.5625rem] text-white',
+            'ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--color-accent)] px-1 text-[0.5625rem] text-white',
             panel && 'h-5 min-w-5 text-[0.6875rem]'
           )}
         >
@@ -190,15 +443,244 @@ function NavRow({
   )
 }
 
+/**
+ * A group and its children. Open is decided by the caller, never stored here —
+ * see the derivation in `DashboardNav`.
+ *
+ * The chevron is its own button whenever the parent is also a destination, so
+ * "go to Calendar" and "show me what is under Calendar" stay two intentions
+ * with two targets. A container group has nothing to go to, so the whole row
+ * is the toggle.
+ */
+function NavGroupRow({
+  group,
+  items,
+  open,
+  active,
+  activeHref,
+  listId,
+  variant,
+  onToggle,
+  onNavigate,
+}: {
+  group: NavGroup
+  items: NavItem[]
+  open: boolean
+  active: boolean
+  activeHref: string | null
+  listId: string
+  variant: 'sidebar' | 'panel'
+  onToggle: () => void
+  onNavigate?: () => void
+}) {
+  const Icon = group.icon
+  const panel = variant === 'panel'
+
+  const tint = 'bg-[var(--color-clay-soft)] text-[var(--color-clay-deep)] dark:bg-[var(--color-surface)] dark:text-[var(--color-accent)]'
+  const quiet =
+    'text-[var(--color-muted)] hover:text-[var(--color-foreground)] transition-colors'
+
+  // The border is always there and usually transparent: an outline that
+  // appears on expand would otherwise nudge every row below it by two pixels.
+  const shell = cn(
+    'flex items-center rounded-[var(--radius-tile)] border',
+    open && !active ? 'border-[var(--color-border)]' : 'border-transparent',
+    active && tint
+  )
+
+  const chevron = (
+    <ChevronDown
+      className={cn('h-4 w-4 shrink-0 transition-transform', open && 'rotate-180')}
+      strokeWidth={1.5}
+      aria-hidden
+    />
+  )
+
+  // The chevron beside a destination row is an icon on its own, so it says out
+  // loud which section it opens — "Calendar" alone would be a second row with
+  // the same name as the link next to it.
+  const toggleLabel = <span className="sr-only">{group.label} pages</span>
+
+  return (
+    <>
+      {group.href ? (
+        <div className={shell}>
+          <Link
+            href={group.href}
+            onClick={onNavigate}
+            aria-current={active ? 'page' : undefined}
+            className={cn(
+              'flex min-h-11 flex-1 items-center gap-3 whitespace-nowrap rounded-[var(--radius-tile)] px-3 text-sm',
+              panel && 'min-h-14 gap-4 px-4 text-base',
+              !active && quiet
+            )}
+          >
+            <Icon
+              className={cn('h-4 w-4 shrink-0', panel && 'h-5 w-5')}
+              strokeWidth={1.5}
+            />
+            {group.label}
+          </Link>
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={open}
+            aria-controls={open ? listId : undefined}
+            className={cn(
+              'flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-tile)]',
+              panel && 'h-14 w-14',
+              !active && quiet
+            )}
+          >
+            {chevron}
+            {toggleLabel}
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          aria-controls={open ? listId : undefined}
+          className={cn(
+            shell,
+            'w-full min-h-11 gap-3 px-3 text-left text-sm',
+            panel && 'min-h-14 gap-4 px-4 text-base',
+            quiet,
+            'hover:bg-[var(--color-linen)] dark:hover:bg-[var(--color-surface)]'
+          )}
+        >
+          <Icon className={cn('h-4 w-4 shrink-0', panel && 'h-5 w-5')} strokeWidth={1.5} />
+          {/* No sr-only twin here: the whole row is the toggle, so its own
+              label already names what aria-expanded is describing. */}
+          <span className="truncate">{group.label}</span>
+          <span className="ml-auto flex items-center">{chevron}</span>
+        </button>
+      )}
+
+      {open && (
+        <ul id={listId} className={cn('mt-0.5 space-y-0.5', panel && 'mt-1 space-y-1')}>
+          {items.map((child) => (
+            <li key={child.href}>
+              <NavRow
+                href={child.href}
+                label={child.label}
+                active={child.href === activeHref}
+                depth={1}
+                count={0}
+                variant={variant}
+                onNavigate={onNavigate}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  )
+}
+
+/** One block of the menu — the long one above the divider, or Settings below. */
+function NavList({
+  entries,
+  activeHref,
+  openGroups,
+  idPrefix,
+  variant,
+  unreadThreads,
+  onToggle,
+  onNavigate,
+  className,
+}: {
+  entries: Resolved[]
+  activeHref: string | null
+  openGroups: Set<string>
+  idPrefix: string
+  variant: 'sidebar' | 'panel'
+  unreadThreads: number
+  onToggle: (id: string) => void
+  onNavigate?: () => void
+  className?: string
+}) {
+  const panel = variant === 'panel'
+
+  return (
+    <ul className={cn('space-y-0.5', panel && 'space-y-1', className)}>
+      {entries.map((entry) =>
+        entry.kind === 'item' ? (
+          <li key={entry.item.href}>
+            <NavRow
+              href={entry.item.href}
+              label={entry.item.label}
+              icon={entry.item.icon}
+              active={entry.item.href === activeHref}
+              depth={0}
+              count={entry.item.badge === 'threads' ? unreadThreads : 0}
+              variant={variant}
+              onNavigate={onNavigate}
+            />
+          </li>
+        ) : (
+          <li key={entry.group.id}>
+            <NavGroupRow
+              group={entry.group}
+              items={entry.children}
+              open={openGroups.has(entry.group.id)}
+              active={entry.group.href === activeHref}
+              activeHref={activeHref}
+              listId={`${idPrefix}-${entry.group.id}`}
+              variant={variant}
+              onToggle={() => onToggle(entry.group.id)}
+              onNavigate={onNavigate}
+            />
+          </li>
+        )
+      )}
+    </ul>
+  )
+}
+
 export function DashboardNav({
   role,
   unreadThreads,
+  userName,
 }: {
   role: UserRole
   unreadThreads: number
+  userName: string
 }) {
   const pathname = usePathname()
-  const items = ITEMS.filter((i) => i.visible(role))
+  const top = resolve(TREE, role)
+  const bottom = resolve(BOTTOM, role)
+
+  // Every destination the menu offers this role, parents and children in one
+  // list. `isActive` has always needed to see all of them at once — a parent
+  // must not light up when something more specific owns the path — and now the
+  // more specific thing is usually a row sitting underneath it.
+  const flat: { href: string; label: string; badge?: 'threads' }[] = []
+  for (const entry of [...top, ...bottom]) {
+    if (entry.kind === 'item') {
+      flat.push({ href: entry.item.href, label: entry.item.label, badge: entry.item.badge })
+      continue
+    }
+    if (entry.group.href) flat.push({ href: entry.group.href, label: entry.group.label })
+    for (const child of entry.children) flat.push({ href: child.href, label: child.label })
+  }
+
+  const active =
+    flat.find((entry) =>
+      // `/dashboard` would otherwise match every child route.
+      entry.href === '/dashboard'
+        ? pathname === '/dashboard'
+        : pathname === entry.href ||
+          (pathname.startsWith(`${entry.href}/`) &&
+            !flat.some(
+              (other) =>
+                other.href !== entry.href &&
+                other.href.startsWith(`${entry.href}/`) &&
+                pathname.startsWith(other.href)
+            ))
+    ) ?? null
+  const activeHref = active?.href ?? null
 
   // The panel belongs to the route it was opened on, and `open` is derived from
   // that rather than stored. Closing on a row tap is not enough: on a phone the
@@ -214,39 +696,52 @@ export function DashboardNav({
   const closeRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const panelId = useId()
+  const listId = useId()
 
-  // Unchanged, and load-bearing on both sides of the breakpoint now that
-  // Calendar, Marketing, Forms and Settings all have children.
-  const isActive = (item: NavItem) =>
-    // `/dashboard` would otherwise match every child route.
-    item.href === '/dashboard'
-      ? pathname === '/dashboard'
-      : pathname === item.href ||
-        (pathname.startsWith(`${item.href}/`) &&
-          // A parent must not light up when a more specific item owns
-          // the current path.
-          !items.some(
-            (other) =>
-              other !== item &&
-              other.href.startsWith(`${item.href}/`) &&
-              pathname.startsWith(other.href)
-          ))
+  // Which groups are open is the same problem as the panel, and gets the same
+  // answer. The default is not stored at all — the group holding the current
+  // route is open, derived during render, so arriving anywhere by any means
+  // (a link on the page, the back gesture, a redirect out of a closed door)
+  // shows you where you landed. A tap on a chevron is an exception to that
+  // default and is stamped with the pathname it happened on, so it lasts as
+  // long as you stay on the page and no longer. An effect watching the
+  // pathname would do the same job and is exactly what the compiler forbids.
+  const [toggled, setToggled] = useState<{ at: string; groups: Record<string, boolean> } | null>(
+    null
+  )
+  const overrides = toggled?.at === pathname ? toggled.groups : {}
+
+  const onPath = (href: string) => pathname === href || pathname.startsWith(`${href}/`)
+
+  const openGroups = new Set<string>()
+  for (const entry of [...top, ...bottom]) {
+    if (entry.kind !== 'group') continue
+    const holdsRoute =
+      (entry.group.href !== undefined && onPath(entry.group.href)) ||
+      entry.children.some((child) => onPath(child.href))
+    if (overrides[entry.group.id] ?? holdsRoute) openGroups.add(entry.group.id)
+  }
+
+  const toggleGroup = (id: string) => {
+    setToggled({ at: pathname, groups: { ...overrides, [id]: !openGroups.has(id) } })
+  }
 
   // The sliding strip never told you where you were. The bar does — same
   // answer the active styling gives, so the two can never disagree.
-  // Several real routes have no sidebar entry of their own — booking for a
-  // client, an appointment detail page. Falling back to the section they live
-  // under names them honestly; falling back to "Dashboard" told you nothing and
-  // was wrong on the page the diary now sends you to most.
+  // Several real routes have no entry of their own — booking for a client, an
+  // appointment detail page, one report. Falling back to the section they live
+  // under names them honestly, longest match first so a page under a group is
+  // named by its group rather than by whatever sits above it in the list.
   const currentLabel =
-    items.find((item) => isActive(item))?.label ??
-    items.find((item) => item.href !== '/dashboard' && pathname.startsWith(`${item.href}/`))
-      ?.label ??
+    active?.label ??
+    flat
+      .filter((entry) => entry.href !== '/dashboard' && pathname.startsWith(`${entry.href}/`))
+      .sort((a, b) => b.href.length - a.href.length)[0]?.label ??
     'Dashboard'
 
   // With the panel shut the Messages badge is out of sight, so the bar carries
   // the count. Only for roles whose menu actually has Messages in it.
-  const barUnread = items.some((i) => i.badge === 'threads') ? unreadThreads : 0
+  const barUnread = flat.some((entry) => entry.badge === 'threads') ? unreadThreads : 0
 
   const close = () => setOpenedAt(null)
 
@@ -281,6 +776,8 @@ export function DashboardNav({
 
       const panel = panelRef.current
       if (!panel) return
+      // Re-queried on every Tab, which is what keeps the trap honest when a
+      // group has just been opened and put six more links inside it.
       const focusable = panel.querySelectorAll<HTMLElement>('a[href], button:not([disabled])')
       if (focusable.length === 0) return
 
@@ -342,7 +839,7 @@ export function DashboardNav({
           <span className="text-sm text-[var(--color-foreground)]">{currentLabel}</span>
           <span className="label-caps ml-auto text-[var(--color-muted)]">Menu</span>
           {barUnread > 0 && (
-            <span className="flex h-4 min-w-4 items-center justify-center bg-[var(--color-accent)] px-1 text-[0.5625rem] text-white">
+            <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--color-accent)] px-1 text-[0.5625rem] text-white">
               {barUnread}
               <span className="sr-only"> unread messages</span>
             </span>
@@ -372,64 +869,88 @@ export function DashboardNav({
             aria-label="Dashboard menu"
             className="absolute inset-0 flex flex-col bg-[var(--color-background)] sm:right-auto sm:w-[22rem] sm:border-r sm:border-[var(--color-border)]"
           >
-            <div className="flex h-16 shrink-0 items-center justify-between gap-4 border-b border-[var(--color-border)] px-4">
-              <span className="label-caps text-[var(--color-muted)]">Studio menu</span>
+            <div className="flex shrink-0 items-center gap-3 border-b border-[var(--color-border)] p-3">
+              <StudioIdentity name={userName} role={role} className="flex-1" />
               <button
                 ref={closeRef}
                 type="button"
                 onClick={close}
                 aria-label="Close menu"
-                className="-mr-2 flex h-11 w-11 items-center justify-center text-[var(--color-foreground)]"
+                className="flex h-11 w-11 shrink-0 items-center justify-center text-[var(--color-foreground)]"
               >
                 <X className="h-5 w-5" strokeWidth={1.5} />
               </button>
             </div>
 
-            <nav
-              aria-label="Dashboard"
-              className="flex-1 overflow-y-auto overscroll-contain"
-            >
-              {/* Fifteen rows outrun a phone screen, so the list scrolls
-                  inside the panel and pads past the home indicator. */}
-              <ul className="py-2 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
-                {items.map((item) => (
-                  <li key={item.href}>
-                    <NavRow
-                      item={item}
-                      active={isActive(item)}
-                      count={item.badge === 'threads' ? unreadThreads : 0}
-                      variant="panel"
-                      // Closing here, not in an effect that watches the
-                      // pathname: the React Compiler forbids that, and this is
-                      // the moment the intent actually happens.
-                      onNavigate={close}
-                    />
-                  </li>
-                ))}
-              </ul>
+            <nav aria-label="Dashboard" className="flex-1 overflow-y-auto overscroll-contain">
+              {/* More rows than a phone screen holds even collapsed, so the
+                  list scrolls inside the panel and pads past the home
+                  indicator. */}
+              <div className="px-2 py-3 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+                <p className="label-caps px-4 pb-2 text-[var(--color-muted)]">Business</p>
+                <NavList
+                  entries={top}
+                  activeHref={activeHref}
+                  openGroups={openGroups}
+                  idPrefix={`${listId}-panel`}
+                  variant="panel"
+                  unreadThreads={unreadThreads}
+                  onToggle={toggleGroup}
+                  // Closing here, not in an effect that watches the pathname:
+                  // the React Compiler forbids that, and this is the moment the
+                  // intent actually happens.
+                  onNavigate={close}
+                />
+                <div className="mx-4 my-3 h-px bg-[var(--color-border)]" />
+                <NavList
+                  entries={bottom}
+                  activeHref={activeHref}
+                  openGroups={openGroups}
+                  idPrefix={`${listId}-panel`}
+                  variant="panel"
+                  unreadThreads={unreadThreads}
+                  onToggle={toggleGroup}
+                  onNavigate={close}
+                />
+              </div>
             </nav>
           </div>
         </div>
       )}
 
-      {/* lg+ is untouched: same widths, borders, sticky offset and active
-          styling as before, down to the class strings. */}
       <nav
         aria-label="Dashboard"
-        className="hidden shrink-0 border-b border-[var(--color-border)] lg:block lg:w-56 lg:border-b-0 lg:border-r"
+        className="hidden shrink-0 border-b border-[var(--color-border)] lg:block lg:w-64 lg:border-b-0 lg:border-r"
       >
-        <ul className="flex gap-1 overflow-x-auto px-4 py-3 lg:sticky lg:top-16 lg:flex-col lg:px-3 lg:py-6">
-          {items.map((item) => (
-            <li key={item.href}>
-              <NavRow
-                item={item}
-                active={isActive(item)}
-                count={item.badge === 'threads' ? unreadThreads : 0}
-                variant="sidebar"
-              />
-            </li>
-          ))}
-        </ul>
+        {/* Sticky under the h-16 header, and scrolling inside itself: with a
+            section open the menu is taller than a laptop screen, and a sticky
+            column that overflows simply hides its own last rows. */}
+        <div className="lg:sticky lg:top-16 lg:max-h-[calc(100vh-4rem)] lg:overflow-y-auto lg:px-3 lg:py-5">
+          <StudioIdentity name={userName} role={role} />
+
+          <p className="label-caps px-3 pb-2 pt-6 text-[var(--color-muted)]">Business</p>
+          <NavList
+            entries={top}
+            activeHref={activeHref}
+            openGroups={openGroups}
+            idPrefix={`${listId}-side`}
+            variant="sidebar"
+            unreadThreads={unreadThreads}
+            onToggle={toggleGroup}
+          />
+
+          <div className="mx-3 my-4 h-px bg-[var(--color-border)]" />
+
+          <NavList
+            entries={bottom}
+            activeHref={activeHref}
+            openGroups={openGroups}
+            idPrefix={`${listId}-side`}
+            variant="sidebar"
+            unreadThreads={unreadThreads}
+            onToggle={toggleGroup}
+          />
+        </div>
       </nav>
     </>
   )

@@ -77,5 +77,8 @@ export async function POST(request: NextRequest) {
     )
   }
 
+  // `booking.status` rides along and is load-bearing: with approval routing on,
+  // the database may have held this for review, and the confirmation screen has
+  // to say so rather than claiming a confirmation that has not happened.
   return NextResponse.json({ ok: true, booking: outcome.booking }, { status: 201 })
 }

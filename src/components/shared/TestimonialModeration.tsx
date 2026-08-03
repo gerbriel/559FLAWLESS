@@ -43,7 +43,10 @@ export function TestimonialModeration({ testimonial }: { testimonial: Testimonia
   }
 
   return (
-    <div className="border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
+    <div
+      data-ui="panel"
+      className="border border-[var(--color-border)] bg-[var(--color-surface)] p-5"
+    >
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <p className="label-caps text-[var(--color-muted)]">
           {testimonial.client_name}

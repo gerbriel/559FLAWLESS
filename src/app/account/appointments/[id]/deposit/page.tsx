@@ -36,13 +36,32 @@ export default async function DepositPage({ params }: Props) {
     redirect(`/account/appointments/${id}`)
   }
 
+  // /api/stripe/deposit refuses a cancelled appointment with a 409, so without
+  // this the client meets "Secure your appointment" and then a failure toast.
+  if (appointment.status === 'cancelled') {
+    redirect(`/account/appointments/${id}`)
+  }
+
+  // A booking still waiting on the provider is not something a payment secures.
+  const awaitingApproval = appointment.status === 'pending'
+
   return (
     <div className="mx-auto max-w-md py-16 text-center">
-      <h1 className="display text-3xl">Secure your appointment</h1>
+      <h1 className="display text-3xl">
+        {awaitingApproval ? 'Pay your deposit' : 'Secure your appointment'}
+      </h1>
       <p className="mt-4 text-[var(--color-muted)]">
-        A {formatMoney(appointment.deposit_cents)} deposit holds your slot and comes off
-        your total on the day.
+        A {formatMoney(appointment.deposit_cents)} deposit{' '}
+        {awaitingApproval
+          ? 'comes off your total on the day.'
+          : 'holds your slot and comes off your total on the day.'}
       </p>
+      {awaitingApproval && (
+        <p className="mt-4 text-sm text-amber-700 dark:text-amber-400">
+          Your time is already held. This booking is still awaiting the studio&rsquo;s
+          confirmation, and paying now does not confirm it.
+        </p>
+      )}
       <div className="mt-10">
         <DepositRedirect appointmentId={appointment.id} />
       </div>
