@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
+  FolderTree,
   Layers,
   BarChart3,
   CalendarDays,
@@ -262,6 +263,15 @@ const TREE: NavEntry[] = [
           visible: (r) => isFrontDesk(r),
         },
         { href: '/dashboard/inventory', label: 'Inventory', icon: Package, visible: () => true },
+        {
+          href: '/dashboard/categories',
+          label: 'Categories',
+          icon: FolderTree,
+          // The same threshold the tables use: 022 for service categories and
+          // 052 for product ones both write against is_manager(). Other staff
+          // can read the lists from the pages they are filed under.
+          visible: (r) => isManager(r),
+        },
     ],
   },
   {

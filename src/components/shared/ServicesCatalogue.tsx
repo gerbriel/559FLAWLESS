@@ -384,7 +384,7 @@ export function ServicesCatalogue({
           <p className="mt-4 text-xs leading-relaxed text-[var(--color-muted)]">
             A service&rsquo;s category is chosen when you edit it.{' '}
             <Link
-              href="/dashboard/services/categories"
+              href="/dashboard/categories/services"
               className="underline underline-offset-4 hover:text-[var(--color-foreground)]"
             >
               Categories
