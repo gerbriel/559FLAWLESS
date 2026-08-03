@@ -71,6 +71,12 @@ export default async function InventoryPage({ searchParams }: Props) {
   // knows the number, and 032 kept it retired. `adjust_stock` refuses anyone
   // who is not staff, so this only ever hides buttons the RPC would reject.
   const canCount = isStaff(role)
+  // Adding a product is not counting one. Migration 021 opened ordinary edits
+  // to all staff and deliberately kept `manager creates products` as
+  // `for insert with check (public.is_manager())` — catalogue shape is a
+  // manager's decision. Showing anyone else the button would be offering an
+  // action the database refuses.
+  const canCreate = isManager(role)
 
   let query = supabase
     .from('products')
@@ -85,14 +91,29 @@ export default async function InventoryPage({ searchParams }: Props) {
   // The pills carry counts, and a count of the slice you are already looking at
   // is no use for deciding whether to look somewhere else. This second read is
   // the same set of products with none of the filters applied.
-  const [{ data: products }, { data: tally }] = await Promise.all([
-    query,
-    supabase
-      .from('products')
-      .select('id, is_retail, is_professional, stock_qty, low_stock_threshold, external_url')
-      .eq('is_active', true)
-      .is('archived_at', null),
-  ])
+  //
+  // Brands and categories are only read for the "New product" form, so they are
+  // asked for only when the person looking may actually create one.
+  const [{ data: products }, { data: tally }, { data: brands }, { data: productCategories }] =
+    await Promise.all([
+      query,
+      supabase
+        .from('products')
+        .select('id, is_retail, is_professional, stock_qty, low_stock_threshold, external_url')
+        .eq('is_active', true)
+        .is('archived_at', null),
+      canCreate
+        ? supabase.from('brands').select('id, name').eq('is_active', true).order('name')
+        : Promise.resolve({ data: null }),
+      canCreate
+        ? supabase
+            .from('product_categories')
+            .select('id, name')
+            .eq('is_active', true)
+            .order('sort_order')
+            .order('name')
+        : Promise.resolve({ data: null }),
+    ])
 
   type ProductRow = NonNullable<typeof products>[number]
 
@@ -113,16 +134,31 @@ export default async function InventoryPage({ searchParams }: Props) {
    * `is_active and external_url is null and stock_qty <= low_stock_threshold`,
    * and `product_low_stock_alert()` refuses to fire without the same clause,
    * "the marketplace holds that stock, so a zero here means nothing and would
-   * alert constantly". Externally fulfilled products are pinned at zero by the
-   * `products_external_has_no_stock` CHECK, so without this they are *all*
-   * permanently low. Keep the two halves together — the filter, its count and
-   * the row badge all read this one function so they cannot disagree.
+   * alert constantly". That reasoning assumed `products_external_has_no_stock`
+   * pinned linked products at zero — migration 024 dropped it, so they can and
+   * do hold stock now, and the rule below is narrowed to match.
+   *
+   * NOTE the database has not caught up: `product_low_stock` and
+   * `product_low_stock_alert()` still carry `external_url is null`, so a linked
+   * product running low shows here and raises no alert. Aligning them is a
+   * migration, and this screen showing the truth beats it staying silent in the
+   * meantime. The filter, its count and the row badge all read this one
+   * function, so those three cannot disagree with each other.
    */
   const isLow = (p: {
     stock_qty: number
     low_stock_threshold: number
     external_url: string | null
-  }) => p.external_url === null && Number(p.stock_qty) <= Number(p.low_stock_threshold)
+  }) =>
+    Number(p.stock_qty) <= Number(p.low_stock_threshold) &&
+    // A linked product sitting at zero is the marketplace's stock, not a
+    // shortage — that is the noise the original clause existed to silence, and
+    // it is still right. But 024 dropped `products_external_has_no_stock`
+    // because the studio DOES keep these on the shelf and sells them in person,
+    // so a linked product with two left and a threshold of three is genuinely
+    // running out, and skipping it meant the one list that exists to warn her
+    // never mentioned the products she actually stocks.
+    (p.external_url === null || Number(p.stock_qty) > 0)
 
   const rows = (products ?? [])
     .filter((p) => (active === 'low' ? isLow(p) : true))
@@ -205,16 +241,31 @@ export default async function InventoryPage({ searchParams }: Props) {
       <PageHeader
         title="Inventory"
         actions={
-          // A GET form, so the search lands in the URL: it survives a refresh,
-          // it can be sent to someone, and it works before React has loaded.
-          <form method="get" className="w-full sm:w-80">
-            <input type="hidden" name="filter" value={active} />
-            <SearchField
-              label="Search by product name or brand"
-              name="q"
-              defaultValue={search}
-            />
-          </form>
+          <>
+            {/* A GET form, so the search lands in the URL: it survives a
+                refresh, it can be sent to someone, and it works before React
+                has loaded. */}
+            <form method="get" className="w-full sm:w-80">
+              <input type="hidden" name="filter" value={active} />
+              <SearchField
+                label="Search by product name or brand"
+                name="q"
+                defaultValue={search}
+              />
+            </form>
+            {canCreate && (
+              // ProductEditor owns its own trigger; without a product it is the
+              // "New product" button. Restyling it from here to read as the
+              // primary action beats forking the editor over a colour — the
+              // same arrangement the services page uses.
+              <span className="[&>button]:border-transparent [&>button]:bg-[var(--color-foreground)] [&>button]:text-[var(--color-background)] [&>button:hover]:border-transparent [&>button:hover]:bg-[var(--color-clay-deep)]">
+                <ProductEditor
+                  brands={brands ?? []}
+                  categories={productCategories ?? []}
+                />
+              </span>
+            )}
+          </>
         }
       />
 
