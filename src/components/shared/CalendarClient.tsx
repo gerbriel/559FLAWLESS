@@ -17,6 +17,7 @@ import type {
 import {
   CalendarViewComponent,
   isAwaitingApproval,
+  useCalendarDensity,
   type CalendarView,
 } from './CalendarView'
 import { CalendarToolbar } from './CalendarToolbar'
@@ -94,6 +95,19 @@ export function CalendarClient({
 
   const canDrag = useDragCapable()
   const todayKey = dateKeyInTimeZone(new Date(), timezone)
+
+  /**
+   * How tightly the book is drawn, saved per browser like the view is.
+   *
+   * Deliberately NOT the shape the view preference uses below. That effect is
+   * a `react-hooks/set-state-in-effect` error the React Compiler is right
+   * about — it renders the default and then immediately renders again — and a
+   * second copy of it would be a second cascading render on the same screen.
+   * `useCalendarDensity` subscribes to localStorage through
+   * `useSyncExternalStore`, which is what it actually is: an external store.
+   * Left as one line here on purpose; the state lives in the hook.
+   */
+  const [density, setDensity] = useCalendarDensity()
 
   // Persist view preference in localStorage
   React.useEffect(() => {
@@ -184,8 +198,10 @@ export function CalendarClient({
         selectedProviders={selectedProviders}
         settingsHref={settingsHref}
         canBookForClients={canBookForClients}
+        density={density}
         onViewChange={handleViewChange}
         onDateChange={handleDateChange}
+        onDensityChange={setDensity}
         onProviderFilterChange={setSelectedProviders}
       />
 
@@ -213,6 +229,7 @@ export function CalendarClient({
               closures={closures}
               selectedProviders={selectedProviders}
               todayKey={todayKey}
+              density={density}
               onAppointmentClick={handleAppointmentClick}
               onSlotClick={canBookForClients ? handleSlotClick : undefined}
             />
@@ -249,6 +266,7 @@ export function CalendarClient({
             busy={busy}
             closures={closures}
             selectedProviders={selectedProviders}
+            density={density}
             onViewChange={handleViewChange}
             onDateChange={handleDateChange}
             onAppointmentClick={handleAppointmentClick}

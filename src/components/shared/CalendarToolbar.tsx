@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Plus,
+  Rows3,
   Settings2,
   Users,
 } from 'lucide-react'
@@ -15,7 +16,12 @@ import { ButtonLink } from '@/components/ui/button'
 import { Avatar, Panel, Toolbar } from '@/components/ui/dashboard'
 import { addDaysToDateKey } from '@/lib/time'
 import { cn } from '@/lib/utils'
-import type { CalendarView } from './CalendarView'
+import {
+  CALENDAR_DENSITIES,
+  CALENDAR_DENSITY,
+  type CalendarDensity,
+  type CalendarView,
+} from './CalendarView'
 
 /**
  * One row across the top of the diary, holding everything you steer it with.
@@ -60,8 +66,16 @@ interface CalendarToolbarProps {
    * the pills are only offered to someone the pages will actually let in.
    */
   canBookForClients: boolean
+  /**
+   * How tightly the grid is drawn. It sits next to the view rather than in
+   * settings because it is the same kind of decision — how you want to look at
+   * the book right now — and because a studio doing 20-minute brow waxes and
+   * one doing 90-minute peels genuinely want different answers.
+   */
+  density: CalendarDensity
   onViewChange: (view: CalendarView) => void
   onDateChange: (dateKey: string) => void
+  onDensityChange: (density: CalendarDensity) => void
   onProviderFilterChange: (providerIds: string[]) => void
 }
 
@@ -223,11 +237,18 @@ function ToolbarMenu({
 function MenuRow({
   checked,
   role,
+  hint,
   onSelect,
   children,
 }: {
   checked: boolean
   role: 'menuitemradio' | 'menuitemcheckbox'
+  /**
+   * What picking this row gets you, said rather than left to be discovered.
+   * "Compact" and "Roomy" name a size; they do not say that one of them puts
+   * most of the day on screen and the other keeps the price on every card.
+   */
+  hint?: string
   onSelect: () => void
   children: React.ReactNode
 }) {
@@ -237,9 +258,14 @@ function MenuRow({
       role={role}
       aria-checked={checked}
       onClick={onSelect}
-      className="flex min-h-11 w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 text-left text-sm transition-colors hover:bg-[var(--color-linen)] dark:hover:bg-[var(--color-background)]"
+      className="flex min-h-11 w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-1.5 text-left text-sm transition-colors hover:bg-[var(--color-linen)] dark:hover:bg-[var(--color-background)]"
     >
-      <span className="min-w-0 flex-1 truncate">{children}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate">{children}</span>
+        {hint && (
+          <span className="block truncate text-xs text-[var(--color-muted)]">{hint}</span>
+        )}
+      </span>
       {checked && (
         <Check className="h-4 w-4 shrink-0 text-[var(--color-accent)]" strokeWidth={2} aria-hidden />
       )}
@@ -255,8 +281,10 @@ export function CalendarToolbar({
   selectedProviders,
   settingsHref,
   canBookForClients,
+  density,
   onViewChange,
   onDateChange,
+  onDensityChange,
   onProviderFilterChange,
 }: CalendarToolbarProps) {
   const onToday = currentDate === todayKey
@@ -357,6 +385,36 @@ export function CalendarToolbar({
                 onSelect={() => onViewChange(option)}
               >
                 {VIEW_LABELS[option]}
+              </MenuRow>
+            ))}
+          </ToolbarMenu>
+
+          {/* Next to the view, because it is the same question asked twice:
+              what am I looking at, and how much of it at once. The month grid
+              reads it too — its squares shrink with the hour rows, so switching
+              views never lands you on a calendar drawn to a different scale. */}
+          <ToolbarMenu
+            label="Density"
+            trigger={
+              <>
+                <Rows3
+                  className="h-4 w-4 text-[var(--color-muted)]"
+                  strokeWidth={1.5}
+                  aria-hidden
+                />
+                <span>{CALENDAR_DENSITY[density].label}</span>
+              </>
+            }
+          >
+            {CALENDAR_DENSITIES.map((option) => (
+              <MenuRow
+                key={option}
+                role="menuitemradio"
+                checked={option === density}
+                hint={CALENDAR_DENSITY[option].hint}
+                onSelect={() => onDensityChange(option)}
+              >
+                {CALENDAR_DENSITY[option].label}
               </MenuRow>
             ))}
           </ToolbarMenu>

@@ -17,6 +17,7 @@ import {
   isAwaitingApproval,
   type CalendarView,
   type CalendarAppointment,
+  type CalendarDensity,
 } from './CalendarView'
 import { DragScheduleBoard, type BoardProvider } from './DragScheduleBoard'
 import { useDragCapable } from './DragScheduleProvider'
@@ -47,6 +48,12 @@ interface DragScheduleCalendarProps {
   providers: BoardProvider[]
   timezone: string
   selectedProviders: string[]
+  /**
+   * Passed straight through to whichever surface it hands off to, so the two
+   * are drawn at the same scale. Omitted means the default zoom, exactly as it
+   * does for the components underneath.
+   */
+  density?: CalendarDensity
   onViewChange: (view: CalendarView) => void
   onDateChange: (date: string) => void
   onAppointmentClick: (appointment: CalendarAppointment) => void
@@ -210,6 +217,7 @@ export function DragScheduleCalendar({ onMoved, ...props }: DragScheduleCalendar
           closures={props.closures}
           selectedProviders={selectedProviders}
           todayKey={todayKey}
+          density={props.density}
           onAppointmentClick={props.onAppointmentClick}
           onSlotClick={props.onSlotClick}
           onMoved={onMoved}

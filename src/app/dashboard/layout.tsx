@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { DashboardNav } from '@/components/layout/DashboardNav'
@@ -34,6 +35,17 @@ export default async function DashboardLayout({
   }
 
   const role = profile.role as UserRole
+
+  /**
+   * How wide the menu was left, decided here so it is right on the first paint.
+   *
+   * `DashboardNav` is what writes this cookie — the name is spelled there too,
+   * with the reasoning. It cannot be imported from a `'use client'` module,
+   * because on the server those exports are client references rather than the
+   * values themselves. This route is already `force-dynamic`, so reading a
+   * cookie costs nothing it was not already paying.
+   */
+  const navCollapsed = (await cookies()).get('dash_nav')?.value === 'rail'
 
   const [{ count: unreadNotifications }, { count: unreadThreads }] = await Promise.all([
     supabase
@@ -92,6 +104,7 @@ export default async function DashboardLayout({
           role={role}
           unreadThreads={unreadThreads ?? 0}
           userName={profile.display_name || profile.first_name || 'Team member'}
+          initialCollapsed={navCollapsed}
         />
         <main className="min-w-0 flex-1 px-6 py-10 lg:px-10">{children}</main>
       </div>

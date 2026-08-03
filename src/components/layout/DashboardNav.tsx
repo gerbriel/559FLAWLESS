@@ -7,6 +7,7 @@ import {
   BarChart3,
   CalendarDays,
   ChevronDown,
+  Circle,
   ClipboardCheck,
   ClipboardList,
   FileBarChart,
@@ -17,6 +18,8 @@ import {
   Menu,
   MessageSquare,
   Package,
+  PanelLeftClose,
+  PanelLeftOpen,
   Receipt,
   ScanLine,
   Scissors,
@@ -39,6 +42,25 @@ import {
   type UserRole,
 } from '@/types/database'
 
+/**
+ * Where "I keep the menu narrow" is stored.
+ *
+ * A cookie rather than localStorage, and the reason is the first paint. The
+ * layout is already `force-dynamic`, so it reads this on the server and renders
+ * the sidebar at the width the user chose — there is no moment where the wrong
+ * one is on screen. localStorage cannot do that: read it during render and the
+ * server and the client disagree, read it in an effect and you are calling
+ * setState from an effect, which the React Compiler lint in this repo rejects,
+ * and either way the menu visibly jumps on every page load.
+ *
+ * The name is repeated in `src/app/dashboard/layout.tsx`, which is what writes
+ * it into a prop. A shared constant would have to live in a third module, and
+ * a `'use client'` module's exports are client references on the server — a
+ * server component importing this string would not get a string.
+ */
+const NAV_COOKIE = 'dash_nav'
+const NAV_COOKIE_MAX_AGE = 60 * 60 * 24 * 365
+
 interface NavItem {
   href: string
   label: string
@@ -56,7 +78,7 @@ interface NavGroup {
   /**
    * Set only when the group is also somewhere to go. Calendar, Clients, Forms,
    * Marketing and Settings each have a real page of their own, so their row
-   * navigates and the chevron beside it opens the section. Catalog, Payments
+   * navigates and the chevron beside it opens the section. Sales, Catalog
    * and Insights are containers with no page behind them, and a row that looks
    * like a link but only expands is a small lie told forty times a day.
    */
@@ -78,6 +100,22 @@ const isGroup = (entry: NavEntry): entry is NavGroup => 'children' in entry
  * parent and reading a tab bar. The children below are, deliberately, those
  * tab bars: the section tabs keep working exactly as they did, and the sidebar
  * now gives the same answer without having to be on the page already.
+ *
+ * Two shapes, and which one a thing gets is decided by the routes, not by
+ * taste. Keeping them apart is what stops the sidebar and the section tabs
+ * ever telling two different stories:
+ *
+ * - A **section** has a page. Calendar, Clients, Forms, Marketing: its children
+ *   are exactly that section's `SectionTabs`, item for item and gate for gate.
+ *   Nothing may be filed under one of these that its tab bar does not also
+ *   list, or the menu claims a membership the page it lands on will deny.
+ *   (Settings is the same shape against the directory its index renders — that
+ *   section has no tab bar, and its index is the list.)
+ * - A **category** has no page: Sales, Catalog, Insights. These collect
+ *   top-level routes that were never inside anything — /dashboard/sell,
+ *   /dashboard/orders, /dashboard/expenses are siblings with no parent screen
+ *   and no chrome of their own, so a category can group them without
+ *   contradicting anything.
  *
  * Each row keeps the gate it always had, and each child records the gate its
  * own page enforces — hiding a row is not a security control, the page-level
@@ -115,7 +153,8 @@ const TREE: NavEntry[] = [
     href: '/dashboard/clients',
     visible: (r) => isFrontDesk(r) || r === 'provider',
     // Someone can subscribe long before they ever book, which is why the list
-    // lives under Clients rather than under Marketing.
+    // lives under Clients rather than under Marketing. This is also the whole
+    // of the Clients tab bar — see the rule above the group.
     children: [
       {
         href: '/dashboard/clients/newsletter',
@@ -124,6 +163,18 @@ const TREE: NavEntry[] = [
       },
     ],
   },
+  // Messages and Waitlist stay rows of their own rather than joining Clients.
+  //
+  // Messages is the one item carrying a number, and a number inside a closed
+  // group is a number nobody sees — the entire job of that badge is to be
+  // visible from wherever you are standing.
+  //
+  // Waitlist is a route beside Clients, not inside it: /dashboard/waitlist has
+  // its own layout and no section chrome, so filing it under Clients would put
+  // a fourth thing in a section whose own tab bar shows two, and land you on a
+  // page with nothing on it agreeing that you are in Clients. Sales and Catalog
+  // can collect siblings like that because they are categories with no page of
+  // their own; Clients has one, and it has tabs.
   {
     href: '/dashboard/messages',
     label: 'Messages',
@@ -157,10 +208,35 @@ const TREE: NavEntry[] = [
     ],
   },
   {
-    href: '/dashboard/sell',
-    label: 'Sell',
-    icon: ScanLine,
-    visible: (r) => isFrontDesk(r),
+    // Taking money, what has been taken, and what went out again — one
+    // section, in the order the day runs. The till was a row of its own here,
+    // which put "ring this up" and "what did we ring up" three rows apart; it
+    // keeps its position in the column, now as the first thing in the group.
+    id: 'sales',
+    label: 'Sales',
+    icon: Wallet,
+    children: [
+      {
+        href: '/dashboard/sell',
+        label: 'Sell',
+        icon: ScanLine,
+        visible: (r) => isFrontDesk(r),
+      },
+      {
+        href: '/dashboard/orders',
+        label: 'Orders',
+        icon: ShoppingBag,
+        visible: (r) => isFrontDesk(r),
+      },
+      {
+        href: '/dashboard/expenses',
+        label: 'Expenses',
+        icon: Receipt,
+        // What the studio pays in rent is a term of the business, not
+        // something the front desk needs to run the day.
+        visible: (r) => isManager(r),
+      },
+    ],
   },
   {
     // What the studio sells: time, and things. A provider sees neither the
@@ -176,28 +252,6 @@ const TREE: NavEntry[] = [
         visible: (r) => isFrontDesk(r),
       },
       { href: '/dashboard/inventory', label: 'Inventory', icon: Package, visible: () => true },
-    ],
-  },
-  {
-    // Money in and money out, side by side.
-    id: 'payments',
-    label: 'Payments',
-    icon: Wallet,
-    children: [
-      {
-        href: '/dashboard/orders',
-        label: 'Orders',
-        icon: ShoppingBag,
-        visible: (r) => isFrontDesk(r),
-      },
-      {
-        href: '/dashboard/expenses',
-        label: 'Expenses',
-        icon: Receipt,
-        // What the studio pays in rent is a term of the business, not
-        // something the front desk needs to run the day.
-        visible: (r) => isManager(r),
-      },
     ],
   },
   {
@@ -539,6 +593,11 @@ function NavGroupRow({
       ) : (
         <button
           type="button"
+          // Named so the rail can hand focus here after widening the sidebar —
+          // see `openSection`. The narrow row the click landed on is gone by
+          // then, and focus falling to <body> would restart Tab at the top of
+          // the document.
+          id={`${listId}-toggle`}
           onClick={onToggle}
           aria-expanded={open}
           aria-controls={open ? listId : undefined}
@@ -639,14 +698,134 @@ function NavList({
   )
 }
 
+/** One 44px target in the narrow rail. Shared by the links and the buttons. */
+const railRow = (active: boolean) =>
+  cn(
+    'relative flex h-11 w-11 items-center justify-center rounded-[var(--radius-tile)] transition-colors',
+    active
+      ? 'bg-[var(--color-clay-soft)] text-[var(--color-clay-deep)] dark:bg-[var(--color-surface)] dark:text-[var(--color-accent)]'
+      : 'text-[var(--color-muted)] hover:bg-[var(--color-linen)] hover:text-[var(--color-foreground)] dark:hover:bg-[var(--color-surface)]'
+  )
+
+const RAIL_BADGE =
+  'absolute right-0.5 top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--color-accent)] px-1 text-[0.5625rem] text-white'
+
+/**
+ * The menu with the sidebar collapsed: one icon per top-level row, in exactly
+ * the order the full menu lists them, nothing else.
+ *
+ * Every row names itself twice — `title` for the pointer, an accessible name
+ * for everything else. An icon with no name is not a shortcut, it is a riddle.
+ *
+ * Sections behave differently depending on whether they are somewhere to go.
+ * Calendar, Clients, Forms, Marketing and Settings each have a page, so their
+ * icon is a link straight to it and the section's own tab bar takes it from
+ * there — one tap, same as before it was a group. Sales, Catalog and Insights
+ * are containers with no page behind them, so their icon widens the sidebar
+ * and opens the section instead of navigating somewhere that does not exist.
+ * That is a plain <button>, so it works from the keyboard for free, and it is
+ * why there is no hover flyout here: a popover anchored to a row inside a
+ * scrolling sticky column is clipped by that column, and un-clipping it means
+ * measuring the row in an effect and storing the result in state — the exact
+ * shape this codebase's lint rejects.
+ */
+function NavRail({
+  entries,
+  activeHref,
+  unreadThreads,
+  onOpenSection,
+  className,
+}: {
+  entries: Resolved[]
+  activeHref: string | null
+  unreadThreads: number
+  onOpenSection: (id: string) => void
+  className?: string
+}) {
+  return (
+    <ul className={cn('space-y-0.5', className)}>
+      {entries.map((entry) => {
+        if (entry.kind === 'item') {
+          // Only reachable for a row promoted out of a container group, and
+          // every promotable child carries an icon. Present so a future one
+          // that forgets gets a dot rather than a hole in the rail.
+          const Icon = entry.item.icon ?? Circle
+          const count = entry.item.badge === 'threads' ? unreadThreads : 0
+          const active = entry.item.href === activeHref
+
+          return (
+            <li key={entry.item.href}>
+              <Link
+                href={entry.item.href}
+                title={entry.item.label}
+                aria-label={
+                  count > 0 ? `${entry.item.label}, ${count} unread messages` : entry.item.label
+                }
+                aria-current={active ? 'page' : undefined}
+                className={railRow(active)}
+              >
+                <Icon className="h-5 w-5" strokeWidth={1.5} aria-hidden />
+                {count > 0 && (
+                  <span aria-hidden className={RAIL_BADGE}>
+                    {count}
+                  </span>
+                )}
+              </Link>
+            </li>
+          )
+        }
+
+        const { group, children } = entry
+        const Icon = group.icon
+        // The rail has no room for the child that owns the page, so the
+        // section itself carries the highlight — anywhere inside it counts.
+        const active = group.href === activeHref || children.some((c) => c.href === activeHref)
+
+        return (
+          <li key={group.id}>
+            {group.href ? (
+              <Link
+                href={group.href}
+                title={group.label}
+                aria-label={group.label}
+                aria-current={group.href === activeHref ? 'page' : undefined}
+                className={railRow(active)}
+              >
+                <Icon className="h-5 w-5" strokeWidth={1.5} aria-hidden />
+              </Link>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onOpenSection(group.id)}
+                title={`${group.label} — open section`}
+                className={railRow(active)}
+              >
+                <Icon className="h-5 w-5" strokeWidth={1.5} aria-hidden />
+                <span className="sr-only">{group.label} — open section</span>
+              </button>
+            )}
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
 export function DashboardNav({
   role,
   unreadThreads,
   userName,
+  initialCollapsed,
 }: {
   role: UserRole
   unreadThreads: number
   userName: string
+  /**
+   * The stored width preference, read from the cookie on the server. The first
+   * client render uses the same value, so there is nothing to reconcile and
+   * nothing to flash.
+   */
+  initialCollapsed: boolean
 }) {
   const pathname = usePathname()
   const top = resolve(TREE, role)
@@ -725,6 +904,47 @@ export function DashboardNav({
   const toggleGroup = (id: string) => {
     setToggled({ at: pathname, groups: { ...overrides, [id]: !openGroups.has(id) } })
   }
+
+  // Same shape as the two above: the server's answer is the default, a click
+  // in this tab overrides it, and nothing is read from storage during render or
+  // synced back in an effect.
+  const [collapsedOverride, setCollapsedOverride] = useState<boolean | null>(null)
+  const collapsed = collapsedOverride ?? initialCollapsed
+
+  const setCollapsed = (next: boolean, remember: boolean) => {
+    setCollapsedOverride(next)
+    if (!remember) return
+    // Written straight from the browser rather than through a server action:
+    // this is a width, not a mutation, and a round trip would put a spinner in
+    // front of a chevron. The next request carries it, so the next full page
+    // load renders the right width first time.
+    const secure = window.location.protocol === 'https:' ? '; secure' : ''
+    document.cookie = `${NAV_COOKIE}=${next ? 'rail' : 'full'}; path=/; max-age=${NAV_COOKIE_MAX_AGE}; samesite=lax${secure}`
+  }
+
+  // Tapping Sales, Catalog or Insights in the rail. Widening is not the stored
+  // preference — it is one look inside a drawer, so the cookie is left alone
+  // and the narrow menu is back on the next reload.
+  //
+  // The row that was clicked stops existing at that moment, so where focus goes
+  // has to be said out loud. A fresh object every time, deliberately: pressing
+  // the same section twice must move focus twice, and identity is what makes
+  // the effect below run again when the id has not changed.
+  const [handOff, setHandOff] = useState<{ group: string } | null>(null)
+
+  const openSection = (id: string) => {
+    setCollapsed(false, false)
+    setToggled({ at: pathname, groups: { ...overrides, [id]: true } })
+    setHandOff({ group: id })
+  }
+
+  // Focus only — nothing is set here, which is what keeps this an effect the
+  // compiler is happy with. The id is the one `NavGroupRow` puts on the row
+  // that has just replaced the rail button.
+  useEffect(() => {
+    if (!handOff) return
+    document.getElementById(`${listId}-side-${handOff.group}-toggle`)?.focus()
+  }, [handOff, listId])
 
   // The sliding strip never told you where you were. The bar does — same
   // answer the active styling gives, so the two can never disagree.
@@ -821,30 +1041,43 @@ export function DashboardNav({
 
   return (
     <>
-      {/* Below lg: a slim bar that names the page you are on and opens the
-          menu. Sticky under the h-16 header, so the menu stays one tap away
-          however far down a client list you have scrolled. */}
+      {/* Below lg: the hamburger, top left, and nothing else you can press.
+          Sticky under the h-16 header, so the menu stays one tap away however
+          far down a client list you have scrolled.
+
+          The bar used to be one full-width button reading [≡] Clients … MENU,
+          which put the word and the icon at opposite ends of the same control
+          and read as two. Now the button is the icon and only the icon; the
+          page name sits beside it as text, because knowing which of fifteen
+          screens you are on is worth a line and is not something to tap. The
+          unread count rides on the hamburger itself rather than standing next
+          to the name, where it would look like a second thing to press. */}
       <div className="sticky top-16 z-20 border-b border-[var(--color-border)] bg-[var(--color-background)] lg:hidden">
-        <button
-          ref={triggerRef}
-          type="button"
-          onClick={() => setOpenedAt(pathname)}
-          aria-expanded={open}
-          // Only while the panel exists: aria-controls pointing at an id that is
-          // not in the document is an invalid reference, not an empty one.
-          aria-controls={open ? panelId : undefined}
-          className="flex min-h-11 w-full items-center gap-3 px-4 py-3 text-left"
-        >
-          <Menu className="h-5 w-5 shrink-0" strokeWidth={1.5} />
-          <span className="text-sm text-[var(--color-foreground)]">{currentLabel}</span>
-          <span className="label-caps ml-auto text-[var(--color-muted)]">Menu</span>
-          {barUnread > 0 && (
-            <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--color-accent)] px-1 text-[0.5625rem] text-white">
-              {barUnread}
-              <span className="sr-only"> unread messages</span>
+        <div className="flex items-center gap-2 px-3 py-2">
+          <button
+            ref={triggerRef}
+            type="button"
+            data-ui="button"
+            onClick={() => setOpenedAt(pathname)}
+            aria-expanded={open}
+            // Only while the panel exists: aria-controls pointing at an id that
+            // is not in the document is an invalid reference, not an empty one.
+            aria-controls={open ? panelId : undefined}
+            className="relative flex h-11 w-11 shrink-0 items-center justify-center text-[var(--color-foreground)]"
+          >
+            <Menu className="h-6 w-6" strokeWidth={1.5} aria-hidden />
+            <span className="sr-only">
+              Open menu
+              {barUnread > 0 ? `, ${barUnread} unread messages` : ''}
             </span>
-          )}
-        </button>
+            {barUnread > 0 && (
+              <span aria-hidden className={RAIL_BADGE}>
+                {barUnread}
+              </span>
+            )}
+          </button>
+          <span className="truncate text-sm text-[var(--color-foreground)]">{currentLabel}</span>
+        </div>
       </div>
 
       {open && (
@@ -920,36 +1153,93 @@ export function DashboardNav({
 
       <nav
         aria-label="Dashboard"
-        className="hidden shrink-0 border-b border-[var(--color-border)] lg:block lg:w-64 lg:border-b-0 lg:border-r"
+        className={cn(
+          'hidden shrink-0 border-b border-[var(--color-border)] lg:block lg:border-b-0 lg:border-r',
+          // The one measurement that changes. Everything to the right is a
+          // flex child, so the page reflows into the space on its own.
+          collapsed ? 'lg:w-16' : 'lg:w-64'
+        )}
       >
         {/* Sticky under the h-16 header, and scrolling inside itself: with a
             section open the menu is taller than a laptop screen, and a sticky
             column that overflows simply hides its own last rows. */}
-        <div className="lg:sticky lg:top-16 lg:max-h-[calc(100vh-4rem)] lg:overflow-y-auto lg:px-3 lg:py-5">
-          <StudioIdentity name={userName} role={role} />
+        <div
+          className={cn(
+            'lg:sticky lg:top-16 lg:max-h-[calc(100vh-4rem)] lg:overflow-y-auto lg:py-5',
+            collapsed ? 'lg:px-2.5' : 'lg:px-3'
+          )}
+        >
+          {/* The reference puts this control beside the business name in the
+              app header. Ours is a server component rendering the wordmark,
+              the till and the notification bell, and none of it knows the
+              sidebar exists — lifting this state up there would mean turning
+              that whole header into a client component to move one chevron.
+              So it sits at the top of the sidebar it controls, first in the
+              column, in the same corner whether the menu is wide or narrow. */}
+          <div className={cn('flex items-center', collapsed ? 'justify-center' : 'gap-2')}>
+            <button
+              type="button"
+              data-ui="button"
+              onClick={() => setCollapsed(!collapsed, true)}
+              aria-label={collapsed ? 'Expand menu' : 'Collapse menu'}
+              title={collapsed ? 'Expand menu' : 'Collapse menu'}
+              className="flex h-11 w-11 shrink-0 items-center justify-center text-[var(--color-muted)] transition-colors hover:bg-[var(--color-linen)] hover:text-[var(--color-foreground)] dark:hover:bg-[var(--color-surface)]"
+            >
+              {collapsed ? (
+                <PanelLeftOpen className="h-5 w-5" strokeWidth={1.5} aria-hidden />
+              ) : (
+                <PanelLeftClose className="h-5 w-5" strokeWidth={1.5} aria-hidden />
+              )}
+            </button>
+            {/* Narrow, the studio card is the one thing that cannot shrink to
+                44px and stay legible. The header above already carries the
+                wordmark and the role, so nothing is actually lost. */}
+            {!collapsed && <StudioIdentity name={userName} role={role} className="min-w-0 flex-1" />}
+          </div>
 
-          <p className="label-caps px-3 pb-2 pt-6 text-[var(--color-muted)]">Business</p>
-          <NavList
-            entries={top}
-            activeHref={activeHref}
-            openGroups={openGroups}
-            idPrefix={`${listId}-side`}
-            variant="sidebar"
-            unreadThreads={unreadThreads}
-            onToggle={toggleGroup}
-          />
+          {collapsed ? (
+            <>
+              <NavRail
+                entries={top}
+                activeHref={activeHref}
+                unreadThreads={unreadThreads}
+                onOpenSection={openSection}
+                className="mt-4"
+              />
+              <div className="mx-1 my-3 h-px bg-[var(--color-border)]" />
+              <NavRail
+                entries={bottom}
+                activeHref={activeHref}
+                unreadThreads={unreadThreads}
+                onOpenSection={openSection}
+              />
+            </>
+          ) : (
+            <>
+              <p className="label-caps px-3 pb-2 pt-6 text-[var(--color-muted)]">Business</p>
+              <NavList
+                entries={top}
+                activeHref={activeHref}
+                openGroups={openGroups}
+                idPrefix={`${listId}-side`}
+                variant="sidebar"
+                unreadThreads={unreadThreads}
+                onToggle={toggleGroup}
+              />
 
-          <div className="mx-3 my-4 h-px bg-[var(--color-border)]" />
+              <div className="mx-3 my-4 h-px bg-[var(--color-border)]" />
 
-          <NavList
-            entries={bottom}
-            activeHref={activeHref}
-            openGroups={openGroups}
-            idPrefix={`${listId}-side`}
-            variant="sidebar"
-            unreadThreads={unreadThreads}
-            onToggle={toggleGroup}
-          />
+              <NavList
+                entries={bottom}
+                activeHref={activeHref}
+                openGroups={openGroups}
+                idPrefix={`${listId}-side`}
+                variant="sidebar"
+                unreadThreads={unreadThreads}
+                onToggle={toggleGroup}
+              />
+            </>
+          )}
         </div>
       </nav>
     </>

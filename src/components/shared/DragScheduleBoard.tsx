@@ -32,11 +32,14 @@ import {
 // that lives only over there is a distinction the studio never sees.
 import {
   isAwaitingApproval,
+  CALENDAR_DENSITY,
+  DEFAULT_CALENDAR_DENSITY,
   PENDING_CARD_CLASS,
   PENDING_HATCH,
   PENDING_TITLE,
   PendingMark,
   type CalendarAppointment,
+  type CalendarDensity,
 } from './CalendarView'
 import {
   useAppointmentMove,
@@ -101,6 +104,13 @@ export interface DragScheduleBoardProps {
   /** Empty means "everyone". Mirrors the calendar's own filter. */
   selectedProviders: string[]
   todayKey: string
+  /**
+   * How tightly to draw it, shared with the calendar grid so the two surfaces
+   * agree on an hour. This board is the one that made the book feel zoomed in:
+   * four quarter-hour rows at a hard-coded `min-h-6` put an hour at 96px and
+   * the 08:00–20:59 day at 1248px, of which under five hours reached a laptop.
+   */
+  density?: CalendarDensity
   onAppointmentClick: (appointment: CalendarAppointment) => void
   onSlotClick?: (date: string, time: string) => void
   onMoved?: () => void
@@ -147,10 +157,14 @@ export function DragScheduleBoard({
   closures,
   selectedProviders,
   todayKey,
+  density = DEFAULT_CALENDAR_DENSITY,
   onAppointmentClick,
   onSlotClick,
   onMoved,
 }: DragScheduleBoardProps) {
+  const metrics = CALENDAR_DENSITY[density]
+  const tight = !metrics.roomForDetail
+
   const canDrag = useDragCapable()
   const { appointments: shown, move, movingId, announcement, announce } = useAppointmentMove(
     appointments,
@@ -247,6 +261,19 @@ export function DragScheduleBoard({
   )
 
   /**
+   * One template for the header row and every hour, so they cannot fall out of
+   * step. Both were carrying their own copy of `5rem repeat(n, minmax(9rem,
+   * 1fr))` — two places to forget, and the columns would have shifted under the
+   * headers the moment one of them moved.
+   *
+   * Narrower columns are half of what makes a tighter zoom worth having: seven
+   * days at 9rem plus a 5rem gutter is 1088px and scrolls sideways inside the
+   * dashboard's main column, where seven at 7.5rem plus 3.25rem is 892px and
+   * does not.
+   */
+  const template = `${metrics.gutter} repeat(${columns.length}, minmax(${metrics.columnMin}, 1fr))`
+
+  /**
    * Why each column is (partly) unbookable. Computed per column rather than
    * once for the whole board: on a day view every column is a different
    * person's hours, and shading them all with one provider's would be a lie.
@@ -300,7 +327,16 @@ export function DragScheduleBoard({
     void dropAppointment(appointment, dateKey, time, providerId)
   }
 
-  const card = (a: CalendarAppointment, compact: boolean) => {
+  /**
+   * `full` is the card that says everything — time, client, service, price;
+   * anything else says the time and the client and stops.
+   *
+   * Two separate things narrow it, which is why the caller decides rather than
+   * this function. A week column is *narrow*. A compact zoom is *short*. Either
+   * is enough to drop the service and the price. The off-grid list below is
+   * neither, so it asks for the full card whatever the zoom says.
+   */
+  const card = (a: CalendarAppointment, full: boolean) => {
     const movable = isMovable(a)
     const draggable = canDrag && movable
     const inFlight = movingId === a.id
@@ -336,20 +372,35 @@ export function DragScheduleBoard({
         <button
           type="button"
           onClick={() => onAppointmentClick(a)}
-          className="block w-full p-2 pr-8 text-left"
+          // `pr-8` either way: the Move button below is `w-8` and absolutely
+          // placed at the right edge, so anything less than 2rem of reserved
+          // padding lets the grip sit on top of the client's name.
+          className={`block w-full text-left ${full ? 'p-2 pr-8' : 'px-1.5 py-1 pr-8'}`}
         >
-          <span className="block truncate text-xs tabular-nums text-[var(--color-muted)]">
-            {formatTimeInTimeZone(new Date(a.starts_at), timezone)}
-            {' · '}
-            {appointmentMinutes(a)} min
+          <span
+            className={`flex items-center gap-1 tabular-nums text-[var(--color-muted)] ${
+              full ? 'text-xs' : 'text-[0.6875rem] leading-tight'
+            }`}
+          >
+            {/* The duration stays at every zoom. A card is not drawn to its
+                length on this board, so "20 min" is the only thing telling you
+                a brow wax is not a 90-minute peel. */}
+            <span className="min-w-0 truncate">
+              {formatTimeInTimeZone(new Date(a.starts_at), timezone)}
+              {' · '}
+              {appointmentMinutes(a)} min
+            </span>
+            {pending && !full && <PendingMark showLabel={false} className="ml-auto" />}
           </span>
-          <span className="mt-0.5 block truncate text-sm">{clientName(a)}</span>
-          {!compact && (
+          <span className={`mt-0.5 block truncate ${full ? 'text-sm' : 'text-xs leading-tight'}`}>
+            {clientName(a)}
+          </span>
+          {full && (
             <span className="mt-0.5 block truncate text-xs text-[var(--color-muted)]">
               {serviceName(a)}
             </span>
           )}
-          {!compact && (
+          {full && (
             <span className="mt-1 block text-xs tabular-nums text-[var(--color-muted)]">
               {formatMoney(a.total_cents)}
             </span>
@@ -357,10 +408,12 @@ export function DragScheduleBoard({
         </button>
 
         {/* The words, under the card's own content so they read as a note about
-            it rather than as part of the client's name. A week column has no
-            room for four syllables, so there the label moves into
-            screen-reader text and the dashed ring and hatch carry the rest. */}
-        {pending && <PendingMark showLabel={!compact} className="px-2 pb-2" />}
+            it rather than as part of the client's name — but only where there
+            is a line to spare. A narrow week column and a short compact row
+            both take it away, and there the label rides the time line above
+            instead, leaving the dashed ring, the hatch and the tooltip to carry
+            a distinction that costs the card no height. */}
+        {pending && full && <PendingMark className="px-2 pb-2" />}
 
         {movable && (
           <button
@@ -409,11 +462,14 @@ export function DragScheduleBoard({
           {/* Column headers */}
           <div
             className="grid border-b border-[var(--color-border)]"
-            style={{ gridTemplateColumns: `5rem repeat(${columns.length}, minmax(9rem, 1fr))` }}
+            style={{ gridTemplateColumns: template }}
           >
             <div className="p-2" />
             {columns.map((c) => (
-              <div key={c.key} className="border-l border-[var(--color-border)] p-2">
+              <div
+                key={c.key}
+                className={`border-l border-[var(--color-border)] ${tight ? 'px-2 py-1.5' : 'p-2'}`}
+              >
                 <span
                   className={`label-caps ${
                     c.dateKey === todayKey && view === 'week'
@@ -431,9 +487,13 @@ export function DragScheduleBoard({
             <div
               key={hour}
               className="grid border-b border-[var(--color-border)] last:border-b-0"
-              style={{ gridTemplateColumns: `5rem repeat(${columns.length}, minmax(9rem, 1fr))` }}
+              style={{ gridTemplateColumns: template }}
             >
-              <div className="p-2 text-xs tabular-nums text-[var(--color-muted)]">
+              <div
+                className={`tabular-nums text-[var(--color-muted)] ${
+                  tight ? 'px-2 py-1 text-[0.6875rem]' : 'p-2 text-xs'
+                }`}
+              >
                 {String(hour).padStart(2, '0')}:00
               </div>
 
@@ -480,23 +540,44 @@ export function DragScheduleBoard({
                           }}
                           onDragLeave={() => setHoverKey((k) => (k === key ? null : k))}
                           onDrop={(e) => handleDrop(e, c.dateKey, time, c.providerId)}
-                          className={`min-h-6 border-t border-dashed border-transparent px-1 ${
+                          className={`flex flex-col border-t border-dashed border-transparent px-1 ${
                             hoverKey === key
                               ? 'bg-[var(--color-accent)]/15 border-[var(--color-accent)]'
                               : ''
                           }`}
+                          // A quarter of the density's hour. This was `min-h-6`
+                          // — 24px, so 96px an hour and 1248px a day — which is
+                          // the number that made the book feel zoomed in.
+                          style={{ minHeight: metrics.quarterPx }}
                           data-drop-time={time}
                         >
-                          {here.length === 0 && q === 0 && onSlotClick ? (
+                          {here.length === 0 && onSlotClick ? (
                             <button
                               type="button"
                               onClick={() => onSlotClick(c.dateKey, time)}
-                              className="w-full py-1 text-left text-xs text-transparent hover:text-[var(--color-accent)]"
+                              // `flex-1 min-h-0` so it fills the drop row and
+                              // never sets it: with its own padding it was 24px
+                              // tall, which at a compact zoom would have made an
+                              // hour with nothing in it taller than one with a
+                              // booking.
+                              //
+                              // Rendered in EVERY empty quarter rather than only
+                              // the first. Confining it to q === 0 left one
+                              // quarter-row of the hour clickable and the other
+                              // three inert — a target that shrank with the
+                              // density and was invisible until the cursor was
+                              // already on it. Per-quarter it is also more
+                              // useful than it was: clicking at 10:45 books
+                              // 10:45 rather than 10:00.
+                              className={`flex min-h-0 flex-1 items-center text-left leading-none text-transparent hover:text-[var(--color-accent)] focus-visible:text-[var(--color-accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)] ${
+                                tight ? 'text-[0.6875rem]' : 'text-xs'
+                              }`}
+                              aria-label={`Book ${dayLabelForDateKey(c.dateKey)} at ${time}`}
                             >
-                              + book
+                              <span aria-hidden>+ book</span>
                             </button>
                           ) : null}
-                          {here.map((a) => card(a, view === 'week'))}
+                          {here.map((a) => card(a, view === 'day' && metrics.roomForDetail))}
                         </div>
                       )
                     })}
@@ -524,7 +605,10 @@ export function DragScheduleBoard({
             Outside the {String(FIRST_HOUR).padStart(2, '0')}:00–
             {String(LAST_HOUR).padStart(2, '0')}:59 grid
           </p>
-          <div className="mt-3 space-y-2">{offGrid.map((a) => card(a, false))}</div>
+          {/* A list in a panel of its own: no row to fit inside and nothing
+              below it to push down, so the zoom buys nothing here and these
+              cards say everything regardless of it. */}
+          <div className="mt-3 space-y-2">{offGrid.map((a) => card(a, true))}</div>
         </div>
       )}
 

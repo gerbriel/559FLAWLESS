@@ -23,6 +23,12 @@ import {
   type LicenceRow,
 } from '@/components/shared/StaffProfileLicences'
 import {
+  StaffServicesEditor,
+  type AssignableService,
+  type ProviderServiceLink,
+  type ServiceCategoryOption,
+} from '@/components/shared/StaffServicesEditor'
+import {
   formatDateKey,
   loadStaffLocations,
   type StaffCredential,
@@ -37,6 +43,57 @@ const PROFILE_COLUMNS =
 
 /** Inline links inside the explanatory cards, so they read as prose and not as buttons. */
 const PROSE_LINK = 'underline underline-offset-4 hover:text-[var(--color-accent)]'
+
+/** Appointments a provider still has ahead of them, counted per service id. */
+type UpcomingCounts = Map<string, Record<number, number>>
+
+/**
+ * How many upcoming appointments each provider has, per service.
+ *
+ * Only ever read to reassure: unticking a service on this page cannot disturb
+ * an appointment that already exists — `src/lib/availability.ts` never looks at
+ * `provider_services`, and `priceService()` consults it only while creating a
+ * new booking. A manager who does not know that will simply never touch the
+ * control, so the count is put in front of her with the fact attached.
+ *
+ * Statuses are the ones still expected to happen. A cancelled or completed
+ * appointment is not something anyone is deciding about.
+ *
+ * Read through the caller's own client, so RLS decides: a manager satisfies
+ * `is_front_desk()` on 004's appointments policy, and the line rows come with it
+ * through their own EXISTS. A non-manager gets nothing back and is never asked
+ * for it in the first place.
+ */
+async function loadUpcomingServiceCounts(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  providerIds: string[],
+  now: number
+): Promise<UpcomingCounts> {
+  const counts: UpcomingCounts = new Map()
+  if (providerIds.length === 0) return counts
+
+  const { data } = await supabase
+    .from('appointments')
+    .select('provider_id, appointment_services(service_id)')
+    .in('provider_id', providerIds)
+    .gte('starts_at', new Date(now).toISOString())
+    .in('status', ['pending', 'confirmed', 'checked_in'])
+
+  for (const row of data ?? []) {
+    const per = counts.get(row.provider_id) ?? {}
+    // Per appointment, not per line: two lines of the same service on one
+    // booking is one appointment a manager would have to deal with, not two.
+    const seen = new Set<number>()
+    for (const line of row.appointment_services ?? []) {
+      if (line.service_id == null || seen.has(line.service_id)) continue
+      seen.add(line.service_id)
+      per[line.service_id] = (per[line.service_id] ?? 0) + 1
+    }
+    counts.set(row.provider_id, per)
+  }
+
+  return counts
+}
 
 /**
  * A team member at the head of their own panel.
@@ -144,10 +201,58 @@ export default async function TeamSettingsPage() {
   }[]
   const staffById = new Map(staffPeople.map((s) => [s.id, s]))
 
-  const locations = await loadStaffLocations(
-    supabase,
-    team.map((t) => t.profile_id)
-  )
+  // Everyone this page draws a panel for. `team` is already narrowed by RLS —
+  // one row for a provider, everyone's for a manager — so this is exactly the
+  // set of people whose services are editable below and no wider. The viewer is
+  // in it either way: their own services block is drawn whether or not a
+  // `staff_profiles` row has caught up with their account.
+  const teamIds = [...new Set([user.id, ...team.map((t) => t.profile_id)])]
+
+  const [locations, { data: categoryRows }, { data: serviceRows }, { data: linkRows }, upcoming] =
+    await Promise.all([
+      loadStaffLocations(supabase, teamIds),
+      supabase
+        .from('service_categories')
+        .select('id, name, is_active')
+        .order('sort_order')
+        .order('name'),
+      supabase
+        .from('services')
+        .select(
+          'id, category_id, name, price_cents, duration_minutes, is_active, requires_consultation'
+        )
+        .order('sort_order')
+        .order('name'),
+      supabase
+        .from('provider_services')
+        .select('provider_id, service_id, is_active, price_cents, duration_minutes')
+        .in('provider_id', teamIds),
+      // Only a manager is offered the control, and only the control needs this.
+      manager
+        ? loadUpcomingServiceCounts(supabase, teamIds, now)
+        : Promise.resolve<UpcomingCounts>(new Map()),
+    ])
+
+  // Retired categories still appear when something inside them is still linked
+  // to somebody — StaffServicesEditor is what decides that, from the services it
+  // is handed. Dropping the heading here would orphan the service.
+  const serviceCategories: ServiceCategoryOption[] = (categoryRows ?? []).map((c) => ({
+    id: c.id,
+    name: c.is_active ? c.name : `${c.name} (off the menu)`,
+  }))
+  const allServices = (serviceRows ?? []) as AssignableService[]
+
+  const linksByProvider = new Map<string, ProviderServiceLink[]>()
+  for (const row of linkRows ?? []) {
+    const list = linksByProvider.get(row.provider_id) ?? []
+    list.push({
+      service_id: row.service_id,
+      is_active: row.is_active,
+      price_cents: row.price_cents,
+      duration_minutes: row.duration_minutes,
+    })
+    linksByProvider.set(row.provider_id, list)
+  }
 
   const mine = team.find((t) => t.profile_id === user.id) ?? null
   const others = team.filter((t) => t.profile_id !== user.id)
@@ -267,6 +372,24 @@ export default async function TeamSettingsPage() {
           )}
         </Panel>
 
+        {/* What you perform, under the page that says who you are. A manager may
+            set her own here — 003 permits `provider_id = auth.uid()` as readily
+            as it permits a manager — and everyone else reads the same list and
+            is told who to ask. */}
+        <Panel className="mt-6 p-6 sm:p-8">
+          <StaffServicesEditor
+            providerId={user.id}
+            personName={mine?.display_name ?? me.display_name ?? me.first_name ?? 'You'}
+            isSelf
+            canEdit={manager}
+            bookableOnline={staffById.get(user.id)?.accepts_online_booking ?? false}
+            categories={serviceCategories}
+            services={allServices}
+            links={linksByProvider.get(user.id) ?? []}
+            upcoming={upcoming.get(user.id) ?? {}}
+          />
+        </Panel>
+
         {!manager && (
           <Panel className="mt-6 p-6">
             <p className="label-caps mb-3 text-[var(--color-muted)]">Your licence</p>
@@ -357,6 +480,20 @@ export default async function TeamSettingsPage() {
                       />
                     </div>
 
+                    <div className="mt-8 border-t border-[var(--color-border)] pt-6">
+                      <StaffServicesEditor
+                        providerId={member.profile_id}
+                        personName={member.display_name}
+                        isSelf={false}
+                        canEdit
+                        bookableOnline={person?.accepts_online_booking ?? false}
+                        categories={serviceCategories}
+                        services={allServices}
+                        links={linksByProvider.get(member.profile_id) ?? []}
+                        upcoming={upcoming.get(member.profile_id) ?? {}}
+                      />
+                    </div>
+
                     <details className="mt-8 border-t border-[var(--color-border)] pt-4">
                       <summary className="label-caps min-h-11 cursor-pointer py-3 text-[var(--color-muted)] hover:text-[var(--color-accent)]">
                         Edit their public profile
@@ -424,12 +561,15 @@ export default async function TeamSettingsPage() {
             title: 'Hours, time worked and what it pays',
             body: (
               <>
-                Working hours, days off, the treatments someone is assigned to and their
-                Google Calendar all sit under{' '}
+                Which treatments someone performs is set on this page, by a manager.
+                Working hours, days off and a Google Calendar are each person&rsquo;s own,
+                under{' '}
                 <Link href="/dashboard/calendar/hours" className={PROSE_LINK}>
                   My hours
                 </Link>
-                . Shifts are clocked from the top of any page here and settled on{' '}
+                . A bookable slot needs both — hours with no services offers nothing, and
+                services with no hours has nowhere to put them. Shifts are clocked from
+                the top of any page here and settled on{' '}
                 <Link href="/dashboard/calendar/timesheets" className={PROSE_LINK}>
                   Timesheets
                 </Link>

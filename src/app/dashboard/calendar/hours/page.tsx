@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { ScheduleEditor } from '@/components/shared/ScheduleEditor'
@@ -196,8 +197,15 @@ export default async function SchedulePage({ searchParams }: Props) {
 
       {activeServices.length === 0 && (
         <p className="mt-6 border-l-2 border-amber-600 bg-amber-50 p-4 text-sm text-[var(--color-muted)] dark:bg-transparent">
-          You have no services assigned. Clients cannot book you until an admin links at
-          least one service to your profile.
+          You have no services assigned. Clients cannot book you until at least one
+          service is linked to your profile, which a manager does on{' '}
+          <Link
+            href="/dashboard/settings/team"
+            className="underline underline-offset-4 hover:text-[var(--color-accent)]"
+          >
+            Team
+          </Link>
+          . Your hours below are yours to set either way — a bookable slot needs both.
         </p>
       )}
 
