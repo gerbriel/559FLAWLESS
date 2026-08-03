@@ -35,6 +35,13 @@ import 'server-only'
  *    already uses the service role for exactly this reason. The route
  *    authenticates and authorises before this is called, at admin, because
  *    admin is what the database asks for to change somebody else's profile.
+ *
+ *  - CONTACTS go back through the ordinary server client. A client with no
+ *    email address is not an account and cannot be one (see `RowTarget` below
+ *    and the header of migration 051); they are a row in `client_stubs`, which
+ *    051 gave a real front-desk write policy. So there is an RLS path, the
+ *    caller has more than enough role for it, and the service role is not used:
+ *    it is for the cases where there is no alternative, and this is not one.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -56,9 +63,27 @@ const UPDATE_CONCURRENCY = 6
 
 export type RowAction = 'create' | 'update'
 
+/**
+ * WHERE a planned row lands.
+ *
+ * Nearly everything goes to the entity's own table — a service, a product, a
+ * client's profile — and says 'record'. One case cannot, and it is the reason
+ * this type exists. `profiles.id` is foreign-keyed to `auth.users`, so a profile
+ * IS an account, and there is no such thing here as a client without a login.
+ * A row with no email address therefore becomes a 'contact': a `client_stubs`
+ * row, somebody the studio knows and has not signed up yet, which is what
+ * migration 051 added the table for.
+ *
+ * The two are counted apart the whole way through, because "forty new clients"
+ * and "forty new clients, twelve of whom you still have to invite" are
+ * different sentences and only the second one is true.
+ */
+export type RowTarget = 'record' | 'contact'
+
 export type RowPlan = {
   line: number
   action: RowAction
+  target: RowTarget
   /** How the row identifies itself on screen. */
   label: string
   /** 'email', 'phone', 'slug', 'sku' — or null on a create. */
@@ -75,8 +100,17 @@ export type RowPlan = {
 }
 
 export type ImportPlan = {
+  /** New records: a client with an account, a service, a product. */
   create: number
+  /** Records already here that this file would write over. */
   update: number
+  /**
+   * The same two numbers for the contact list — people with no email address,
+   * added to `client_stubs` instead of being given an account. Disjoint from
+   * the pair above, so those four and the rejections account for every row.
+   */
+  createContact: number
+  updateContact: number
   planned: RowPlan[]
   /** Everything that stops a row, from prepare() and from matching. */
   problems: RowProblem[]
@@ -89,6 +123,15 @@ export type CommitFailure = { line: number; label: string; message: string }
 export type CommitOutcome = {
   created: number
   updated: number
+  /** Contacts, counted apart from accounts for the reason in `RowTarget`. */
+  contactsCreated: number
+  contactsUpdated: number
+  /**
+   * The reference stamped on every contact this run added, so 051's
+   * `import_batch` can answer "which ones came from that file" later. Null when
+   * the run added no contacts, because then there is no batch to name.
+   */
+  importBatch: string | null
   failed: number
   failures: CommitFailure[]
 }
@@ -225,6 +268,63 @@ async function indexClients(client: Client): Promise<ClientIndex> {
   return { byEmail, byPhone }
 }
 
+/** One contact an email address or a phone number points at. */
+type StubMatch = { id: number; name: string }
+
+type StubIndex = {
+  byEmail: Map<string, StubMatch>
+  byPhone: Map<string, StubMatch>
+}
+
+/**
+ * The people the studio has and has not signed up yet, by email and by phone.
+ *
+ * UNCLAIMED ONLY. A claimed stub is history — the person has an account now and
+ * `indexClients` already has them — so matching a row to one would offer to
+ * update a row nobody reads instead of the profile it turned into.
+ *
+ * There is no `count` here beside the id, unlike `ClientMatch`, and that is a
+ * property of the table rather than an oversight. `profiles.email` is not
+ * unique and a shared phone number is ordinary, so a client key can point at
+ * two people and the importer refuses to guess which. A contact cannot:
+ * `client_stubs_unclaimed_email_idx` makes an unclaimed email unique, and 051's
+ * dedupe trigger refuses a second unclaimed contact with the same ten digits.
+ * There is never more than one to choose between, so there is nothing to refuse.
+ */
+async function indexStubs(client: Client): Promise<StubIndex> {
+  const byEmail = new Map<string, StubMatch>()
+  const byPhone = new Map<string, StubMatch>()
+
+  for (let offset = 0; ; offset += PAGE) {
+    const { data, error } = await client
+      .from('client_stubs')
+      .select('id, first_name, last_name, email, phone')
+      .is('claimed_by', null)
+      .order('id')
+      .range(offset, offset + PAGE - 1)
+
+    if (error) throw new Error(error.message)
+    const rows = data ?? []
+    for (const row of rows) {
+      const match: StubMatch = {
+        id: row.id,
+        name:
+          `${row.first_name} ${row.last_name ?? ''}`.trim() ||
+          row.email ||
+          'a contact with no name on record',
+      }
+      const email = (row.email ?? '').trim().toLowerCase()
+      if (email) byEmail.set(email, match)
+      const digits = phoneDigits(row.phone ?? '')
+      // Ten digits, as everywhere else in this file and as 051's trigger.
+      if (digits.length >= 10) byPhone.set(digits, match)
+    }
+    if (rows.length < PAGE) break
+  }
+
+  return { byEmail, byPhone }
+}
+
 async function indexByColumn(
   client: Client,
   table: 'services' | 'products',
@@ -327,7 +427,31 @@ export async function planImport(
   }
 
   if (entity.key === 'clients') {
-    const index = await indexClients(client)
+    // Two lists, read once each: the people with accounts, and the people the
+    // studio is still meaning to invite. Every row is measured against both, in
+    // that order, because an account is the better answer whenever there is one.
+    const [index, stubs] = await Promise.all([indexClients(client), indexStubs(client)])
+
+    /** Rows that will become a contact with nothing to match them on. */
+    let unmatchable = 0
+    /** Rows carrying a note that will land on an account, where it has nowhere to go. */
+    let notesDropped = 0
+
+    // The columns a contact has no home for, collected as they are actually
+    // seen. `client_stubs` holds a name, contact details and a note and stops
+    // there, deliberately (051), so a file that carries dates of birth loses
+    // them on the rows that become contacts. That is the correct outcome and it
+    // still has to be said out loud, because a column that is read on some rows
+    // and ignored on others is exactly the kind of thing an importer must not be
+    // quiet about.
+    const contactColumnsDropped = new Set<string>()
+    const notForAContact = ['date_of_birth', 'pronouns', 'marketing_opt_in', 'sms_opt_in']
+    const noteWhatAContactLoses = (values: Record<string, CsvValue>) => {
+      for (const key of notForAContact) {
+        if (values[key] === undefined) continue
+        contactColumnsDropped.add(entity.fields.find((f) => f.key === key)?.label ?? key)
+      }
+    }
 
     for (const row of rows) {
       const email = text(row.values.email)
@@ -392,9 +516,11 @@ export async function planImport(
         // gets written over. Without it both rows are planned, both are sent,
         // and whichever finishes last is the one that survives.
         if (duplicate(`client:${matched.id}`, row.line, 'client record')) continue
+        if (row.values.note !== undefined) notesDropped++
         planned.push({
           line: row.line,
           action: 'update',
+          target: 'record',
           label,
           matchedBy,
           targetId: matched.id,
@@ -404,23 +530,124 @@ export async function planImport(
         continue
       }
 
-      // A new client is a new account, and an account is an email address.
-      if (!email) {
-        problems.push({
+      // NOBODY WITH AN ACCOUNT IS THIS PERSON. Before making one, look at the
+      // list of people the studio already meant to invite. A row that matches a
+      // contact updates that contact: 051's dedupe trigger would refuse a
+      // second one anyway, and a refusal the importer could have avoided is a
+      // bad error message. It is also how a corrected file behaves the way
+      // anyone would expect — fill in the phone numbers you were missing, run it
+      // again, and the contacts you made last time gain them rather than
+      // arriving twice.
+      //
+      // Email first and then phone, the same order and the same two keys used
+      // above, because a second answer to "is this the same person" is how a
+      // client list grows two of everybody.
+      let stub = email ? stubs.byEmail.get(email) : undefined
+      let stubBy: string | null = stub ? 'email' : null
+      if (!stub && digits.length >= 10) {
+        stub = stubs.byPhone.get(digits)
+        stubBy = stub ? 'phone' : null
+      }
+
+      if (stub) {
+        if (duplicate(`contact:${stub.id}`, row.line, 'contact')) continue
+        noteWhatAContactLoses(row.values)
+        planned.push({
           line: row.line,
-          column: null,
-          field: 'email',
-          message: 'nobody here matches this phone number, and a new client needs an email address',
+          action: 'update',
+          target: 'contact',
+          label,
+          matchedBy: stubBy,
+          targetId: stub.id,
+          existing: stub.name,
+          values: row.values,
         })
         continue
       }
 
-      planned.push({ line: row.line, action: 'create', label, matchedBy: null, targetId: null, values: row.values })
+      // AN ACCOUNT IS THE WHOLE FOUR: first name, last name, email, phone.
+      //
+      // The email is what makes an account *possible*; it is not what makes one
+      // complete. An account is the thing the client logs into, books from and
+      // is reached on, and the studio asks for all four at the desk — so an
+      // import that mints one from a name and an address alone would create the
+      // one kind of account no other path in this app can produce, and nothing
+      // would ever ask for the rest.
+      //
+      // So the bar for a row to become an account here is the bar the account
+      // has everywhere else, and a row that clears it is handled exactly as it
+      // always was. Anything short of it is a contact: the studio keeps the
+      // person, invites them when it suits, and the claim flow collects what is
+      // missing from the one person who actually knows it.
+      if (email && text(row.values.last_name) && digits.length >= 10) {
+        if (row.values.note !== undefined) notesDropped++
+        planned.push({
+          line: row.line,
+          action: 'create',
+          target: 'record',
+          label,
+          matchedBy: null,
+          targetId: null,
+          values: row.values,
+        })
+        continue
+      }
+
+      // AND ANYTHING LESS IS A CONTACT, rather than a rejection. This used to
+      // say "a new client needs an email address", which was true of the schema
+      // and useless to the studio: the person was standing in front of them and
+      // there was nowhere to put them. 051 made somewhere. What is deliberately
+      // NOT done here is minting an auth user at someone+1739@studio.invalid to
+      // get a profile out of it — that puts a lie in `profiles.email`, which is
+      // the column 004 matches a guest booking on, so the person's next real
+      // booking would create exactly the duplicate this is meant to prevent.
+      //
+      // A contact with an email is not a failure of this branch, it is the
+      // ordinary case: it is the one the studio can invite today, and the
+      // invitation is what turns a partial record into a complete account
+      // without anybody guessing at a surname.
+      if (digits.length < 10) unmatchable++
+      noteWhatAContactLoses(row.values)
+      planned.push({
+        line: row.line,
+        action: 'create',
+        target: 'contact',
+        label,
+        matchedBy: null,
+        targetId: null,
+        values: row.values,
+      })
     }
 
     notes.push(
       'New clients are created without a password, exactly as a walk-in is. They claim the account with a sign-in link.'
     )
+
+    const contacts = planned.filter((p) => p.target === 'contact').length
+    if (contacts > 0) {
+      notes.push(
+        contacts === 1
+          ? 'One of these people has no email address, so they go on the contact list rather than getting an account. They are a client the studio knows; what they do not have is a login, and they get one by being invited and accepting it — not by being given a made-up address here.'
+          : `${contacts} of these people have no email address, so they go on the contact list rather than getting accounts. They are clients the studio knows; what they do not have is a login, and they get one by being invited and accepting it — not by being given made-up addresses here.`
+      )
+    }
+    if (unmatchable > 0) {
+      notes.push(
+        unmatchable === 1
+          ? 'One of those has neither an email address nor a phone number. There is nothing to recognise that person by, so importing this file a second time would add them again rather than finding them.'
+          : `${unmatchable} of those have neither an email address nor a phone number. There is nothing to recognise them by, so importing this file a second time would add them again rather than finding them.`
+      )
+    }
+    if (notesDropped > 0) {
+      notes.push(
+        `The Note column is not stored on ${notesDropped === 1 ? 'one of these rows, because it belongs' : `${notesDropped} of these rows, because they belong`} to somebody with an account. A client with an account has a record of their own, and what goes on it is clinical and does not arrive by spreadsheet.`
+      )
+    }
+    if (contactColumnsDropped.size > 0) {
+      notes.push(
+        `${[...contactColumnsDropped].join(', ')} ${contactColumnsDropped.size === 1 ? 'is' : 'are'} not kept for the people who become contacts. A contact is a name, a way of reaching somebody and a note, and nothing else — a date of birth and a marketing consent belong to a person who has agreed to the studio holding them, and these people have not been asked yet. They are asked when they claim their account, and what they answer is theirs.`
+      )
+    }
   }
 
   if (entity.key === 'services') {
@@ -487,6 +714,7 @@ export async function planImport(
       planned.push({
         line: row.line,
         action: id ? 'update' : 'create',
+        target: 'record',
         label,
         matchedBy: id ? 'slug' : null,
         targetId: id ?? null,
@@ -541,6 +769,7 @@ export async function planImport(
       planned.push({
         line: row.line,
         action: id ? 'update' : 'create',
+        target: 'record',
         label,
         matchedBy: id ? 'sku' : null,
         targetId: id ?? null,
@@ -554,9 +783,14 @@ export async function planImport(
     })
   }
 
+  const count = (action: RowAction, target: RowTarget) =>
+    planned.filter((p) => p.action === action && p.target === target).length
+
   return {
-    create: planned.filter((p) => p.action === 'create').length,
-    update: planned.filter((p) => p.action === 'update').length,
+    create: count('create', 'record'),
+    update: count('update', 'record'),
+    createContact: count('create', 'contact'),
+    updateContact: count('update', 'contact'),
     planned,
     problems,
     notes,
@@ -577,41 +811,90 @@ type ServiceInsert = Database['public']['Tables']['services']['Insert']
 type ServiceUpdate = Database['public']['Tables']['services']['Update']
 type ProductInsert = Database['public']['Tables']['products']['Insert']
 type ProductUpdate = Database['public']['Tables']['products']['Update']
+type ContactInsert = Database['public']['Tables']['client_stubs']['Insert']
+type ContactUpdate = Database['public']['Tables']['client_stubs']['Update']
 
-function payloadFor(entity: CsvEntity, values: Record<string, CsvValue>): Payload {
+/** Whichever of these columns the row actually has a value for. */
+function pick(values: Record<string, CsvValue>, keys: readonly string[]): Payload {
   const out: Payload = {}
-  const carry = (key: string) => {
+  for (const key of keys) {
     if (values[key] !== undefined) out[key] = values[key]
   }
+  return out
+}
 
+function payloadFor(entity: CsvEntity, values: Record<string, CsvValue>): Payload {
   if (entity.key === 'clients') {
-    for (const key of ['first_name', 'last_name', 'email', 'phone', 'date_of_birth', 'pronouns', 'marketing_opt_in', 'sms_opt_in']) {
-      carry(key)
-    }
-    return out
+    // `note` is deliberately absent: `profiles` has no column for it, and the
+    // one place a note about a client belongs is their record, which is
+    // clinical and is not importable in either direction. `contactPayload`
+    // below carries it, because a contact has nowhere else for it to go and it
+    // is often the only thing the old list said about the person.
+    return pick(values, [
+      'first_name', 'last_name', 'email', 'phone', 'date_of_birth', 'pronouns',
+      'marketing_opt_in', 'sms_opt_in',
+    ])
   }
 
   if (entity.key === 'services') {
-    for (const key of [
+    const out = pick(values, [
       'name', 'slug', 'description', 'details', 'aftercare', 'price_cents', 'price_is_starting',
       'duration_minutes', 'buffer_minutes', 'requires_intake', 'is_active', 'is_featured', 'sort_order',
-    ]) {
-      carry(key)
-    }
+    ])
     if (values.category_id != null) out.category_id = values.category_id
     return out
   }
 
-  for (const key of [
+  const out = pick(values, [
     'sku', 'name', 'slug', 'barcode', 'description', 'ingredients', 'how_to_use', 'price_cents',
     'cost_cents', 'taxable', 'is_retail', 'is_professional', 'unit', 'low_stock_threshold',
     'reorder_qty', 'external_url', 'is_active', 'is_featured', 'sort_order',
-  ]) {
-    carry(key)
-  }
+  ])
   if (values.category_id != null) out.category_id = values.category_id
   if (values.brand_id != null) out.brand_id = values.brand_id
   return out
+}
+
+/**
+ * The five columns a contact has, out of the same row a profile would have used.
+ *
+ * Everything else on a client row — a date of birth, marketing consent, pronouns
+ * — is deliberately dropped rather than stored somewhere adjacent. `client_stubs`
+ * has no column for any of it, and 051 is explicit about why: a contact is a
+ * name, a way of reaching somebody, and an intention to sign them up. The rest
+ * belongs to a person who has agreed to the studio holding it, and this person
+ * has not been asked yet. They will be, on the form they fill in when they claim
+ * the account.
+ */
+function contactPayload(values: Record<string, CsvValue>): Payload {
+  return pick(values, ['first_name', 'last_name', 'email', 'phone', 'note'])
+}
+
+/**
+ * A refusal from `client_stubs`, in a sentence rather than in SQLSTATE.
+ *
+ * Switched on the CODE and never on the message, the way the category and
+ * inventory screens do it. The message belongs to 051's trigger and a later
+ * migration is free to reword it; the code is the contract. 23505 covers all
+ * three of the refusals that trigger raises — the email belongs to an account,
+ * the phone belongs to an account, the phone is already on the list to invite —
+ * and from out here they are one answer: the studio already has this person, so
+ * nothing was added a second time. Which of the three it was matters less than
+ * where to go and look, so the sentence says that instead.
+ */
+function contactRefusal(error: { code?: string | null; message: string }): string {
+  switch (error.code) {
+    case '23505':
+      return 'somebody here already has that email address or phone number — they either have an account already or are already on the list to invite, so this row was not added a second time. Look them up on the Clients screen'
+    case '23514':
+      return 'the database rejected the details on this row — a contact needs a first name, and it has to be under 120 characters'
+    case '42501':
+      return 'the database refused this write for your role — adding a contact is front desk and above'
+    case '23503':
+      return 'the account recorded as adding this contact no longer exists'
+    default:
+      return readable(error.message)
+  }
 }
 
 /**
@@ -632,6 +915,12 @@ function payloadFor(entity: CsvEntity, values: Record<string, CsvValue>): Payloa
  * New rows go up in batches of fifty. When a batch is refused, it is retried a
  * row at a time so the failure is attributed to the row that caused it rather
  * than to the forty-nine beside it.
+ *
+ * A CLIENT ROW HAS TWO DESTINATIONS and they are written by two different
+ * clients, for two different reasons. An account goes through the service role,
+ * because `profiles` has no policy that would let one person insert another's
+ * row. A contact goes through the caller's own client, because `client_stubs`
+ * has one and there is nothing to go around.
  */
 export async function commitImport(
   client: Client,
@@ -643,12 +932,78 @@ export async function commitImport(
   const failures: CommitFailure[] = []
   let created = 0
   let updated = 0
+  let contactsCreated = 0
+  let contactsUpdated = 0
+  let importBatch: string | null = null
 
-  const creates = plan.planned.filter((p) => p.action === 'create')
-  const updates = plan.planned.filter((p) => p.action === 'update')
+  const creates = plan.planned.filter((p) => p.action === 'create' && p.target === 'record')
+  const updates = plan.planned.filter((p) => p.action === 'update' && p.target === 'record')
+  const contactCreates = plan.planned.filter((p) => p.action === 'create' && p.target === 'contact')
+  const contactUpdates = plan.planned.filter((p) => p.action === 'update' && p.target === 'contact')
 
   if (entity.key === 'clients') {
     if (!admin) throw new Error('the client importer needs the service-role client')
+
+    // ── The contacts, and why they go first ──────────────────
+    //
+    // Not for speed, though they are the cheap half — one insert each against
+    // one table, where an account is an auth user and two writes behind it.
+    // It is because of a rule only one side of this knows about: 051 refuses a
+    // contact whose phone number already belongs to an account, and nothing
+    // refuses an account whose phone number belongs to a contact. A file
+    // holding the same number twice, once with an email address and once
+    // without, therefore has an order that works and an order that fails, and
+    // this is the one that works.
+    //
+    // One batch reference across the whole run, stamped on every contact it
+    // adds, so `import_batch` can answer "which ones came out of that file"
+    // when somebody asks in three weeks. Generated here rather than passed in
+    // because a run is what it names, and a run starts here.
+    if (contactCreates.length > 0) importBatch = crypto.randomUUID()
+
+    const insertContacts = (payloads: Payload[]) =>
+      client.from('client_stubs').insert(payloads as ContactInsert[])
+
+    const newContact = (row: RowPlan): Payload => ({
+      ...contactPayload(row.values),
+      // 051 constrains `source` to manual / import / walk_in. This one is an
+      // import, and saying so is what lets the studio tell the list it typed
+      // from the list it pasted.
+      source: 'import',
+      import_batch: importBatch,
+      created_by: actorId,
+    })
+
+    for (const batch of chunk(contactCreates, INSERT_CHUNK)) {
+      const { error } = await insertContacts(batch.map(newContact))
+
+      if (!error) {
+        contactsCreated += batch.length
+        continue
+      }
+
+      // The dedupe trigger fires per row, so one refused contact refuses the
+      // statement it travelled in. Retried one at a time, the other forty-nine
+      // land and the failure is attributed to the row that caused it.
+      for (const row of batch) {
+        const { error: rowError } = await insertContacts([newContact(row)])
+        if (rowError) {
+          failures.push({ line: row.line, label: row.label, message: contactRefusal(rowError) })
+        } else contactsCreated++
+      }
+    }
+
+    await mapLimit(contactUpdates, UPDATE_CONCURRENCY, async (row) => {
+      // Only what she mapped, and never `source` or `import_batch`: those say
+      // where this contact came from originally, and a later file touching them
+      // is not a new origin.
+      const { error } = await client
+        .from('client_stubs')
+        .update(contactPayload(row.values) as ContactUpdate)
+        .eq('id', Number(row.targetId))
+      if (error) failures.push({ line: row.line, label: row.label, message: contactRefusal(error) })
+      else contactsUpdated++
+    })
 
     // One at a time is not a performance oversight: each create is an auth user
     // followed by a profile write, and the auth API is rate-limited.
@@ -712,7 +1067,15 @@ export async function commitImport(
       else updated++
     })
 
-    return { created, updated, failed: failures.length, failures }
+    return {
+      created,
+      updated,
+      contactsCreated,
+      contactsUpdated,
+      importBatch,
+      failed: failures.length,
+      failures,
+    }
   }
 
   // Services and products are handled by the same shape of code but not by the
@@ -753,5 +1116,15 @@ export async function commitImport(
     else updated++
   })
 
-  return { created, updated, failed: failures.length, failures }
+  // Nothing but a client can be a contact, so these two are zero here and the
+  // shape of the answer stays the same either way.
+  return {
+    created,
+    updated,
+    contactsCreated,
+    contactsUpdated,
+    importBatch,
+    failed: failures.length,
+    failures,
+  }
 }

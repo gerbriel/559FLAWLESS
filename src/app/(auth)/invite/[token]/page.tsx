@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import type { Metadata } from 'next'
 import { createPublicClient } from '@/lib/supabase/public'
+import { createClient } from '@/lib/supabase/server'
 import { InviteAcceptForm } from '@/components/shared/InviteAcceptForm'
 import { ROLE_LABELS, type UserRole } from '@/types/database'
 
@@ -79,6 +80,19 @@ export default async function InvitePage({ params }: Props) {
     )
   }
 
+  // A link opened in a browser that is already signed in as somebody else.
+  // Common enough to be worth answering: a client forwards their link to the
+  // studio for help, or the staff member who issued it clicks it to check.
+  // Accepting still works — it makes the new account and signs the browser into
+  // it — but that is a surprise unless it is said first, and if the invited
+  // address is the one already signed in there is nothing here left to do.
+  const session = await createClient()
+  const {
+    data: { user: signedIn },
+  } = await session.auth.getUser()
+  const signedInAsInvitee =
+    !!signedIn?.email && signedIn.email.toLowerCase() === invitation.email.toLowerCase()
+
   const inviter = invitation.invited_by_name ?? '559 Flawless'
   const roleLabel = ROLE_LABELS[invitation.role].toLowerCase()
   const article = /^[aeiou]/.test(roleLabel) ? 'an' : 'a'
@@ -106,16 +120,46 @@ export default async function InvitePage({ params }: Props) {
         </blockquote>
       )}
 
-      <div className="mt-10">
-        <InviteAcceptForm
-          token={token}
-          email={invitation.email}
-          role={invitation.role}
-          firstName={invitation.first_name}
-          lastName={invitation.last_name}
-          expiresAt={invitation.expires_at}
-        />
-      </div>
+      {signedInAsInvitee ? (
+        <div className="mt-8 border-l-2 border-[var(--color-accent)] bg-[var(--color-surface)] px-5 py-4 text-sm">
+          <p>
+            You are already signed in as{' '}
+            <span className="text-[var(--color-foreground)]">{signedIn?.email}</span>, so this
+            account exists. There is nothing to set up.
+          </p>
+          <Link
+            href="/account"
+            className="mt-3 inline-flex min-h-11 items-center text-[var(--color-foreground)] underline underline-offset-4"
+          >
+            Go to your account
+          </Link>
+        </div>
+      ) : (
+        <>
+          {signedIn && (
+            <div className="mt-8 border-l-2 border-amber-600 bg-[var(--color-surface)] px-5 py-4 text-sm">
+              <p>
+                This browser is signed in as{' '}
+                <span className="text-[var(--color-foreground)]">{signedIn.email}</span>. Setting
+                up the account below signs you out of that one — the invitation is for{' '}
+                <span className="text-[var(--color-foreground)]">{invitation.email}</span> and
+                cannot be redirected to another address.
+              </p>
+            </div>
+          )}
+
+          <div className="mt-10">
+            <InviteAcceptForm
+              token={token}
+              email={invitation.email}
+              role={invitation.role}
+              firstName={invitation.first_name}
+              lastName={invitation.last_name}
+              expiresAt={invitation.expires_at}
+            />
+          </div>
+        </>
+      )}
 
       <p className="mt-8 text-sm text-[var(--color-muted)]">
         Not you?{' '}

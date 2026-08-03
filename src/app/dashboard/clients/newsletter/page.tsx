@@ -94,14 +94,15 @@ export default async function NewsletterPage({ searchParams }: Props) {
         </a>
       </div>
 
-      {/* View switcher — the same list of people, two ways in. Both tabs are
+      {/* View switcher — the same list of people, three ways in. Every tab is
           unconditional here because the gate above already means the viewer is
-          front desk or above, which is exactly who may open either. */}
+          front desk or above, which is exactly who may open any of them. */}
       <SectionTabs
         label="View"
         root="/dashboard/clients"
         tabs={[
           { href: '/dashboard/clients', label: 'Clients' },
+          { href: '/dashboard/clients/stubs', label: 'Not signed up' },
           { href: '/dashboard/clients/newsletter', label: 'Newsletter' },
         ]}
       />

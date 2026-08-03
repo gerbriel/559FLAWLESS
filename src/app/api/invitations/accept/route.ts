@@ -41,6 +41,12 @@ const AcceptSchema = z.object({
  * The account is created email-confirmed. The studio chose this address and
  * sent the link to it; requiring a second confirmation email would break the
  * flow outright, since no transactional email provider is wired up.
+ *
+ * If the invitation named a `client_stub` (051), accepting it also claims that
+ * stub: the studio's older note about this person is merged into the account
+ * they just made, and the row on the "still to sign up" list is marked done
+ * rather than left beside a duplicate. That is the entire reason the stub was
+ * allowed to exist.
  */
 export async function POST(request: NextRequest) {
   const parsed = AcceptSchema.safeParse(await request.json().catch(() => null))
@@ -131,11 +137,13 @@ export async function POST(request: NextRequest) {
   const now = new Date().toISOString()
   const staff = isStaff(role)
 
-  // Who to credit the client record to. Read after redemption rather than from
-  // the anon preview, which deliberately does not expose a staff member's id.
+  // Who to credit the client record to, and whether this invitation was aimed
+  // at somebody the studio already had on its list. Read after redemption
+  // rather than from the anon preview, which deliberately exposes neither a
+  // staff member's id nor the existence of a stub.
   const { data: accepted } = await admin
     .from('invitations')
-    .select('invited_by')
+    .select('invited_by, client_stub_id')
     .eq('accepted_by', userId)
     .maybeSingle()
 
@@ -169,11 +177,62 @@ export async function POST(request: NextRequest) {
     console.error('invitation accept: profile details failed', profileError)
   }
 
+  // ── The stub stops being a stub ─────────────────────────────────────────
+  //
+  // Deliberately after the profile update, not before it. `claim_client_stub`
+  // (051) fills in what the profile is *missing* — so running it last means it
+  // fills exactly the gaps this form left, and a client who skipped the phone
+  // field ends up with the number the studio has had on paper for eight years.
+  // Run first, that number would be overwritten with the null just above.
+  //
+  // A failure here is not a reason to undo an account that already exists and
+  // already has its role: the person is signed up either way, and the worst
+  // case is a stub left on the studio's list for someone to tidy. The one
+  // failure worth naming is a stub claimed by somebody else, which means two
+  // people were sent links for the same record — the function refuses, and it
+  // is right to.
+  let claimedStub = false
+  if (!staff && accepted?.client_stub_id) {
+    const { error: claimError } = await admin.rpc('claim_client_stub', {
+      p_stub: accepted.client_stub_id,
+      p_profile: userId,
+    })
+    if (claimError) {
+      console.error('invitation accept: could not claim the client stub', claimError)
+    } else {
+      claimedStub = true
+    }
+  }
+
   // Somewhere for the CRM to hang notes and stats before the first visit, the
   // same as a walk-in created by staff.
   if (!staff) {
     await admin.from('client_records').upsert({ client_id: userId }, { onConflict: 'client_id' })
   }
 
-  return NextResponse.json({ ok: true, role, email: invitation.email })
+  // Whether to walk them through the rest of their profile once they are in.
+  // For everyone but a claimant this is what the form already told us; for a
+  // claimant the phone number may have arrived from the stub a moment ago, so
+  // the profile itself is asked rather than the request body.
+  let needsProfile = !staff && !completedAt
+  if (claimedStub) {
+    const { data: claimed } = await admin
+      .from('profiles')
+      .select('phone, date_of_birth')
+      .eq('id', userId)
+      .maybeSingle()
+
+    const complete = !!claimed?.phone?.trim() && !!claimed?.date_of_birth
+    needsProfile = !complete
+    if (complete && !completedAt) {
+      await admin.from('profiles').update({ profile_completed_at: now }).eq('id', userId)
+    }
+  }
+
+  return NextResponse.json({
+    ok: true,
+    role,
+    email: invitation.email,
+    needs_profile: needsProfile,
+  })
 }

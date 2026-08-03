@@ -12,11 +12,12 @@ export const dynamic = 'force-dynamic'
  * `planImport` reads and compares and returns, and there is no write path
  * reachable from here at all. She sees this before the commit button exists.
  *
- * What comes back is three numbers and the reasons behind the third: how many
- * rows would be created, how many would update somebody who is already here,
- * and how many are rejected and why. The rejections are grouped, because
- * "Date of Birth: two-digit year, 214 rows, first at row 3" is one thing to fix
- * and two hundred and fourteen identical lines are not.
+ * What comes back is a handful of numbers and the reasons behind the last one:
+ * how many rows would be created, how many would update somebody who is already
+ * here, how many are people with no email address who become contacts to invite
+ * rather than accounts, and how many are rejected and why. The rejections are
+ * grouped, because "Date of Birth: two-digit year, 214 rows, first at row 3" is
+ * one thing to fix and two hundred and fourteen identical lines are not.
  */
 export async function POST(request: Request) {
   const resolved = await resolveImport(request)
@@ -32,11 +33,17 @@ export async function POST(request: Request) {
     onNoMatch: entity.importing?.onNoMatch ?? null,
     create: plan.create,
     update: plan.update,
+    // Counted apart from the two above, because "how many of these people will
+    // I still have to invite" is the studio's next question and a total that
+    // buries them cannot answer it.
+    createContact: plan.createContact,
+    updateContact: plan.updateContact,
     reject: rejectedRows.size,
     /** A readable slice, not the lot — the counts above are the whole picture. */
     sample: plan.planned.slice(0, PREVIEW_SAMPLE).map((row) => ({
       line: row.line,
       action: row.action,
+      target: row.target,
       label: row.label,
       matchedBy: row.matchedBy,
       // Read from the record, not from the file. On an update these are two

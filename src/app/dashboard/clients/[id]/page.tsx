@@ -160,6 +160,14 @@ export default async function ClientDetailPage({ params }: Props) {
       .from('locations')
       .select('id, name, timezone, is_active, sort_order')
       .order('sort_order'),
+    // Where this account came from, when it came from the studio's own list
+    // (051). Null for everybody who signed themselves up, which is most
+    // people — it is provenance, not a field.
+    supabase
+      .from('client_stubs')
+      .select('id, note, source, import_batch, claimed_at, created_at')
+      .eq('claimed_by', id)
+      .maybeSingle(),
   ])
 
   const [
@@ -182,6 +190,7 @@ export default async function ClientDetailPage({ params }: Props) {
     { data: tagLinks },
     { data: allTags },
     { data: locations },
+    { data: originStub },
   ] = await extrasPromise
 
   // No row means either the id is wrong or RLS filtered it out — either way
@@ -502,6 +511,40 @@ export default async function ClientDetailPage({ params }: Props) {
               canRedeem
               now={now}
             />
+          )}
+
+          {/* Somebody the studio already knew, who accepted an invitation and
+              claimed their own record. Worth saying on the file: it explains
+              why a brand new account arrived with a phone number nobody here
+              typed, and it keeps the old note where a person can find it
+              without it being mistaken for clinical history. */}
+          {originStub && (
+            <section className="border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
+              <h3 className="label-caps mb-4 text-[var(--color-accent)]">
+                From the studio&rsquo;s list
+              </h3>
+              <p className="text-sm leading-relaxed text-[var(--color-muted)]">
+                {originStub.source === 'import'
+                  ? 'Imported from the old client list'
+                  : 'Added by the studio'}
+                {originStub.claimed_at &&
+                  `, and claimed on ${new Date(originStub.claimed_at).toLocaleDateString('en-US', {
+                    timeZone,
+                  })}`}
+                .
+              </p>
+              {originStub.note && (
+                <p className="mt-3 whitespace-pre-line text-sm leading-relaxed">
+                  {originStub.note}
+                </p>
+              )}
+              <Link
+                href={`/dashboard/clients/stubs/${originStub.id}`}
+                className="mt-4 inline-flex min-h-11 items-center text-sm text-[var(--color-muted)] underline underline-offset-4 hover:text-[var(--color-foreground)]"
+              >
+                The record they claimed
+              </Link>
+            </section>
           )}
 
           <section className="border border-[var(--color-border)] bg-[var(--color-surface)] p-6">

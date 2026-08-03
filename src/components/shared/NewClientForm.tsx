@@ -54,7 +54,7 @@ export function NewClientForm() {
         return
       }
 
-      toast.success(`${form.first_name} ${form.last_name} added.`)
+      toast.success(`${`${form.first_name} ${form.last_name}`.trim()} added.`)
       setOpen(false)
       router.push(`/dashboard/clients/${data.clientId}`)
     } catch {
@@ -141,10 +141,15 @@ export function NewClientForm() {
             />
           </Field>
 
-          <Field label="Phone" htmlFor="nc_phone">
+          <Field
+            label="Phone"
+            htmlFor="nc_phone"
+            hint="How the studio reaches them if an appointment moves."
+          >
             <Input
               id="nc_phone"
               type="tel"
+              required
               maxLength={40}
               value={form.phone}
               onChange={(e) => setForm({ ...form, phone: e.target.value })}

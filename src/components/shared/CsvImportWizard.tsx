@@ -33,11 +33,16 @@ import {
  * Choose a file, say what its columns are, look at what would happen, then say
  * go.
  *
- * The order is the point. Nothing is written until she has seen three numbers —
- * created, updated, rejected — and the reasons behind the third. Those numbers
- * come from the server running the real import with the writes left out, not
- * from an estimate made here, and the commit re-derives them from the same rows
- * rather than being told what the preview concluded.
+ * The order is the point. Nothing is written until she has seen the numbers —
+ * created, updated, added as contacts, rejected — and the reasons behind the
+ * last one. Those numbers come from the server running the real import with the
+ * writes left out, not from an estimate made here, and the commit re-derives
+ * them from the same rows rather than being told what the preview concluded.
+ *
+ * "Added as contacts" only ever appears on a client import and only when there
+ * are any. It counts the people with no email address, who become a contact the
+ * studio has to invite rather than an account that already exists — a number
+ * she needs before she commits, not after.
  *
  * The file is parsed IN THE BROWSER, before anything is uploaded. That is what
  * makes the mapping screen instant, and it means a file she opens by mistake
@@ -52,15 +57,28 @@ import {
 
 type Problem = { message: string; column: string | null; count: number; lines: number[] }
 
+/**
+ * A client with no email address is not an account and cannot be made into one
+ * — see migration 051 and `RowTarget` in lib/csv/apply.ts. They are a contact:
+ * somebody the studio knows and has not signed up yet. The two are counted
+ * apart here for the same reason they are counted apart on the server, which is
+ * that "forty new clients" and "forty new clients, twelve of whom you still
+ * have to invite" are different sentences.
+ */
+type RowTarget = 'record' | 'contact'
+
 type PreviewResponse = {
   create: number
   update: number
+  createContact: number
+  updateContact: number
   reject: number
   matchRule: string | null
   onNoMatch: string | null
   sample: {
     line: number
     action: 'create' | 'update'
+    target: RowTarget
     label: string
     matchedBy: string | null
     existing: string | null
@@ -74,6 +92,10 @@ type PreviewResponse = {
 type CommitResponse = {
   created: number
   updated: number
+  contactsCreated: number
+  contactsUpdated: number
+  /** Stamped on every contact this run added, so the batch can be found again. */
+  importBatch: string | null
   failed: number
   rejected: number
   failures: { line: number; label: string; message: string }[]
@@ -409,17 +431,35 @@ function PreviewPanel({
   busy: boolean
   onCommit: () => void
 }) {
-  const willWrite = preview.create + preview.update
+  const contacts = preview.createContact + preview.updateContact
+  const willWrite = preview.create + preview.update + contacts
 
   return (
     <div className="space-y-5">
-      <div className="grid gap-3 sm:grid-cols-3">
-        <StatTile label="Would be created" value={preview.create.toLocaleString('en-US')} />
+      <div className={contacts > 0 ? 'grid gap-3 sm:grid-cols-2 lg:grid-cols-4' : 'grid gap-3 sm:grid-cols-3'}>
+        <StatTile
+          label="Would be created"
+          value={preview.create.toLocaleString('en-US')}
+          hint={entity.key === 'clients' ? 'With an account they can log in to' : undefined}
+        />
         <StatTile
           label="Would be updated"
           value={preview.update.toLocaleString('en-US')}
           hint="Already here, matched"
         />
+        {/*
+          Only when there are any, and never folded into "created". The whole
+          point of the number is that these are the people the studio will have
+          to invite one by one later, and a total that hides them inside the
+          accounts answers the wrong question.
+        */}
+        {contacts > 0 && (
+          <StatTile
+            label="Added as contacts"
+            value={contacts.toLocaleString('en-US')}
+            hint={`No email address, so no account yet — ${preview.createContact.toLocaleString('en-US')} new, ${preview.updateContact.toLocaleString('en-US')} already on the list`}
+          />
+        )}
         <StatTile
           label="Would be rejected"
           value={preview.reject.toLocaleString('en-US')}
@@ -488,10 +528,14 @@ function PreviewPanel({
                 <span className="text-[var(--color-foreground)]">{row.label}</span>
                 <span>
                   {row.action === 'create'
-                    ? '— new'
-                    : row.existing
-                      ? `— writes over ${row.existing}, matched on ${row.matchedBy}`
-                      : `— updates the existing record, matched on ${row.matchedBy}`}
+                    ? row.target === 'contact'
+                      ? '— new contact, no account until they are invited'
+                      : '— new'
+                    : row.target === 'contact'
+                      ? `— updates ${row.existing ?? 'a contact already on the list'}, still no account, matched on ${row.matchedBy}`
+                      : row.existing
+                        ? `— writes over ${row.existing}, matched on ${row.matchedBy}`
+                        : `— updates the existing record, matched on ${row.matchedBy}`}
                 </span>
               </li>
             ))}
@@ -544,17 +588,55 @@ function PreviewPanel({
 /* ── After ────────────────────────────────────────────────── */
 
 function ResultPanel({ result, onReset }: { result: CommitResponse; onReset: () => void }) {
+  const contacts = result.contactsCreated + result.contactsUpdated
+
   return (
     <div className="space-y-5">
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className={contacts > 0 ? 'grid gap-3 sm:grid-cols-2 lg:grid-cols-4' : 'grid gap-3 sm:grid-cols-3'}>
         <StatTile label="Created" value={result.created.toLocaleString('en-US')} />
         <StatTile label="Updated" value={result.updated.toLocaleString('en-US')} />
+        {contacts > 0 && (
+          <StatTile
+            label="Added as contacts"
+            value={contacts.toLocaleString('en-US')}
+            hint={`${result.contactsCreated.toLocaleString('en-US')} new, ${result.contactsUpdated.toLocaleString('en-US')} already on the list`}
+          />
+        )}
         <StatTile
           label="Not written"
           value={(result.failed + result.rejected).toLocaleString('en-US')}
           hint={`${result.rejected} rejected before, ${result.failed} refused at the database`}
         />
       </div>
+
+      {/*
+        Said after the fact as plainly as the preview said it beforehand: these
+        people are in the studio's records and cannot log in, and nothing about
+        that changes on its own.
+      */}
+      {contacts > 0 && (
+        <Panel className="p-5">
+          <h3 className="text-base">The contacts still need inviting</h3>
+          <p className="mt-2 max-w-prose text-sm text-[var(--color-muted)]">
+            {contacts.toLocaleString('en-US')}{' '}
+            {contacts === 1 ? 'person had' : 'people had'} no email address, so they
+            are on the studio&rsquo;s list rather than holding an account.
+            Nothing about them changes until somebody sends
+            them an invitation and they claim it — which is also the moment their
+            details stop being a note in a spreadsheet and become theirs to correct.
+          </p>
+          {result.importBatch && (
+            <p className="mt-3 max-w-prose text-xs text-[var(--color-muted)]">
+              Everything this run added shares one batch reference:{' '}
+              <span className="font-mono text-[var(--color-foreground)]">
+                {result.importBatch}
+              </span>
+              . It is kept on each contact, so this import can be found — or
+              undone — as one thing rather than as a hundred rows.
+            </p>
+          )}
+        </Panel>
+      )}
 
       {result.failures.length > 0 && (
         <Panel className="overflow-x-auto">

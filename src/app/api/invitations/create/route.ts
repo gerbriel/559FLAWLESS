@@ -14,6 +14,12 @@ const InviteSchema = z.object({
   role: z.enum(['client', 'provider', 'front_desk', 'manager', 'admin']),
   // Bounded again by the invitations_expiry_bounded check constraint.
   expires_in_days: z.number().int().min(1).max(30).default(7),
+  /**
+   * Added in 051: the `client_stubs` row this invitation is for, when the
+   * person being invited is already on the studio's list. Absent for every
+   * other invitation, which is why nothing about the staff path below changes.
+   */
+  client_stub_id: z.number().int().positive().nullish(),
 })
 
 /**
@@ -30,6 +36,12 @@ const InviteSchema = z.object({
  * There is no email provider wired into this app, so nothing is sent. The
  * response carries the one and only copy of the link; the studio passes it on
  * themselves. See the note in `InviteManager`.
+ *
+ * `client_stub_id` (051) is the only addition since: an invitation may name
+ * somebody already on the studio's list, and accepting it claims that record
+ * rather than creating a second one for the same person. Omit it and this
+ * route behaves exactly as it did — the staff invitation path runs through the
+ * same lines it always has.
  */
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
@@ -67,6 +79,58 @@ export async function POST(request: NextRequest) {
     )
   }
 
+  // ── Inviting somebody the studio already has on its list ────────────────
+  //
+  // Read as the caller, so the staff-read policy on `client_stubs` (051) is
+  // what decides whether this row is theirs to see. Everything below is about
+  // giving a readable answer before the database gives an opaque one; the
+  // check constraint added in 053 refuses a non-client stub invitation
+  // whatever this route believes.
+  let stub: {
+    id: number
+    first_name: string
+    last_name: string | null
+    email: string | null
+    claimed_by: string | null
+  } | null = null
+
+  if (body.client_stub_id) {
+    if (body.role !== 'client') {
+      return NextResponse.json(
+        {
+          error: 'invalid_request',
+          message: 'Someone on the client list can only be invited as a client.',
+        },
+        { status: 400 }
+      )
+    }
+
+    const { data: found } = await supabase
+      .from('client_stubs')
+      .select('id, first_name, last_name, email, claimed_by')
+      .eq('id', body.client_stub_id)
+      .maybeSingle()
+
+    if (!found) {
+      return NextResponse.json(
+        { error: 'not_found', message: 'That client is no longer on the list.' },
+        { status: 404 }
+      )
+    }
+
+    if (found.claimed_by) {
+      return NextResponse.json(
+        {
+          error: 'already_claimed',
+          message: `${found.first_name} has already set up an account. Open their record instead.`,
+        },
+        { status: 409 }
+      )
+    }
+
+    stub = found
+  }
+
   // A nicer answer than the trigger's, for the common case of inviting someone
   // who is already here. The trigger still refuses it if this check races.
   const { data: existing } = await supabase
@@ -77,13 +141,59 @@ export async function POST(request: NextRequest) {
 
   if (existing) {
     const name = `${existing.first_name ?? ''} ${existing.last_name ?? ''}`.trim()
+    // Two different situations wearing the same 409. From User Management the
+    // answer is "change their role"; from somebody's record on the client list
+    // it is "this is them, they are already here" — and the id goes back with
+    // it so the screen can offer the way there.
     return NextResponse.json(
       {
         error: 'already_exists',
-        message: `${name || 'Someone'} already has an account with that email. Change their role from the list below instead.`,
+        clientId: existing.id,
+        message: stub
+          ? `${name || 'Someone'} already has an account with that email. Open their client record instead — this list is for people who have none.`
+          : `${name || 'Someone'} already has an account with that email. Change their role from the list below instead.`,
       },
       { status: 409 }
     )
+  }
+
+  // Often the studio is typing this address in for the first time — the whole
+  // reason the person is a stub is that nobody ever asked them for one. Keep
+  // it, so the list stops being a list of people nobody can reach, and keep it
+  // before the invitation exists: if the address turns out to belong to
+  // somebody else the dedupe trigger from 051 refuses here, with a sentence
+  // written to be read by a person.
+  if (stub && (stub.email ?? '').trim().toLowerCase() !== email) {
+    const { error: stubEmailError } = await supabase
+      .from('client_stubs')
+      .update({ email })
+      .eq('id', stub.id)
+
+    if (stubEmailError) {
+      console.error('invitation create: could not save the stub email', stubEmailError)
+      return NextResponse.json(
+        { error: 'stub_email_failed', message: stubEmailError.message },
+        { status: 409 }
+      )
+    }
+  }
+
+  // Two live links for one person is the duplicate this whole feature exists to
+  // avoid, and 031's "one live invitation per email" cannot see it: maria@old
+  // and maria@new are two addresses and one woman. So the older link is
+  // withdrawn first, which is also what the unique index in 053 insists on.
+  //
+  // Done as its own statement rather than inside the insert the way 031
+  // supersedes an address, because PostgREST has no transaction to put them in.
+  // It runs last, after every check above, so the only thing that can fail
+  // between here and the insert is a genuine race.
+  if (stub) {
+    await supabase
+      .from('invitations')
+      .update({ revoked_at: new Date().toISOString(), revoked_by: user.id })
+      .eq('client_stub_id', stub.id)
+      .is('accepted_at', null)
+      .is('revoked_at', null)
   }
 
   // 32 bytes = 256 bits of entropy. Only the SHA-256 reaches the database, so
@@ -98,15 +208,20 @@ export async function POST(request: NextRequest) {
     .from('invitations')
     .insert({
       email,
-      first_name: body.first_name || null,
-      last_name: body.last_name || null,
+      // The studio's own note about who this is, so the accept page can greet
+      // them by name without the staff member retyping it.
+      first_name: body.first_name || stub?.first_name || null,
+      last_name: body.last_name || stub?.last_name || null,
       note: body.note || null,
       role: body.role,
       invited_by: user.id,
       token_hash: tokenHash,
       expires_at: expiresAt,
+      client_stub_id: stub?.id ?? null,
     })
-    .select('id, email, first_name, last_name, note, role, expires_at, created_at')
+    .select(
+      'id, email, first_name, last_name, note, role, expires_at, created_at, client_stub_id'
+    )
     .single()
 
   if (error || !invitation) {

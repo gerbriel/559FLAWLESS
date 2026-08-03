@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { isProfileComplete } from '@/lib/profile'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { Container, Section } from '@/components/ui/section'
@@ -182,10 +183,7 @@ export default async function BookPage({ searchParams }: Props) {
 
   // Signed in but missing the details a booking needs. Same reasoning as the
   // auth callback; this catches the account made before that step existed.
-  if (
-    profile?.role === 'client' &&
-    (!profile.first_name?.trim() || !profile.phone?.trim() || !profile.date_of_birth)
-  ) {
+  if (profile?.role === 'client' && !isProfileComplete(profile)) {
     redirect(`/account/complete?next=${encodeURIComponent(bookingUrl)}`)
   }
 

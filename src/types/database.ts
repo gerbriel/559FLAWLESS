@@ -1251,6 +1251,42 @@ export type Invitation = {
   revoked_by: string | null
   created_at: string
   updated_at: string
+
+  /**
+   * Added in 051. The stub this invitation is for, when it was sent to
+   * somebody already on the studio's list. Accepting it claims that stub
+   * instead of leaving a second record for the same person. 053 constrains it
+   * to `role = 'client'` — a stub is a client, never a staff account.
+   */
+  client_stub_id: number | null
+}
+
+// ── Added in 051 ──────────────────────────────────────────────
+/**
+ * Somebody the studio knows who has no account: a name, whatever contact
+ * details exist, and a note. Deliberately not a profile and deliberately
+ * holding no clinical data — see the header of 051.
+ *
+ * Its whole life is to stop being one. `claimed_by` is set by
+ * `claim_client_stub()` when an invitation carrying this stub is accepted,
+ * and from then on the row is history rather than a to-do.
+ */
+export type ClientStub = {
+  id: number
+  first_name: string
+  last_name: string | null
+  email: string | null
+  phone: string | null
+  /** Free text the studio pasted in. Not clinical, and never shown publicly. */
+  note: string | null
+  source: 'manual' | 'import' | 'walk_in'
+  /** The import run that created the row; null for anything typed by hand. */
+  import_batch: string | null
+  claimed_by: string | null
+  claimed_at: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
 }
 
 // ── Permissions and commissions, added in 034 ────────────────
@@ -1900,7 +1936,18 @@ export type Database = {
           ToProfile<'invitations', 'invited_by'>,
           ToProfile<'invitations', 'accepted_by'>,
           ToProfile<'invitations', 'revoked_by'>,
+          // Added in 051. Named, because an embed that does not disambiguate
+          // between four foreign keys resolves to a SelectQueryError.
+          Rel<'invitations_client_stub_id_fkey', ['client_stub_id'], 'client_stubs', ['id']>,
         ]
+      >
+
+      // ── Added in 051 ────────────────────────────────────────
+      // Two FKs to profiles (claimed_by, created_by), so an embed has to name
+      // the constraint: profiles!client_stubs_claimed_by_fkey(...).
+      client_stubs: TableDef<
+        ClientStub,
+        [ToProfile<'client_stubs', 'claimed_by'>, ToProfile<'client_stubs', 'created_by'>]
       >
 
       // ── Memberships, added in 050 ───────────────────────────
@@ -2452,6 +2499,32 @@ export type Database = {
       redeem_invitation: {
         Args: { p_token: string; p_user: string }
         Returns: UserRole
+      }
+
+      // ── Added in 051 ────────────────────────────────────────
+      /**
+       * Tie an imported client to the account that just accepted their
+       * invitation, filling in whatever that account is missing. Returns the
+       * stub id, or null if there was no such stub.
+       *
+       * service_role only — the one caller is POST /api/invitations/accept,
+       * which has already proved the token. Calling it with an ordinary
+       * session gets "permission denied for function".
+       */
+      claim_client_stub: {
+        Args: { p_stub: number; p_profile: string }
+        Returns: number | null
+      }
+
+      // ── Added in 053 ────────────────────────────────────────
+      /**
+       * How the caller heard about the studio. One column, on their own
+       * client record, because a client may not UPDATE that table — the rest
+       * of the row is their clinical history.
+       */
+      record_referral_source: {
+        Args: { p_source: string }
+        Returns: undefined
       }
 
       // ── Memberships, added in 050 ───────────────────────────

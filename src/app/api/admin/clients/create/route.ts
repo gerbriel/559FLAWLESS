@@ -7,10 +7,14 @@ import { isFrontDesk } from '@/types/database'
 export const dynamic = 'force-dynamic'
 
 const NewClientSchema = z.object({
+  // An account is the whole four. This route only ever creates one, so it asks
+  // for all of them — the incomplete person belongs in `client_stubs` (051),
+  // which is reachable from the importer and from the client's own record, and
+  // becomes an account through an invitation rather than through here.
   first_name: z.string().trim().min(1).max(80),
   last_name: z.string().trim().min(1).max(80),
   email: z.string().trim().email().max(254),
-  phone: z.string().trim().max(40).nullish(),
+  phone: z.string().trim().min(7).max(40),
   pronouns: z.string().trim().max(40).nullish(),
   date_of_birth: z.string().trim().max(10).nullish(),
   notes: z.string().trim().max(2000).nullish(),
@@ -71,9 +75,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         error: 'already_exists',
-        message: `${existing.first_name ?? ''} ${existing.last_name ?? ''}`.trim()
-          ? `${existing.first_name} ${existing.last_name} already has an account.`
-          : 'Someone already has an account with that email.',
+        message: (() => {
+          // Built once rather than interpolated twice: a client with no surname
+          // was reading "Yesenia null already has an account."
+          const name = `${existing.first_name ?? ''} ${existing.last_name ?? ''}`.trim()
+          return name
+            ? `${name} already has an account.`
+            : 'Someone already has an account with that email.'
+        })(),
         clientId: existing.role === 'client' ? existing.id : null,
       },
       { status: 409 }

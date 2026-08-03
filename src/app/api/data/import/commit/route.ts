@@ -66,6 +66,13 @@ export async function POST(request: Request) {
       entity: entity.key,
       created: outcome.created,
       updated: outcome.updated,
+      // The contacts are logged apart from the accounts, and the batch is
+      // logged with them: `client_stubs.import_batch` carries the same
+      // reference, so this line is what ties a batch of rows to the person who
+      // brought them in and the minute they did it.
+      contacts_created: outcome.contactsCreated,
+      contacts_updated: outcome.contactsUpdated,
+      import_batch: outcome.importBatch,
       failed: outcome.failed,
       rejected: new Set(problems.map((p) => p.line)).size,
     },
@@ -76,6 +83,9 @@ export async function POST(request: Request) {
     entity: entity.key,
     created: outcome.created,
     updated: outcome.updated,
+    contactsCreated: outcome.contactsCreated,
+    contactsUpdated: outcome.contactsUpdated,
+    importBatch: outcome.importBatch,
     failed: outcome.failed,
     rejected: new Set(problems.map((p) => p.line)).size,
     failures: outcome.failures.slice(0, 50),

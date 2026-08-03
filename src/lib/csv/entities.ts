@@ -43,7 +43,8 @@ import type { CsvEntity } from '@/lib/csv/schema'
 /* ── Clients ──────────────────────────────────────────────── */
 
 /**
- * `profiles` where role = 'client'.
+ * `profiles` where role = 'client', and `client_stubs` for the people who are
+ * not one yet.
  *
  * MATCHING copies `appointment_match_client` (migration 004) exactly, because
  * the studio already has an answer to "is this the same person" and an importer
@@ -51,6 +52,22 @@ import type { CsvEntity } from '@/lib/csv/schema'
  * case-insensitively; then phone, compared on digits only and only when there
  * are at least ten of them. That last clause matters — without it "555" matches
  * "555" and two strangers become one record.
+ *
+ * A ROW WITH NO EMAIL ADDRESS IS NO LONGER A REJECTED ROW, and the reason it
+ * used to be was a real one rather than a fussy one: `profiles.id` is
+ * foreign-keyed to `auth.users`, so a profile IS an account and there was
+ * nowhere in this schema for a client who has never had one. Migration 051 made
+ * somewhere — `client_stubs`, a contact the studio knows and has not signed up
+ * yet — and that is where such a row lands now. It is not a lesser client
+ * record. It is the studio's answer to "who still needs inviting", which is the
+ * question the owner has the moment an import finishes.
+ *
+ * What it is NOT is a fabricated account. Minting an auth user at
+ * someone+1739@studio.invalid would put a lie in `profiles.email`, and that is
+ * the column 004 matches a guest booking on — so the first time that person
+ * booked with their real address the studio would get the second record this
+ * whole arrangement exists to prevent. 051's header says so at length; the
+ * importer obeys it.
  *
  * IMPORT NEEDS ADMIN, and that is not the same bar as the rest of the page.
  * A profile row is foreign-keyed to `auth.users`, and `profiles` has exactly one
@@ -60,20 +77,24 @@ import type { CsvEntity } from '@/lib/csv/schema'
  * /api/admin/clients/create already does for a walk-in. When a route stands in
  * for RLS it has to be at least as strict as the policy it replaced, and the
  * policy for changing another person's profile is `is_admin()`.
+ *
+ * A contact is cheaper than that — `client_stubs` has a real front-desk write
+ * policy, so one could be added by anybody who books — but the file is one file
+ * and the strictest thing in it sets the bar for all of it.
  */
 const clients: CsvEntity = {
   key: 'clients',
   label: 'Clients',
-  lede: 'Names, contact details and marketing preferences.',
-  source: 'profiles (role = client)',
+  lede: 'Names, contact details and marketing preferences — including the people with no email address yet.',
+  source: 'profiles (role = client), client_stubs',
   importing: {
     role: 'admin',
     roleBecause:
       'A profile row belongs to an auth account, and the only INSERT policy on profiles is "your own". This import cannot go through row-level security, so it uses the service role — and a route standing in for a policy has to be as strict as the policy it replaced. Changing another person’s profile is admin-only in the database (001), so it is admin-only here.',
     matchRule:
-      'Email address first, ignoring case. If there is no email or no match, the phone number, compared on digits alone and only when there are at least ten of them. This is what the appointment_match_client trigger has always done (migration 004); the import does not invent a second answer to "is this the same person".',
+      'Email address first, ignoring case. If there is no email or no match, the phone number, compared on digits alone and only when there are at least ten of them. This is what the appointment_match_client trigger has always done (migration 004); the import does not invent a second answer to "is this the same person". The same two keys then find anybody already on the contact list, so a second run of the same file updates the contact it made rather than adding another.',
     onNoMatch:
-      'A row that matches nobody creates a new client, and a new client needs an email address — that is what the account is. A row with only a phone number and no match is rejected and listed, rather than being filed as a person nobody can contact.',
+      'A row with an email address that matches nobody creates a client with an account. A row without one is added as a contact instead — the studio knows this person, and until somebody invites them and they claim it, there is no account to make. Both are counted separately on the check, so you can see before you commit how many people will still need inviting.',
   },
   fields: [
     {
@@ -90,7 +111,12 @@ const clients: CsvEntity = {
       key: 'last_name',
       label: 'Last Name',
       type: 'text',
-      required: true,
+      // Not required, and deliberately so: 051 was written for "a name and a
+      // note about their skin and nothing else". A studio that has known
+      // someone as Yesenia for eight years should not have to invent a surname
+      // to get her onto the list. `client_stubs` only checks `first_name`, and
+      // `profiles.last_name` is nullable, so nothing below this cared either.
+      required: false,
       maxLength: 80,
       description: 'Family name.',
       example: 'Vega',
@@ -102,7 +128,7 @@ const clients: CsvEntity = {
       type: 'email',
       maxLength: 254,
       description:
-        'The match key, and the account. Required to create someone new; a client who already exists can be updated by phone instead.',
+        'The match key, and the account. Somebody with one gets a login; somebody without is added as a contact to invite later, so leaving it blank costs nothing and loses nobody.',
       example: 'maria.vega@example.com',
       aliases: ['email address', 'e mail', 'mail'],
     },
@@ -110,7 +136,8 @@ const clients: CsvEntity = {
       key: 'phone',
       label: 'Phone',
       type: 'phone',
-      description: 'Mobile or home. Used as the fallback match when there is no email.',
+      description:
+        'Mobile or home. The fallback match when there is no email, and often the only way to reach somebody who has no account.',
       example: '(559) 555-0134',
       aliases: ['phone number', 'mobile', 'cell', 'telephone', 'tel', 'contact number'],
     },
@@ -149,13 +176,35 @@ const clients: CsvEntity = {
       aliases: ['sms', 'text opt in', 'accepts sms', 'texts'],
     },
     {
+      key: 'note',
+      label: 'Note',
+      type: 'text',
+      maxLength: 2000,
+      description:
+        'Whatever the old list said about this person — "walk-in", "always books with Linda". Kept only for a contact with no account: a client who has one has a record of their own, and what goes on it is clinical and is not in this file. If a row creates or updates an account, the note is not stored and the check says so.',
+      example: 'Walk-in, always books with Linda',
+      aliases: ['notes', 'comment', 'comments', 'remarks', 'memo'],
+    },
+    {
+      key: 'has_account',
+      label: 'Has Account',
+      type: 'boolean',
+      readOnly: true,
+      readOnlyBecause:
+        'Whether somebody can log in is not something a spreadsheet decides. A contact becomes an account by being invited and accepting, which is the one path that ends with the person themselves agreeing to it.',
+      description:
+        'No for the people on the contact list — the ones with no login yet, who are in this export so a round trip does not quietly lose them.',
+      example: 'yes',
+    },
+    {
       key: 'id',
       label: 'Client ID',
       type: 'text',
       readOnly: true,
       readOnlyBecause:
         'The database issues it. An id from another system means nothing here, and a client is found by email or phone.',
-      description: 'Our internal identifier for this client.',
+      description:
+        'Our internal identifier for this client. Empty on a contact with no account, because an account is what has one.',
       example: '9f1c…',
     },
     {

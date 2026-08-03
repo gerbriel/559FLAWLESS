@@ -142,13 +142,57 @@ export async function exportEntity(
         .range(from, to)
     )
 
+    /*
+     * THE CONTACTS ARE IN THIS FILE TOO, and leaving them out was the tempting
+     * mistake. `client_stubs` (051) holds the clients with no account — the
+     * walk-in who gave a phone number, the regular nobody ever asked — and they
+     * are clients in every sense except the one the login cares about. An export
+     * that quietly skipped them would be a client list missing the very people
+     * the import was built to stop losing, and the loss would show up nowhere:
+     * the file would look complete.
+     *
+     * They are told apart by the Has Account column rather than by being in a
+     * second file, because a studio asking "who do I have" is asking one
+     * question. The columns a contact has no answer for — a date of birth,
+     * marketing consent — come out empty, which on a re-import means "leave
+     * that alone" and so costs nothing.
+     *
+     * Claimed contacts are left out: those people have accounts now and are
+     * already in the rows above, under the name they chose themselves.
+     */
+    const contacts = await readAll((from, to) =>
+      client
+        .from('client_stubs')
+        .select('id, first_name, last_name, email, phone, note, created_at')
+        .is('claimed_by', null)
+        .order('created_at', { ascending: false })
+        .order('id')
+        .range(from, to)
+    )
+
     return {
       headers,
-      truncated,
-      rows: toRows(
-        entity,
-        rows.map((row) => ({ ...row, created_at: when(row.created_at, timeZone) }))
-      ),
+      truncated: truncated || contacts.truncated,
+      rows: toRows(entity, [
+        ...rows.map((row) => ({
+          ...row,
+          has_account: true,
+          created_at: when(row.created_at, timeZone),
+        })),
+        ...contacts.rows.map((row) => ({
+          first_name: row.first_name,
+          last_name: row.last_name,
+          email: row.email,
+          phone: row.phone,
+          note: row.note,
+          has_account: false,
+          // Deliberately not row.id. A contact's id is a bigint from another
+          // table and the Client ID column means a profile's uuid; writing one
+          // where the other belongs would be a number that looks like an answer.
+          id: null,
+          created_at: when(row.created_at, timeZone),
+        })),
+      ]),
     }
   }
 

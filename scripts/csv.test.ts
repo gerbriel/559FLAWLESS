@@ -514,13 +514,22 @@ test('a missing required column rejects the row and says which', () => {
   assert.ok(problems.some((p) => p.message.includes('required')))
 })
 
-test('a client with neither email nor phone is rejected', () => {
+// This asserted the opposite until 051 gave the studio somewhere to put a
+// client it knows and cannot sign up. A name with no email and no phone is the
+// eight-year regular nobody ever asked for an address; rejecting the row left
+// the studio holding a paper list it could not type in. It is kept now and
+// becomes a client_stub — a contact record, invited later, claimed rather than
+// duplicated when the invitation is accepted.
+test('a client with neither email nor phone is kept, to become a stub', () => {
   const { rows, problems } = prepare(clients, ['First Name', 'Last Name'], [['Maria', 'Vega']], {
     first_name: 0,
     last_name: 1,
   })
-  assert.equal(rows.length, 0)
-  assert.ok(problems[0].message.includes('nothing to match'))
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].values.first_name, 'Maria')
+  // Nothing to match on is not a defect in the row; it is the case the stub
+  // exists for, so it must not be reported as a problem.
+  assert.equal(problems.length, 0)
 })
 
 test('row numbers match the spreadsheet, header counted as row 1', () => {

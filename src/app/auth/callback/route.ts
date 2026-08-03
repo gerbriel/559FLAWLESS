@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
+import { isProfileComplete } from '@/lib/profile'
 import { createClient } from '@/lib/supabase/server'
 import { isStaff } from '@/types/database'
 
@@ -37,7 +38,7 @@ export async function GET(request: NextRequest) {
 
   const { data: profile } = await supabase
     .from('profiles')
-    .select('role, first_name, phone, date_of_birth')
+    .select('role, first_name, last_name, phone, date_of_birth')
     .eq('id', data.user.id)
     .maybeSingle()
 
@@ -49,10 +50,7 @@ export async function GET(request: NextRequest) {
   // birth, and a booking needs both. Collect them here rather than discovering
   // the gap at the point of booking — `next` is preserved, so someone who came
   // from a half-finished booking is returned to it afterwards.
-  const incomplete =
-    !profile?.first_name?.trim() || !profile?.phone?.trim() || !profile?.date_of_birth
-
-  if (incomplete) {
+  if (!isProfileComplete(profile)) {
     const complete = new URL('/account/complete', origin)
     if (next) complete.searchParams.set('next', next)
     return NextResponse.redirect(complete)

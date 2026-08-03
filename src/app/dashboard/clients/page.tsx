@@ -121,6 +121,7 @@ export default async function ClientsPage({ searchParams }: Props) {
     { data: consents },
     { data: intakes },
     { data: analytics },
+    { data: stubMatches },
   ] = await Promise.all([
     // A provider reaches this page — the sidebar offers Clients to her, and RLS
     // gives her the people she treats. What she cannot do is anything that goes
@@ -139,6 +140,22 @@ export default async function ClientsPage({ searchParams }: Props) {
       .from('analytics_events')
       .select('user_id, event')
       .in('user_id', clientIds),
+    // Somebody the studio imported without an email address is a client it
+    // knows, and searching for them here must not answer "no such person".
+    // They are not folded into the roster — they have no account, and half of
+    // its columns would be blank for them — but a search says where they are.
+    // Only when there is a search: the roster's own job is unchanged.
+    term
+      ? supabase
+          .from('client_stubs')
+          .select('id, first_name, last_name, email, phone')
+          .is('claimed_by', null)
+          .or(
+            `first_name.ilike.%${term}%,last_name.ilike.%${term}%,email.ilike.%${term}%,phone.ilike.%${term}%`
+          )
+          .order('created_at', { ascending: false })
+          .limit(5)
+      : Promise.resolve({ data: [] }),
   ])
 
   const role = (viewer?.role ?? 'provider') as UserRole
@@ -216,12 +233,13 @@ export default async function ClientsPage({ searchParams }: Props) {
         }
       />
 
-      {/* View switcher — clients and newsletter signups are the same audience
-          seen two ways, so they live side by side rather than in separate
-          sections of the dashboard.
+      {/* View switcher — the roster, the people the studio knows who have not
+          signed up, and newsletter signups: one audience seen three ways, so
+          they live side by side rather than in separate sections of the
+          dashboard.
 
-          Newsletter is front-desk work: /dashboard/clients/newsletter redirects
-          a provider to /dashboard. With the tab hidden, one tab is left and
+          Both of the others are front-desk work: each of those routes redirects
+          a provider to /dashboard. With the tabs hidden, one tab is left and
           SectionTabs renders nothing — for a provider, Clients is just the
           list. */}
       <SectionTabs
@@ -229,6 +247,11 @@ export default async function ClientsPage({ searchParams }: Props) {
         root="/dashboard/clients"
         tabs={[
           { href: '/dashboard/clients', label: 'Clients' },
+          {
+            href: '/dashboard/clients/stubs',
+            label: 'Not signed up',
+            visible: booksForOthers,
+          },
           {
             href: '/dashboard/clients/newsletter',
             label: 'Newsletter',
@@ -243,6 +266,50 @@ export default async function ClientsPage({ searchParams }: Props) {
       <form role="search" className="mt-6 max-w-xl">
         <SearchField name="q" defaultValue={q ?? ''} label="Search by name, email, or phone" />
       </form>
+
+      {/* Above the results rather than below them, because the case this is for
+          is a search that otherwise looks like a dead end: the person is on the
+          studio's list, they simply have no account yet. Front desk only — a
+          provider cannot invite anybody, so the door would not open. */}
+      {booksForOthers && (stubMatches?.length ?? 0) > 0 && (
+        <Panel className="mt-6 p-5">
+          <p className="label-caps text-[var(--color-muted)]">
+            Also on the studio&rsquo;s list, not signed up yet
+          </p>
+          <ul className="mt-3 divide-y divide-[var(--color-border)]">
+            {(stubMatches ?? []).map((stub) => {
+              const stubName = `${stub.first_name} ${stub.last_name ?? ''}`.trim()
+              return (
+                <li key={stub.id} className="flex flex-wrap items-center gap-3 py-2.5">
+                  <Avatar name={stubName} size="sm" />
+                  <Link
+                    href={`/dashboard/clients/stubs/${stub.id}`}
+                    className="text-sm transition-colors hover:text-[var(--color-accent)]"
+                  >
+                    {stubName}
+                  </Link>
+                  <span className="text-sm text-[var(--color-muted)]">
+                    {stub.email ?? stub.phone ?? 'No contact details'}
+                  </span>
+                  <Badge tone="neutral" size="sm" className="ml-auto">
+                    No account
+                  </Badge>
+                </li>
+              )
+            })}
+          </ul>
+          <p className="mt-3 text-xs text-[var(--color-muted)]">
+            Open one to send them an invitation, or see everyone waiting under{' '}
+            <Link
+              href="/dashboard/clients/stubs"
+              className="underline underline-offset-4 hover:text-[var(--color-foreground)]"
+            >
+              Not signed up
+            </Link>
+            .
+          </p>
+        </Panel>
+      )}
 
       {total === 0 ? (
         term ? (

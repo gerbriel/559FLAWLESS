@@ -168,15 +168,6 @@ export function prepare(
       values[field.key] = result.value
     }
 
-    // Whatever the entity itself needs true of a whole row — a client with no
-    // way of being identified, say. Declared in entities.ts, checked here.
-    if (rowProblems.length === 0) {
-      const objection = entityObjection(entity, values)
-      if (objection) {
-        rowProblems.push({ line, column: null, field: null, message: objection })
-      }
-    }
-
     if (rowProblems.length > 0) problems.push(...rowProblems)
     else prepared.push({ line, values, raw })
   })
@@ -184,27 +175,33 @@ export function prepare(
   return { rows: prepared, problems, ignoredColumns, unmappedFields }
 }
 
-/**
- * Row-level rules that no single column can express.
+/*
+ * WHOLE-ROW RULES, AND WHY THERE ARE NONE LEFT.
  *
- * Kept next to `prepare` rather than in `entities.ts` because it is logic and
- * that file is data, but it is short enough that the two do not drift.
+ * There used to be one, and it was checked here, after every column had been
+ * coerced: a client row with neither an email address nor a phone number was
+ * rejected, because there was nothing to match this person on.
+ *
+ * That observation was correct and the conclusion drawn from it was wrong. The
+ * person with neither is the walk-in of eight years nobody ever asked, and
+ * refusing the row did not make the studio know less about them — it just left
+ * them out of the system that was supposed to hold them. Migration 051 gave
+ * them somewhere to be, a contact with no account, and said in as many words
+ * that a contact with nothing to match on is allowed, because two of them are
+ * two different people until somebody says otherwise. So the rule is gone, and
+ * `planImport` says on the preview how many such rows a file has and that
+ * running it twice would add them twice. That is the honest version of what the
+ * rejection was trying to say.
+ *
+ * The other rule a reader might look for here is
+ * `products_external_has_no_stock`, which forbids an externally fulfilled item
+ * from holding stock, and it is deliberately NOT re-implemented. Stock is not
+ * importable, so a new row can never break it, and on an existing row the
+ * current count is the studio's and not this file's. It is left to the
+ * database, and `readable()` in apply.ts turns the constraint name into a
+ * sentence. Guessing at a rule the database already owns is how the two end up
+ * disagreeing.
  */
-function entityObjection(entity: CsvEntity, values: Record<string, CsvValue>): string | null {
-  if (entity.key === 'clients') {
-    if (!values.email && !values.phone) {
-      return 'no email address and no phone number — there is nothing to match this person on'
-    }
-  }
-  // Products have exactly one rule of this kind — products_external_has_no_stock,
-  // which forbids an externally fulfilled item from holding stock — and it is
-  // deliberately NOT re-implemented here. Stock is not importable, so a new row
-  // can never break it, and on an existing row the current count is the studio's
-  // and not this file's. It is left to the database, and `readable()` in apply.ts
-  // turns the constraint name into a sentence. Guessing at a rule the database
-  // already owns is how the two end up disagreeing.
-  return null
-}
 
 /** Problems collapsed into "this went wrong, N times, first at row X". */
 export type ProblemSummary = {

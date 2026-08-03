@@ -82,7 +82,7 @@ export function InviteAcceptForm({
     }).catch(() => null)
 
     const payload = (await res?.json().catch(() => null)) as
-      | { ok?: true; role?: UserRole; message?: string }
+      | { ok?: true; role?: UserRole; message?: string; needs_profile?: boolean }
       | null
 
     if (!res?.ok || !payload?.ok) {
@@ -106,10 +106,25 @@ export function InviteAcceptForm({
       return
     }
 
-    // Staff go straight to the dashboard. The client profile-completion step in
-    // /auth/callback is for clients only, and this form already collected what
-    // it asks for.
-    router.push(isStaff(payload.role) ? '/dashboard' : '/account')
+    // Staff go straight to the dashboard: the profile-completion step is for
+    // clients only, and nothing on it applies to them.
+    if (isStaff(payload.role)) {
+      router.push('/dashboard')
+      router.refresh()
+      return
+    }
+
+    // A client goes on to finish their profile. `welcome` says this is the
+    // first minute of a new account rather than a gap discovered at the point
+    // of booking, so the page asks the few extra things worth having while
+    // somebody is still filling forms in — and lets them skip every one.
+    //
+    // Whoever was invited from the studio's own list arrives here with details
+    // already filled in, copied from the record the studio kept. They correct
+    // rather than type, which is the whole point of having kept it.
+    // The page works out for itself what is still owed and what is merely
+    // worth asking, so there is one destination here rather than two.
+    router.push('/account/complete?next=%2Faccount&welcome=1')
     router.refresh()
   }
 
