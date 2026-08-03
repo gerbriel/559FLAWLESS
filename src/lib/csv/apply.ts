@@ -565,35 +565,35 @@ export async function planImport(
         continue
       }
 
-      // AN ACCOUNT IS THE WHOLE FOUR: first name, last name, email, phone.
+      // A ROW THE STUDIO HAS NEVER SEEN IS A CONTACT. ALWAYS.
       //
-      // The email is what makes an account *possible*; it is not what makes one
-      // complete. An account is the thing the client logs into, books from and
-      // is reached on, and the studio asks for all four at the desk — so an
-      // import that mints one from a name and an address alone would create the
-      // one kind of account no other path in this app can produce, and nothing
-      // would ever ask for the rest.
+      // This used to fork: a row carrying all four of first name, last name,
+      // email and phone became an account, anything less became a contact. The
+      // reasoning was that the four fields are the bar an account meets
+      // everywhere else, which is true and is not the point. The effect was
+      // that one spreadsheet landed in two places — some rows in Clients, some
+      // in Not signed up yet — split on how complete the old system's records
+      // happened to be, which is a fact about the file and not about the
+      // people. The studio asked for one destination, and it is right: an
+      // import is a list of people to get into the system, and where a person
+      // ends up should not depend on whether whoever typed their row eight
+      // years ago bothered with a surname.
       //
-      // So the bar for a row to become an account here is the bar the account
-      // has everywhere else, and a row that clears it is handled exactly as it
-      // always was. Anything short of it is a contact: the studio keeps the
-      // person, invites them when it suits, and the claim flow collects what is
-      // missing from the one person who actually knows it.
-      if (email && text(row.values.last_name) && digits.length >= 10) {
-        if (row.values.note !== undefined) notesDropped++
-        planned.push({
-          line: row.line,
-          action: 'create',
-          target: 'record',
-          label,
-          matchedBy: null,
-          targetId: null,
-          values: row.values,
-        })
-        continue
-      }
-
-      // AND ANYTHING LESS IS A CONTACT, rather than a rejection. This used to
+      // So the fork is gone. Every unrecognised row becomes a contact, and the
+      // invitation is what promotes one — which was always the only path that
+      // produced a real account anyway. An imported profile could never log in:
+      // `profiles.id` is foreign-keyed to `auth.users` and an import cannot
+      // mint an auth user, so an "account" created here was a record with
+      // nobody behind it, waiting for the same invitation the contact is
+      // waiting for. One row, one destination, one way out of it.
+      //
+      // MERGING IS UNAFFECTED, and is the reason this is safe: the two matching
+      // passes above run first. A row that matches an existing profile updates
+      // that profile, and a row matching an unclaimed contact updates the
+      // contact. A person who has already claimed their account is found by the
+      // first pass — `indexStubs` is unclaimed-only, precisely so a claimed
+      // stub cannot shadow the profile it turned into. Only rows that match
+      // nothing reach here. This used to
       // say "a new client needs an email address", which was true of the schema
       // and useless to the studio: the person was standing in front of them and
       // there was nowhere to put them. 051 made somewhere. What is deliberately
@@ -640,7 +640,7 @@ export async function planImport(
     }
     if (notesDropped > 0) {
       notes.push(
-        `The Note column is not stored on ${notesDropped === 1 ? 'one of these rows, because it belongs' : `${notesDropped} of these rows, because they belong`} to somebody with an account. A client with an account has a record of their own, and what goes on it is clinical and does not arrive by spreadsheet.`
+        `The Note column is not stored on ${notesDropped === 1 ? 'one of these rows, because it belongs' : `${notesDropped} of these rows, because they belong`} to somebody who already has an account. A client with an account has a record of their own, and what goes on it is clinical and does not arrive by spreadsheet. Notes on everyone else are kept.`
       )
     }
     if (contactColumnsDropped.size > 0) {
@@ -1005,58 +1005,25 @@ export async function commitImport(
       else contactsUpdated++
     })
 
-    // One at a time is not a performance oversight: each create is an auth user
-    // followed by a profile write, and the auth API is rate-limited.
-    await mapLimit(creates, 3, async (row) => {
-      const payload = payloadFor(entity, row.values)
-      const email = String(payload.email ?? '')
-      const { data, error } = await admin.auth.admin.createUser({
-        email,
-        // Confirmed on creation, as in /api/admin/clients/create: the studio has
-        // this person's details already, and an unconfirmed account cannot
-        // receive the sign-in link they will use to claim it.
-        email_confirm: true,
-        user_metadata: {
-          first_name: payload.first_name ?? null,
-          last_name: payload.last_name ?? null,
-          phone: payload.phone ?? null,
-        },
-      })
-
-      if (error || !data.user) {
-        failures.push({ line: row.line, label: row.label, message: readable(error?.message ?? 'the account could not be created') })
-        return
-      }
-
-      const id = data.user.id
-      // handle_new_user has already made the profile from the metadata; this
-      // fills in the rest and records who brought them in.
-      //
-      // The cast is the seam between a payload assembled at runtime and a
-      // column list known at compile time. `payloadFor` builds it from a literal
-      // allow-list of column names, one per entity, so the keys are exactly the
-      // columns — but TypeScript cannot see that through the Record, and
-      // widening the Record to keep it happy would lose the allow-list, which is
-      // the part doing the actual work.
-      const { error: profileError } = await admin
-        .from('profiles')
-        .update({
-          ...payload,
-          role: 'client',
-          created_by_staff_id: actorId,
-        } as ProfileUpdate)
-        .eq('id', id)
-
-      if (profileError) {
-        // Roll back the account rather than leave one with no profile behind it.
-        await admin.auth.admin.deleteUser(id)
-        failures.push({ line: row.line, label: row.label, message: readable(profileError.message) })
-        return
-      }
-
-      await admin.from('client_records').upsert({ client_id: id }, { onConflict: 'client_id' })
-      created++
-    })
+    // NOTHING HERE MINTS AN ACCOUNT ANY MORE, and that is the point of the
+    // change rather than a side effect of it.
+    //
+    // This used to call `admin.auth.admin.createUser` for every row carrying a
+    // full set of details: a spreadsheet produced real logins, with confirmed
+    // addresses, for people who had never asked for one and did not know it had
+    // happened. It also made the import a two-destination operation, which is
+    // what the studio noticed — some rows in Clients, some in Not signed up yet,
+    // split on how complete the old records were.
+    //
+    // The planner now files every unrecognised row as a contact, so `creates`
+    // is empty for clients and the loop that stood here could not run. It is
+    // deleted rather than left unreachable: code that mints auth users is the
+    // last thing to leave lying around behind a condition that is currently
+    // false, and its presence would keep telling the next reader that importing
+    // a CSV is a way to create accounts. It is not. An invitation is.
+    //
+    // `creates` itself stays — services and products still insert through it
+    // further down. It is only ever empty on this branch.
 
     await mapLimit(updates, UPDATE_CONCURRENCY, async (row) => {
       const { error } = await admin
