@@ -5,7 +5,7 @@ import { ChevronLeft, ChevronRight, CircleDashed, Filter } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { formatMoney } from '@/lib/utils'
-import { addDaysToDateKey, dateKeyInTimeZone, dayLabelForDateKey } from '@/lib/time'
+import { addDaysToDateKey, dayLabelForDateKey } from '@/lib/time'
 import type {
   ProviderSchedule,
   AvailabilityBlockRow,
@@ -44,6 +44,14 @@ interface DragScheduleCalendarProps {
   closures: ClosureRow[]
   view: CalendarView
   currentDate: string
+  /**
+   * Today in `timezone`, read once on the server through `requestNow()` and
+   * handed to whichever surface this swaps in — see `CalendarViewProps`. Read
+   * here instead and the server and the browser would each read their own
+   * clock, which is a hydration mismatch across midnight and a bare clock read
+   * during render besides.
+   */
+  todayKey: string
   appointments: CalendarAppointment[]
   providers: BoardProvider[]
   timezone: string
@@ -74,12 +82,11 @@ export function DragScheduleCalendar({ onMoved, ...props }: DragScheduleCalendar
     providers,
     timezone,
     selectedProviders,
+    todayKey,
     onViewChange,
     onDateChange,
     onProviderFilterChange,
   } = props
-
-  const todayKey = dateKeyInTimeZone(new Date(), timezone)
 
   // Month, or a touch device: nothing to add, so add nothing.
   if (!canDrag || view === 'month') {

@@ -24,8 +24,11 @@ import {
   formatTimeInTimeZone,
   dayOfWeekForDateKey,
   dayLabelForDateKey,
+  minutesToTime,
   monthLabelForDateKey,
+  requestNow,
   zonedParts,
+  MINUTE_MS,
 } from '@/lib/time'
 import type { AppointmentStatus } from '@/types/database'
 
@@ -86,10 +89,35 @@ interface CalendarViewProps {
   closures: ClosureRow[]
   view: CalendarView
   currentDate: string // YYYY-MM-DD format
+  /**
+   * Today in `timezone`, read once on the server through `requestNow()`.
+   *
+   * Passed in rather than read here: this component is server-rendered and then
+   * hydrated, and a clock read during render is read twice — by the server and
+   * by the browser — which is a hydration mismatch every time the two straddle
+   * midnight in the studio's zone. It is also the bare-clock-during-render that
+   * rule 3 routes through `requestNow()`.
+   *
+   * It decides which date is drawn in accent, and nothing else. The line across
+   * the grid keeps its own ticking clock (`useStudioNow`), because that one has
+   * to move and this one is the day the page was drawn for.
+   */
+  todayKey: string
   appointments: CalendarAppointment[]
   providers: Provider[]
   timezone: string
   selectedProviders: string[]
+  /**
+   * Whether this viewer has a staff filter at all — the toolbar hides it for
+   * anyone who is only ever sent their own book.
+   *
+   * It gates the "filtered" note under the grid. That note now fires for every
+   * provider on every load, because the diary opens on their own name: it would
+   * say one book is being hidden from them permanently, name no way to stop it,
+   * and be wrong — the query only ever returned theirs. Omitted means there is
+   * a filter, which is what every current caller but the provider case is.
+   */
+  canSeeOtherBooks?: boolean
   /** How tightly to draw it. Omitted means the default zoom. */
   density?: CalendarDensity
   onViewChange: (view: CalendarView) => void
@@ -425,6 +453,283 @@ export const UNAVAILABLE_HATCH: React.CSSProperties = {
     'repeating-linear-gradient(45deg, var(--color-border) 0 1px, transparent 1px 7px)',
 }
 
+/* ── Now ──────────────────────────────────────────────────── */
+
+/**
+ * How often the line moves.
+ *
+ * An hour is `hourPx` — 48, 64 or 88 — so a minute is between half a pixel and
+ * a pixel and a half. Half a minute is therefore under a pixel of travel, which
+ * is the point at which redrawing stops buying accuracy and starts buying
+ * nothing; a per-second tick would re-render the whole grid 120 times for the
+ * same pixel. Thirty seconds also bounds how wrong the line can be to half a
+ * minute, which is well inside the width of the rule itself.
+ */
+const CLOCK_TICK_MS = 30_000
+
+/**
+ * The snapshot, truncated to the minute it falls in.
+ *
+ * The tick and the snapshot are two different questions and this is why they
+ * have two different answers. Ticking every 30s bounds how *stale* the line can
+ * be to half a minute. But nothing the line draws is finer than a minute — the
+ * row comes from the hour, the offset from `minute / 60`, the pill from
+ * `minutesToTime` — so a raw `Date.now()` handed to `useSyncExternalStore` is a
+ * different number on every tick and forces a re-render for a position that has
+ * not moved. Truncated, the odd tick produces a snapshot `Object.is`-equal to
+ * the last one and React skips the render entirely.
+ *
+ * This is the second half of a pair. The first is that `CurrentTimeIndicator`
+ * subscribes rather than the grids, so a notification reaches thirteen leaves
+ * instead of 364 drop cells — `next.config.ts` enables only the React
+ * Compiler's lint rules, not the compiler, so nothing in those cells is
+ * memoised and a grid-level re-render re-filters every appointment through two
+ * `Intl.DateTimeFormat.formatToParts` calls per cell. Truncating the snapshot
+ * then halves what is left: sixty notifications an hour instead of a hundred
+ * and twenty, each one an actual movement.
+ *
+ * `requestNow()` rather than a bare `Date.now()`: rule 3's seam. Nothing here
+ * is a Server Component, but "every time-dependent read is greppable and
+ * stubbable" is the point of the door and it costs nothing to use it.
+ */
+function currentMinute(): number {
+  return Math.floor(requestNow() / MINUTE_MS) * MINUTE_MS
+}
+
+/**
+ * The clock, as an external store rather than as state.
+ *
+ * The hydration problem is real and it is the reason for the shape. The server
+ * renders this markup, the client hydrates it a moment later, and any "now"
+ * either of them reads independently will differ — so the *first* client render
+ * has to produce exactly the server's markup, whatever the clock says.
+ *
+ * The choice made here is: the server draws no line at all, and it appears
+ * immediately after hydration. `getServerSnapshot` returns 0, React uses it for
+ * the hydration render too, so the two agree by construction rather than by
+ * luck. Passing the server's instant down instead would have been the other
+ * option, but it would have shipped a line drawn at request time — stale by
+ * however long the response and the parse took — and it would have needed a
+ * prop threaded through four components to say something the browser already
+ * knows.
+ *
+ * The other reason it is a store and not `useState` + an effect: the obvious
+ * `useEffect(() => { setNow(Date.now()); … })` seeds the clock with a setState
+ * called synchronously in an effect body, which is the pattern the React
+ * Compiler lint rejects — see `useCalendarDensity` above, which is this same
+ * shape for the same reason. A setState from inside the interval CALLBACK would
+ * have been fine; it is the seeding call that is not, and this has no seeding
+ * call. `subscribe` starts the timer, `getSnapshot` reads a value only the
+ * timer writes, and React re-reads it after subscribing — so the line lands on
+ * the first commit after hydration without anyone setting state during render.
+ *
+ * One timer, module-scope, shared by every grid on the page and stopped when
+ * the last one unmounts. The value resets to 0 on the way out so a remount
+ * starts from "unknown" exactly as a fresh page does, rather than painting one
+ * frame at whatever time it was when the calendar was last on screen.
+ */
+let clockNow = 0
+const clockListeners = new Set<() => void>()
+let clockTimer: ReturnType<typeof setInterval> | null = null
+
+/* Module scope, like `subscribeToDensity`: `useSyncExternalStore` re-subscribes
+   whenever `subscribe` changes identity. */
+function subscribeToClock(onStoreChange: () => void): () => void {
+  clockListeners.add(onStoreChange)
+  if (clockTimer === null) {
+    clockNow = currentMinute()
+    clockTimer = setInterval(() => {
+      const next = currentMinute()
+      // Same minute, same snapshot, nothing to tell anyone. React would compare
+      // and bail out anyway; not calling 13 listeners to be told so is free.
+      if (next === clockNow) return
+      clockNow = next
+      for (const notify of clockListeners) notify()
+    }, CLOCK_TICK_MS)
+  }
+  return () => {
+    clockListeners.delete(onStoreChange)
+    if (clockListeners.size === 0 && clockTimer !== null) {
+      clearInterval(clockTimer)
+      clockTimer = null
+      clockNow = 0
+    }
+  }
+}
+
+function readClock(): number {
+  return clockNow
+}
+
+/** No clock on the server, and no line is what it renders. */
+function readClockOnServer(): number {
+  return 0
+}
+
+/**
+ * The current instant, in ms, re-read every {@link CLOCK_TICK_MS}. `0` means
+ * "not known yet" — the server's answer and the first client render's.
+ *
+ * Deliberately NOT converted to the studio's zone here. This returns the
+ * absolute instant and the caller runs it through `src/lib/time.ts`, because
+ * every grid wants different fields out of it and a hook that returned an
+ * object would hand `useSyncExternalStore` a fresh identity on every read.
+ */
+export function useStudioNow(): number {
+  return React.useSyncExternalStore(subscribeToClock, readClock, readClockOnServer)
+}
+
+/**
+ * Where the studio's clock is right now, or null if that cannot be drawn.
+ *
+ * Null covers three separate cases and the caller does not need to tell them
+ * apart: the clock has not been read yet (server render, first hydration
+ * render), today is not one of the dates on screen, or it is 7am and the grid
+ * starts at 8 — in which case there is nowhere honest to put the line, and
+ * clamping it to the top edge would say "it is 8am" to anyone glancing.
+ */
+export interface StudioNow {
+  /** Date key in the studio's zone — which column, not which day it is here. */
+  dateKey: string
+  /** Wall-clock hour, 0-23. Picks the row. */
+  hour: number
+  /** Wall-clock minute, 0-59. Picks the height within the row. */
+  minute: number
+  /** 'HH:MM', matching the 24-hour gutter the pill sits in. */
+  label: string
+}
+
+/**
+ * `nowMs` -> the fields the grids position from, through time.ts and nothing
+ * else. A staff member on a laptop set to Eastern still sees the line where the
+ * studio's clock says it is, because `zonedParts` is the only thing that reads
+ * an hour off an instant here — never `getHours()`.
+ */
+export function studioNowFrom(nowMs: number, timezone: string): StudioNow | null {
+  if (nowMs === 0) return null
+  const instant = new Date(nowMs)
+  const parts = zonedParts(instant, timezone)
+  return {
+    dateKey: dateKeyInTimeZone(instant, timezone),
+    hour: parts.hour,
+    minute: parts.minute,
+    label: minutesToTime(parts.hour * 60 + parts.minute),
+  }
+}
+
+/** One column of a grid, as much of it as the line needs to know. */
+export interface IndicatorColumn {
+  /** The row's React key for this column, so the tick lands on the right one. */
+  key: string
+  /** The date the column stands for. Several columns may share one (a day view). */
+  dateKey: string
+}
+
+/**
+ * The line across the book at the time it is now.
+ *
+ * It reads the clock ITSELF rather than being handed the answer. That is the
+ * whole reason this is a component and not a few lines of JSX in each grid: the
+ * subscription belongs to the smallest thing that changes when the clock moves.
+ * Both grids used to call `useStudioNow()` at their own root, which made every
+ * tick re-render every cell — 364 of them on the drag board, each re-filtering
+ * the week's appointments through `Intl` — to move one rule by one pixel. Here,
+ * a tick re-renders thirteen of these, twelve of which return null on their
+ * first line.
+ *
+ * It is therefore rendered UNCONDITIONALLY in every hour row, and decides for
+ * itself whether it is the row in question. Hoisting that test back out to the
+ * caller would put the clock back at the root and undo the point.
+ *
+ * Drawn INSIDE the hour row it belongs to rather than once over the whole grid,
+ * and offset by a percentage of that row rather than by `hourPx` × something.
+ * Both halves of that are deliberate. Neither grid gives an hour a fixed
+ * height: the row carries a `minHeight` and grows past it whenever several
+ * cards land in the same hour. A single overlay positioned from the density's
+ * pixel-per-hour would therefore be correct only on a day with nothing booked,
+ * and would slide further from its own hour with every card above it — which is
+ * exactly the reading it is there to prevent. Per-row-and-percentage cannot
+ * drift: the line is in the 14:00 row because it is a child of it, and 35
+ * minutes past is 58% of however tall that row turned out to be.
+ *
+ * It also means the density needs no reading here at all. `template` is the one
+ * thing passed in, and it is the same string the row above it is built from, so
+ * the pill lands in the gutter and the rule starts exactly on the first column
+ * whatever the zoom is set to.
+ *
+ * `aria-hidden`, and not reluctantly. The pill restates a time the operating
+ * system's own clock already announces, and the rule's meaning — "the grid
+ * above this has happened, the grid below has not" — is spatial in a way that
+ * has no useful linear reading. Announced, it would be a live region whose text
+ * changed every thirty seconds in the middle of a grid someone is navigating
+ * cell by cell, interrupting the appointments that are the actual content.
+ * Every booking it crosses keeps its own accessible name and its own time.
+ */
+export function CurrentTimeIndicator({
+  hour,
+  timezone,
+  template,
+  columns,
+}: {
+  /** The wall-clock hour of the row this is rendered in. */
+  hour: number
+  /** The diary's zone. Every field below is derived in it, never in the browser's. */
+  timezone: string
+  /** The row's own `gridTemplateColumns`, so gutter and columns line up. */
+  template: string
+  /** The row's columns, in order. */
+  columns: readonly IndicatorColumn[]
+}) {
+  const now = studioNowFrom(useStudioNow(), timezone)
+
+  // Three separate nothings, and none of them wants a line. The clock has not
+  // been read yet (server render, first hydration render); this is not the hour
+  // it is — which is also how "it is 07:00 and the grid starts at 08:00" is
+  // answered, since no row matches and nothing is clamped to the top edge
+  // implying 08:00; or the studio's today is not a column on screen.
+  if (!now || now.hour !== hour) return null
+  const column = columns.find((c) => c.dateKey === now.dateKey)
+  if (!column) return null
+
+  // The tick exists to pick today out of the other days, so it needs other days
+  // to pick it out of. A day view's columns are all the same date — on the drag
+  // board they are providers — and a mark on every one of them would say
+  // nothing.
+  const todayColumnKey =
+    new Set(columns.map((c) => c.dateKey)).size > 1 ? column.key : null
+  const minuteOfHour = now.minute
+  const label = now.label
+
+  return (
+    <div
+      aria-hidden
+      // pointer-events-none is not cosmetic: this spans every column, so
+      // without it the line would sit on top of one row of "+ Book" targets
+      // and quietly swallow the click that books them.
+      className="pointer-events-none absolute inset-x-0 z-10 grid -translate-y-1/2"
+      style={{
+        gridTemplateColumns: template,
+        top: `${(minuteOfHour / 60) * 100}%`,
+      }}
+    >
+      <div className="flex items-center justify-center px-1">
+        <span className="whitespace-nowrap rounded-full bg-[var(--color-accent)] px-1.5 py-px text-[0.625rem] leading-4 tabular-nums text-[var(--color-accent-fg)]">
+          {label}
+        </span>
+      </div>
+      {columns.map(({ key }) => (
+        <div key={key} className="relative flex items-center">
+          <span className="block h-px w-full bg-[var(--color-accent)]" />
+          {/* The tick, on the column edge where the rule meets today. */}
+          {key === todayColumnKey && (
+            <span className="absolute left-0 h-1.5 w-1.5 -translate-x-1/2 rounded-full bg-[var(--color-accent)]" />
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /** A span covering midnight to midnight is a fact about the day, not an hour. */
 function isAllDay(span: BlockedSpan): boolean {
   return span.startMinutes === 0 && span.endMinutes === 1440
@@ -472,6 +777,7 @@ function wallHour(appt: CalendarAppointment, timezone: string): number {
 export function CalendarViewComponent({
   view,
   currentDate,
+  todayKey,
   appointments,
   providers,
   timezone,
@@ -480,6 +786,7 @@ export function CalendarViewComponent({
   busy,
   closures,
   selectedProviders,
+  canSeeOtherBooks = true,
   density = DEFAULT_CALENDAR_DENSITY,
   onViewChange,
   onDateChange,
@@ -501,8 +808,6 @@ export function CalendarViewComponent({
     () => filteredAppointments.filter(isAwaitingApproval).length,
     [filteredAppointments]
   )
-
-  const todayKey = dateKeyInTimeZone(new Date(), timezone)
 
   // Whose hours to shade. With several people on screen there is no single
   // answer, so `blockedSpansForDay` falls back to studio-wide closures — an
@@ -576,8 +881,12 @@ export function CalendarViewComponent({
             <span className="tabular-nums">{pendingCount}</span> awaiting approval
           </span>
         )}
-        {selectedProviders.length > 0 && (
-          <Badge tone="neutral">{selectedProviders.length} provider(s) filtered</Badge>
+        {canSeeOtherBooks && selectedProviders.length > 0 && (
+          <Badge tone="neutral">
+            {selectedProviders.length === 1
+              ? '1 provider shown'
+              : `${selectedProviders.length} providers shown`}
+          </Badge>
         )}
       </div>
     </div>
@@ -662,6 +971,22 @@ function HourGrid({
   // dashboard's main column, where seven at 7.5rem is 892px and does not.
   const template = `${metrics.gutter} repeat(${columns.length}, minmax(${metrics.columnMin}, 1fr))`
 
+  /**
+   * What the current-time line needs to know about the columns.
+   *
+   * A column here IS its date, so key and dateKey are the same string — unlike
+   * the drag board, where a day view's columns are providers. Built once for
+   * the whole grid rather than per row.
+   *
+   * The clock itself is deliberately NOT read here. `CurrentTimeIndicator`
+   * subscribes to it, so a tick re-renders the line and not all ninety-one
+   * cells of the week; see the note on the component.
+   */
+  const indicatorColumns: IndicatorColumn[] = columns.map((column) => ({
+    key: column.dateKey,
+    dateKey: column.dateKey,
+  }))
+
   // The grid runs 08:00–20:59. A booking outside it has to be shown somewhere,
   // or a seven o'clock facial would exist only in the database.
   const offGrid = appointments.filter((appt) => {
@@ -740,7 +1065,12 @@ function HourGrid({
               return (
                 <div
                   key={hour}
-                  className="grid border-t border-[var(--color-border)]"
+                  // `relative` so the current-time line below can be positioned
+                  // against THIS hour rather than against the whole grid — the
+                  // row grows past its minHeight whenever several cards land in
+                  // it, and a line measured from the top of the book would slip
+                  // an hour or more down a busy day.
+                  className="relative grid border-t border-[var(--color-border)]"
                   style={{ gridTemplateColumns: template }}
                 >
                   <div
@@ -829,6 +1159,20 @@ function HourGrid({
                       </div>
                     )
                   })}
+
+                  {/* Last child of the row on purpose: both grids draw cards
+                      that establish their own stacking, so the line has to come
+                      after them in the DOM as well as carry a z-index.
+
+                      Rendered in every row and null in twelve of them. That is
+                      what keeps the clock's subscription off this component —
+                      testing `hour` out here would put it back. */}
+                  <CurrentTimeIndicator
+                    hour={hour}
+                    timezone={timezone}
+                    template={template}
+                    columns={indicatorColumns}
+                  />
                 </div>
               )
             })}

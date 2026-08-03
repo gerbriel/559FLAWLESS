@@ -11,6 +11,7 @@ import {
   Rows3,
   Settings2,
   Users,
+  X,
 } from 'lucide-react'
 import { ButtonLink } from '@/components/ui/button'
 import { Avatar, Panel, Toolbar } from '@/components/ui/dashboard'
@@ -54,6 +55,24 @@ interface CalendarToolbarProps {
   providers: CalendarToolbarProvider[]
   /** Empty means everyone — the filter's existing meaning, kept. */
   selectedProviders: string[]
+  /**
+   * The signed-in staff member, so the menu can say which name is theirs.
+   *
+   * The diary now opens on one person's book rather than the studio's, and a
+   * filter that arrives already applied has to be legible on sight: the chip
+   * carries the name, and the row it came from is marked "You".
+   */
+  viewerId: string
+  /**
+   * Whether the diary this toolbar steers holds more than one person's work.
+   *
+   * A provider is sent their own appointments and nobody else's, so the staff
+   * control is not rendered for them at all: clearing a filter over a
+   * single-person dataset redraws the identical week under the label "All
+   * staff", which is worse than having no control. Decided on the server by the
+   * same boolean that narrows the query, so the two cannot disagree.
+   */
+  canSeeOtherBooks: boolean
   /**
    * Where the gear goes for this viewer. Decided on the server by role: a
    * manager gets the studio's scheduling rules, everyone else gets their own
@@ -279,6 +298,8 @@ export function CalendarToolbar({
   todayKey,
   providers,
   selectedProviders,
+  viewerId,
+  canSeeOtherBooks,
   settingsHref,
   canBookForClients,
   density,
@@ -290,8 +311,11 @@ export function CalendarToolbar({
   const onToday = currentDate === todayKey
 
   // Empty has always meant "everyone", so the chip says so rather than
-  // pretending nobody is shown.
+  // pretending nobody is shown. One person gets their name — the diary usually
+  // opens filtered now, and a control reading "Filters" over a week that is
+  // quietly missing four colleagues is how you end up trusting an empty Tuesday.
   const chosen = providers.filter((p) => selectedProviders.includes(p.id))
+  const filtered = selectedProviders.length > 0
   const staffLabel =
     chosen.length === 0
       ? 'All staff'
@@ -419,40 +443,73 @@ export function CalendarToolbar({
             ))}
           </ToolbarMenu>
 
-          <ToolbarMenu
-            label="Staff shown"
-            trigger={
-              <>
-                {chosen.length === 1 ? (
-                  <Avatar name={fullNameOf(chosen[0])} size="sm" className="-ml-1.5" />
-                ) : (
-                  <Users className="h-4 w-4 text-[var(--color-muted)]" strokeWidth={1.5} aria-hidden />
-                )}
-                <span>{staffLabel}</span>
-              </>
-            }
-          >
-            <MenuRow
-              role="menuitemradio"
-              checked={selectedProviders.length === 0}
-              onSelect={() => onProviderFilterChange([])}
-            >
-              Everyone
-            </MenuRow>
+          {/* Whose book, and the way out of it. Kept as one tight group rather
+              than two toolbar controls: the second button only exists to undo
+              the first, and spacing is what says so.
 
-            <div className="my-1 h-px bg-[var(--color-border)]" aria-hidden />
-
-            {providers.map((provider) => (
-              <MenuRow
-                key={provider.id}
-                role="menuitemcheckbox"
-                checked={selectedProviders.includes(provider.id)}
-                onSelect={() => toggleProvider(provider.id)}
+              Absent entirely for a provider — see `canSeeOtherBooks`. Their
+              diary holds one person, and it is them. */}
+          {canSeeOtherBooks && (
+            <div className="flex items-center gap-1">
+              <ToolbarMenu
+                label="Staff shown"
+                trigger={
+                  <>
+                    {chosen.length === 1 ? (
+                      <Avatar name={fullNameOf(chosen[0])} size="sm" className="-ml-1.5" />
+                    ) : (
+                      <Users
+                        className="h-4 w-4 text-[var(--color-muted)]"
+                        strokeWidth={1.5}
+                        aria-hidden
+                      />
+                    )}
+                    <span>{staffLabel}</span>
+                  </>
+                }
               >
-                {fullNameOf(provider)}
-              </MenuRow>
-            ))}
-          </ToolbarMenu>
+                <MenuRow
+                  role="menuitemradio"
+                  checked={selectedProviders.length === 0}
+                  onSelect={() => onProviderFilterChange([])}
+                >
+                  Everyone
+                </MenuRow>
+
+                <div className="my-1 h-px bg-[var(--color-border)]" aria-hidden />
+
+                {providers.map((provider) => (
+                  <MenuRow
+                    key={provider.id}
+                    role="menuitemcheckbox"
+                    checked={selectedProviders.includes(provider.id)}
+                    // Which of these names is mine. The diary arrives filtered
+                    // to it, so being able to find it again is the whole
+                    // override.
+                    hint={provider.id === viewerId ? 'You' : undefined}
+                    onSelect={() => toggleProvider(provider.id)}
+                  >
+                    {fullNameOf(provider)}
+                  </MenuRow>
+                ))}
+              </ToolbarMenu>
+
+              {/* Back to the whole studio in one tap. A default nobody chose
+                  has to be undoable without first working out where it came
+                  from, and "open the menu, then find Everyone" is two moves and
+                  a hunt. */}
+              {filtered && (
+                <button
+                  type="button"
+                  onClick={() => onProviderFilterChange([])}
+                  className="flex h-11 w-11 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-foreground)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]"
+                >
+                  <X className="h-4 w-4" strokeWidth={2} aria-hidden />
+                  <span className="sr-only">Show everyone</span>
+                </button>
+              )}
+            </div>
+          )}
 
           {/* The three places the diary sends you. All front-desk-and-above,
               which is the same gate that decides whether an empty slot is

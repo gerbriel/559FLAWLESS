@@ -33,6 +33,7 @@ import {
 import {
   isAwaitingApproval,
   CALENDAR_DENSITY,
+  CurrentTimeIndicator,
   DEFAULT_CALENDAR_DENSITY,
   PENDING_CARD_CLASS,
   PENDING_HATCH,
@@ -274,6 +275,16 @@ export function DragScheduleBoard({
   const template = `${metrics.gutter} repeat(${columns.length}, minmax(${metrics.columnMin}, 1fr))`
 
   /**
+   * The current-time line reads the clock itself — see `CurrentTimeIndicator`.
+   * It is handed `columns` because what a column IS differs between the two
+   * views and only this file knows: a week is seven dates, a day is one date
+   * across several providers, so `key` and `dateKey` come apart on a day and
+   * the indicator needs both. Nothing about "now" is computed at this level,
+   * which is the point — a tick that reached here would re-render all 364 drop
+   * cells to move a rule by a pixel.
+   */
+
+  /**
    * Why each column is (partly) unbookable. Computed per column rather than
    * once for the whole board: on a day view every column is a different
    * person's hours, and shading them all with one provider's would be a lie.
@@ -486,7 +497,12 @@ export function DragScheduleBoard({
           {hours.map((hour) => (
             <div
               key={hour}
-              className="grid border-b border-[var(--color-border)] last:border-b-0"
+              // `relative` so the current-time line is positioned against THIS
+              // hour. A row is four quarter-hour drop cells at `quarterPx`, but
+              // only until a card lands in one and pushes it taller — a line
+              // measured from the top of the board would slide off its own hour
+              // on any day with bookings above it.
+              className="relative grid border-b border-[var(--color-border)] last:border-b-0"
               style={{ gridTemplateColumns: template }}
             >
               <div
@@ -584,6 +600,19 @@ export function DragScheduleBoard({
                   </div>
                 )
               })}
+
+              {/* After the columns in the DOM as well as above them in z: the
+                  cards on this board are `relative`, so source order is what
+                  settles it between two positioned siblings.
+
+                  In every row, null in twelve of them — the hour test lives
+                  inside, so the clock's subscription does too. */}
+              <CurrentTimeIndicator
+                hour={hour}
+                timezone={timezone}
+                template={template}
+                columns={columns}
+              />
             </div>
           ))}
         </div>

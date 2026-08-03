@@ -7,7 +7,7 @@ import { CircleDashed } from 'lucide-react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Badge } from '@/components/ui/badge'
 import { formatMoney } from '@/lib/utils'
-import { addDaysToDateKey, dateKeyInTimeZone, dayLabelForDateKey } from '@/lib/time'
+import { addDaysToDateKey, dayLabelForDateKey } from '@/lib/time'
 import type {
   ProviderSchedule,
   AvailabilityBlockRow,
@@ -49,6 +49,22 @@ interface CalendarClientProps {
   initialDate: string
   initialView: CalendarView
   /**
+   * Today, in the diary's zone, read once on the server through `requestNow()`.
+   *
+   * A prop rather than a `new Date()` here, for two reasons that point the same
+   * way. This component is server-rendered and then hydrated, so a clock read
+   * during render is read twice — once by the server, once by the browser — and
+   * the two straddle midnight often enough to matter for something that decides
+   * which column is in accent and whether "Jump to today" is already there. And
+   * a bare clock read during render is exactly what rule 3 routes through
+   * `requestNow()`: one seam, greppable, stubbable.
+   *
+   * It does not tick, and is not meant to. The current-time line has its own
+   * clock (`useStudioNow`) precisely because that one has to move; this is the
+   * day the page was drawn for.
+   */
+  todayKey: string
+  /**
    * Where the toolbar's gear goes for this viewer. Worked out on the server by
    * role, because the two candidates are gated differently — see the page.
    */
@@ -70,7 +86,34 @@ interface CalendarClientProps {
    * reason: all three pages redirect anyone below front desk.
    */
   canBookForClients: boolean
+  /**
+   * The signed-in staff member. Used to say which of the names in the staff
+   * menu is theirs — with the diary now opening on one person by default, "whose
+   * book is this" has to be answerable without counting heads.
+   */
+  viewerId: string
+  /**
+   * Whose book to open on: their own where they have one, everyone otherwise,
+   * or whatever they last chose. Worked out on the server, because it has to be
+   * right on the first paint — see the page, which explains the test and the
+   * cookie behind it.
+   */
+  initialProviders: string[]
+  /**
+   * Whether this viewer is sent the whole studio's book or only their own.
+   * Decided on the server by the same boolean that narrows the query, so the
+   * toolbar never offers a staff filter over data that holds one person.
+   */
+  canSeeOtherBooks: boolean
 }
+
+/**
+ * Where "whose book I was looking at" is stored. Spelled again in
+ * `src/app/dashboard/calendar/page.tsx`, which reads it — see the note there
+ * for why the constant cannot be shared across the server/client boundary.
+ */
+const STAFF_COOKIE = 'dash_cal_staff'
+const STAFF_COOKIE_MAX_AGE = 60 * 60 * 24 * 365
 
 export function CalendarClient({
   initialAppointments,
@@ -82,8 +125,12 @@ export function CalendarClient({
   closures,
   initialDate,
   initialView,
+  todayKey,
   settingsHref,
   canBookForClients,
+  viewerId,
+  initialProviders,
+  canSeeOtherBooks,
 }: CalendarClientProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -91,10 +138,9 @@ export function CalendarClient({
   const [view, setView] = React.useState<CalendarView>(initialView)
   const [currentDate, setCurrentDate] = React.useState(initialDate)
   const [selectedAppointment, setSelectedAppointment] = React.useState<CalendarAppointment | null>(null)
-  const [selectedProviders, setSelectedProviders] = React.useState<string[]>([])
+  const [selectedProviders, setSelectedProviders] = React.useState<string[]>(initialProviders)
 
   const canDrag = useDragCapable()
-  const todayKey = dateKeyInTimeZone(new Date(), timezone)
 
   /**
    * How tightly the book is drawn, saved per browser like the view is.
@@ -141,6 +187,33 @@ export function CalendarClient({
   const handleDateChange = (date: string) => {
     setCurrentDate(date)
     pushRange(date, view)
+  }
+
+  /**
+   * Changing who is on the board, and remembering it.
+   *
+   * Written straight from the browser rather than through a server action, for
+   * the same reason the sidebar's width is: this is a preference, not a
+   * mutation, and a round trip would put a spinner in front of a filter that is
+   * instant today. The server reads it on the next load, so the diary opens on
+   * the book you left it on rather than snapping back a beat later.
+   *
+   * A click handler, not an effect — the React Compiler lint in this repo
+   * rejects setState in an effect body, and there is nothing here that needs to
+   * happen at mount anyway. The server already decided the opening state.
+   */
+  const handleProviderFilterChange = (providerIds: string[]) => {
+    setSelectedProviders(providerIds)
+    const secure = window.location.protocol === 'https:' ? '; secure' : ''
+    // Empty means everyone, and an empty cookie value cannot say that — hence
+    // the literal. The page treats an unreadable or stale value as "no
+    // preference" and falls back to whose book this person owns.
+    const value = providerIds.length === 0 ? 'all' : providerIds.join(',')
+    // Stamped with whose preference it is. A cookie belongs to a browser and
+    // this belongs to a person; the studio shares machines, and the page throws
+    // the value away rather than opening the next person who signs in here on
+    // somebody else's book.
+    document.cookie = `${STAFF_COOKIE}=${viewerId}:${value}; path=/; max-age=${STAFF_COOKIE_MAX_AGE}; samesite=lax${secure}`
   }
 
   const handleAppointmentClick = (appointment: CalendarAppointment) => {
@@ -196,13 +269,15 @@ export function CalendarClient({
         todayKey={todayKey}
         providers={providers}
         selectedProviders={selectedProviders}
+        viewerId={viewerId}
+        canSeeOtherBooks={canSeeOtherBooks}
         settingsHref={settingsHref}
         canBookForClients={canBookForClients}
         density={density}
         onViewChange={handleViewChange}
         onDateChange={handleDateChange}
         onDensityChange={setDensity}
-        onProviderFilterChange={setSelectedProviders}
+        onProviderFilterChange={handleProviderFilterChange}
       />
 
       <div className="mt-6">
@@ -249,8 +324,18 @@ export function CalendarClient({
                   <span className="tabular-nums">{pendingCount}</span> awaiting approval
                 </span>
               )}
-              {selectedProviders.length > 0 && (
-                <Badge tone="neutral">{selectedProviders.length} provider(s) filtered</Badge>
+              {/* Only where there is a filter to have used. A provider is sent
+                  their own book and nothing else, and the toolbar hides the
+                  staff control for them — a permanent "1 provider" note would
+                  claim colleagues were being hidden, offer no way to stop it,
+                  and be wrong. Matches the calendar grid's copy exactly, so the
+                  two surfaces still close the same way. */}
+              {canSeeOtherBooks && selectedProviders.length > 0 && (
+                <Badge tone="neutral">
+                  {selectedProviders.length === 1
+                    ? '1 provider shown'
+                    : `${selectedProviders.length} providers shown`}
+                </Badge>
               )}
             </div>
           </>
@@ -258,6 +343,7 @@ export function CalendarClient({
           <CalendarViewComponent
             view={view}
             currentDate={currentDate}
+            todayKey={todayKey}
             appointments={initialAppointments}
             providers={providers}
             timezone={timezone}
@@ -266,12 +352,13 @@ export function CalendarClient({
             busy={busy}
             closures={closures}
             selectedProviders={selectedProviders}
+            canSeeOtherBooks={canSeeOtherBooks}
             density={density}
             onViewChange={handleViewChange}
             onDateChange={handleDateChange}
             onAppointmentClick={handleAppointmentClick}
             onSlotClick={canBookForClients ? handleSlotClick : undefined}
-            onProviderFilterChange={setSelectedProviders}
+            onProviderFilterChange={handleProviderFilterChange}
           />
         )}
       </div>
