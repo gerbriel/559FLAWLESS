@@ -4,10 +4,12 @@ import { ButtonLink } from '@/components/ui/button'
 import { PageHeader } from '@/components/ui/dashboard'
 import {
   ServiceCategoryManager,
+  type CategoryFormTemplate,
+  type CategoryServiceGates,
   type CategoryUsage,
   type ManagedCategory,
 } from '@/components/shared/ServiceCategoryManager'
-import { isManager, type UserRole } from '@/types/database'
+import { isAdmin, isManager, type UserRole } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,6 +37,15 @@ export const dynamic = 'force-dynamic'
  * site reads — so providers and the front desk see the menu structure. The
  * controls are manager-and-above, matching the policy rather than guessing at
  * it.
+ *
+ * The forms and the services' booking gates are read here for the same reason
+ * the delete costs are: so the panel can describe what is actually true before
+ * anything is pressed. Neither is stored on the category. The forms are read
+ * from `consent_forms` / `intake_forms`, whose `category_ids` is the storage
+ * the panel writes; the gates are read off the services themselves, which the
+ * page was already querying, because there is no category-level copy of a gate
+ * and inventing one would be the second source of truth this screen exists to
+ * avoid.
  */
 export default async function ServiceCategoriesPage() {
   const supabase = await createClient()
@@ -50,31 +61,61 @@ export default async function ServiceCategoriesPage() {
     .maybeSingle()
 
   // Least privilege on a missing profile, as everywhere else in the dashboard.
-  const canManage = isManager((profile?.role ?? 'provider') as UserRole)
+  const role = (profile?.role ?? 'provider') as UserRole
+  const canManage = isManager(role)
 
-  const [{ data: categories }, { data: services }, { data: schedules }, { data: rates }] =
-    await Promise.all([
-      supabase
-        .from('service_categories')
-        .select('id, name, slug, description, image_url, is_intimate, sort_order, is_active')
-        .order('sort_order')
-        .order('name'),
-      // Hidden services count too: `restrict` does not care whether a row is
-      // listed, only that it exists.
-      supabase.from('services').select('id, category_id, is_active'),
-      supabase
-        .from('notification_schedules')
-        .select('id, category_id')
-        .not('category_id', 'is', null),
-      // Readable only by someone who may see pay; when RLS says no this comes
-      // back empty and the delete simply has one fewer thing to warn about.
-      supabase.from('commission_category_rates').select('plan_id, category_id'),
-    ])
+  const [
+    { data: categories },
+    { data: services },
+    { data: schedules },
+    { data: rates },
+    intake,
+    consent,
+  ] = await Promise.all([
+    supabase
+      .from('service_categories')
+      .select('id, name, slug, description, image_url, is_intimate, sort_order, is_active')
+      .order('sort_order')
+      .order('name'),
+    // Hidden services count too: `restrict` does not care whether a row is
+    // listed, only that it exists — and nor does a booking gate, which is
+    // still the rule the day the service is listed again. The gate columns
+    // ride along on the query that was already being made.
+    supabase
+      .from('services')
+      .select(
+        'id, category_id, name, is_active, price_cents, is_intimate, requires_age_verification, min_age, requires_consultation, requires_booking_approval, patch_test_hours, deposit_cents, cancellation_window_hours'
+      )
+      .order('sort_order')
+      .order('name'),
+    supabase
+      .from('notification_schedules')
+      .select('id, category_id')
+      .not('category_id', 'is', null),
+    // Readable only by someone who may see pay; when RLS says no this comes
+    // back empty and the delete simply has one fewer thing to warn about.
+    supabase.from('commission_category_rates').select('plan_id, category_id'),
+    // Active only: a superseded version is never asked for, so showing it as a
+    // requirement of this category would be describing something that cannot
+    // happen. Intake first — a client fills in a health history before being
+    // asked to consent to anything, and the list reads in that order.
+    supabase
+      .from('intake_forms')
+      .select('id, title, service_ids, category_ids')
+      .eq('is_active', true)
+      .order('title'),
+    supabase
+      .from('consent_forms')
+      .select('id, title, service_ids, category_ids')
+      .eq('is_active', true)
+      .order('title'),
+  ])
 
   const cats = (categories ?? []) as ManagedCategory[]
+  const svcs = (services ?? []) as CategoryServiceGates[]
 
   const usage: CategoryUsage[] = cats.map((c) => {
-    const mine = (services ?? []).filter((s) => s.category_id === c.id)
+    const mine = svcs.filter((s) => s.category_id === c.id)
     return {
       category_id: c.id,
       services: mine.length,
@@ -83,6 +124,29 @@ export default async function ServiceCategoriesPage() {
       commission_rates: (rates ?? []).filter((r) => r.category_id === c.id).length,
     }
   })
+
+  // Null rather than empty when either read failed: "no forms exist" and "you
+  // cannot see the forms" are different sentences, and the panel says whichever
+  // is true instead of implying the first.
+  const forms: CategoryFormTemplate[] | null =
+    intake.error || consent.error
+      ? null
+      : [
+          ...(intake.data ?? []).map((f) => ({
+            kind: 'intake' as const,
+            id: f.id,
+            title: f.title,
+            service_ids: f.service_ids ?? [],
+            category_ids: f.category_ids ?? [],
+          })),
+          ...(consent.data ?? []).map((f) => ({
+            kind: 'consent' as const,
+            id: f.id,
+            title: f.title,
+            service_ids: f.service_ids ?? [],
+            category_ids: f.category_ids ?? [],
+          })),
+        ]
 
   const live = cats.filter((c) => c.is_active).length
 
@@ -109,7 +173,17 @@ export default async function ServiceCategoriesPage() {
       />
 
       <div className="mt-8">
-        <ServiceCategoryManager categories={cats} usage={usage} canManage={canManage} />
+        <ServiceCategoryManager
+          categories={cats}
+          usage={usage}
+          services={svcs}
+          forms={forms}
+          canManage={canManage}
+          // Not the same permission: 022's trigger refuses the safety gates
+          // from a manager, column by column, so those controls are admin's
+          // and the rest of this screen is not.
+          isAdmin={isAdmin(role)}
+        />
       </div>
     </div>
   )
