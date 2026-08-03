@@ -164,6 +164,13 @@ export default async function SettingsPage() {
           visible: userIsManager,
         },
         {
+          href: '/dashboard/settings/waitlist',
+          label: 'Waitlist rules',
+          description:
+            'What happens to a cancelled appointment: who on the waitlist is told, how many of them at once, and how long the person at the front has it to themselves before the next one hears.',
+          visible: userIsAdmin,
+        },
+        {
           href: '/dashboard/settings/notifications',
           label: 'Client notifications',
           description:

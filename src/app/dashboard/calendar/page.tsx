@@ -141,6 +141,11 @@ export default async function CalendarPage({ searchParams }: Props) {
         closures={closures ?? []}
         initialDate={startKey}
         initialView={view}
+        // The same gate /dashboard/appointments/book-for-client enforces on the
+        // server. The diary is visible to every staff member, but only front
+        // desk and above may book on someone else's behalf — so for a provider
+        // an empty slot is inert rather than a one-way trip to /dashboard.
+        canBookForClients={isFrontDesk(role)}
       />
     </div>
   )

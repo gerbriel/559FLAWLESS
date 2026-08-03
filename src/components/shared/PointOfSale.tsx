@@ -1,15 +1,16 @@
 'use client'
 
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Image from 'next/image'
 import Link from 'next/link'
 import { toast } from 'sonner'
-import { Search, Plus, Minus, Trash2, ExternalLink, Check } from 'lucide-react'
+import { Search, Plus, Minus, Trash2, ExternalLink, Check, Package } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Field, Input, Select } from '@/components/ui/field'
 import { createClient } from '@/lib/supabase/client'
-import { formatMoney } from '@/lib/utils'
+import { cn, formatMoney } from '@/lib/utils'
 import {
   barcodeVariants,
   matchProductByBarcode,
@@ -30,6 +31,8 @@ export interface SellableProduct {
   stock_qty: number
   unit: string
   external_url: string | null
+  /** The product shot. Optional so an older page keeps compiling. */
+  image_url?: string | null
   brand: string | null
 }
 
@@ -53,12 +56,33 @@ interface Receipt {
 }
 
 /**
+ * The tile that just changed, and which way.
+ *
+ * `seq` is what makes a second tap on the same tile replay the animation: it
+ * keys the element, so React remounts it rather than leaving a finished
+ * animation sitting there.
+ */
+interface Cue {
+  id: number
+  dir: 'add' | 'remove'
+  seq: number
+  said: string
+}
+
+/**
  * The counter till.
  *
  * Built around what actually happens in the room: someone is standing there
- * with a bottle, and the sale should take seconds. So the product list is a
- * single filter box, the cart is always visible, and nothing needs a client
- * account — a walk-in is just a name.
+ * with a bottle, and the sale should take seconds. So products are picked by
+ * sight — the photo on the shelf, at the size of the bottle in your hand —
+ * with a plus and a minus under it and nothing to read. The cart is always
+ * visible, and nothing needs a client account: a walk-in is just a name.
+ *
+ * Every tap answers on the tile itself, because the eye is on the counter and
+ * not on the panel in the corner: a wash of colour, a ±1 rising out of the
+ * photo, and then the durable part — the tile keeps an accent frame and a
+ * count for as long as it is in the sale. That last bit is the one that
+ * survives reduced-motion and a glance three seconds later.
  *
  * Out-of-stock items stay visible rather than disappearing, because the useful
  * answer is not "we don't have it" but "we can ship it to you" — the studio's
@@ -84,6 +108,22 @@ export function PointOfSale({
   const [receipt, setReceipt] = useState<Receipt | null>(null)
   const [lastScan, setLastScan] = useState<string | null>(null)
   const [camera, setCamera] = useState(false)
+  const [cue, setCue] = useState<Cue | null>(null)
+  const cueSeq = useRef(0)
+
+  // One cue at a time, cleared a beat after the animation ends. Guarded by seq
+  // so a later tap's timer is the only one that can retire it.
+  useEffect(() => {
+    if (!cue) return
+    const seq = cue.seq
+    const timer = setTimeout(() => setCue((c) => (c?.seq === seq ? null : c)), 850)
+    return () => clearTimeout(timer)
+  }, [cue])
+
+  function flash(id: number, dir: 'add' | 'remove', said: string) {
+    cueSeq.current += 1
+    setCue({ id, dir, seq: cueSeq.current, said })
+  }
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -101,18 +141,43 @@ export function PointOfSale({
   const tax = Math.round(subtotal * taxRate)
   const total = subtotal + tax
 
+  /**
+   * Add one of something, and say so on its tile.
+   *
+   * The shelf ceiling is refused out here rather than inside the updater: a
+   * toast raised from a state updater is a side effect React is entitled to
+   * run twice. The updater still clamps, so the count stays honest — it just
+   * does it quietly.
+   */
   function add(product: SellableProduct) {
+    const inCart = lines.find((l) => l.product.id === product.id)?.qty ?? 0
+    if (inCart >= product.stock_qty) {
+      toast.error(`Only ${product.stock_qty} ${product.unit} of ${product.name} on the shelf.`)
+      return
+    }
+
     setLines((cur) => {
       const existing = cur.find((l) => l.product.id === product.id)
-      if (existing) {
-        if (existing.qty >= product.stock_qty) {
-          toast.error(`Only ${product.stock_qty} ${product.unit} of ${product.name} on the shelf.`)
-          return cur
-        }
-        return cur.map((l) => (l.product.id === product.id ? { ...l, qty: l.qty + 1 } : l))
-      }
-      return [...cur, { product, qty: 1 }]
+      if (!existing) return [...cur, { product, qty: 1 }]
+      return cur.map((l) =>
+        l.product.id === product.id ? { ...l, qty: Math.min(l.qty + 1, product.stock_qty) } : l
+      )
     })
+    flash(product.id, 'add', `Added ${product.name}. ${inCart + 1} in this sale.`)
+  }
+
+  /** Take one back off. The minus under the photo, and the one in the cart. */
+  function subtract(product: SellableProduct) {
+    const inCart = lines.find((l) => l.product.id === product.id)?.qty ?? 0
+    if (inCart <= 0) return
+    setQty(product.id, inCart - 1)
+    flash(
+      product.id,
+      'remove',
+      inCart === 1
+        ? `Removed ${product.name} from this sale.`
+        : `${product.name}, ${inCart - 1} in this sale.`
+    )
   }
 
   /**
@@ -147,9 +212,9 @@ export function PointOfSale({
         return
       case 'match': {
         const p = result.product
-        // Checked here rather than left to `add`, which refuses inside a state
-        // updater — scanning a fourth of three would otherwise show the refusal
-        // and a cheerful confirmation side by side.
+        // Checked here as well as in `add`, so that scanning a fourth of three
+        // shows the refusal on its own rather than beside a cheerful
+        // confirmation.
         const inCart = lines.find((l) => l.product.id === p.id)?.qty ?? 0
         if (inCart >= p.stock_qty) {
           toast.error(
@@ -157,6 +222,9 @@ export function PointOfSale({
           )
           return
         }
+        // The photo and brand live on the till's own copy of the row; a scan
+        // that came back off the network has neither.
+        const known = products.find((row) => row.id === p.id)
         add({
           id: p.id,
           name: p.name,
@@ -166,7 +234,8 @@ export function PointOfSale({
           stock_qty: p.stock_qty,
           unit: p.unit,
           external_url: p.external_url,
-          brand: products.find((row) => row.id === p.id)?.brand ?? null,
+          image_url: known?.image_url ?? null,
+          brand: known?.brand ?? null,
         })
         toast.success(`${p.name} — ${formatMoney(p.price_cents)}`)
       }
@@ -368,59 +437,162 @@ export function PointOfSale({
             Nothing matches &ldquo;{search}&rdquo;.
           </p>
         ) : (
-          <ul className="mt-5 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
+          <ul className="mt-5 grid grid-cols-2 gap-px border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-3 xl:grid-cols-4">
             {filtered.map((p) => {
               const inCart = lines.find((l) => l.product.id === p.id)?.qty ?? 0
               const remaining = p.stock_qty - inCart
               const soldOut = p.stock_qty <= 0
+              const here = cue?.id === p.id ? cue : null
 
               return (
-                <li key={p.id} className="flex items-center justify-between gap-4 py-3">
-                  <div className="min-w-0">
-                    <span className="block truncate">{p.name}</span>
-                    <span className="text-xs text-[var(--color-muted)]">
-                      {p.brand ? `${p.brand} · ` : ''}
+                <li
+                  key={p.id}
+                  className={cn(
+                    'flex flex-col bg-[var(--color-surface)] p-3',
+                    // The part of the answer that outlives the animation.
+                    inCart > 0 && 'shadow-[inset_0_0_0_2px_var(--color-accent)]'
+                  )}
+                >
+                  <div className="relative aspect-square w-full overflow-hidden bg-[var(--color-linen)] dark:bg-[var(--color-background)]">
+                    {p.image_url ? (
+                      <Image
+                        src={p.image_url}
+                        alt=""
+                        fill
+                        sizes="(max-width: 640px) 45vw, (max-width: 1280px) 28vw, 15rem"
+                        // Transparent PNGs of a bottle — contained with padding,
+                        // never cropped.
+                        className="object-contain p-3"
+                      />
+                    ) : (
+                      <div className="flex h-full items-center justify-center">
+                        <Package
+                          className="h-8 w-8 text-[var(--color-muted)]"
+                          strokeWidth={1}
+                          aria-hidden
+                        />
+                      </div>
+                    )}
+
+                    {inCart > 0 && (
+                      <span className="absolute left-0 top-0 flex h-7 min-w-7 items-center justify-center bg-[var(--color-accent)] px-1.5 text-sm font-medium tabular-nums text-[var(--color-accent-fg)]">
+                        {inCart}
+                      </span>
+                    )}
+
+                    {/* Only for something the studio actually keeps and has run
+                        out of. Most of the catalogue ships from the store and
+                        has never been on the shelf — the button below says so,
+                        and a badge on all forty of them says nothing. */}
+                    {soldOut && !p.external_url && (
+                      <span className="absolute right-1.5 top-1.5">
+                        <Badge tone="neutral" size="sm">
+                          Out
+                        </Badge>
+                      </span>
+                    )}
+
+                    {here && (
+                      // Keyed by seq: a second tap remounts this, which is what
+                      // replays the animation instead of leaving a finished one.
+                      <span key={here.seq} className="pointer-events-none absolute inset-0" aria-hidden>
+                        <span
+                          className={cn(
+                            'pos-flash absolute inset-0 border-2',
+                            here.dir === 'add'
+                              ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/25'
+                              : 'border-[var(--color-stone)] bg-[var(--color-stone)]/30'
+                          )}
+                        />
+                        <span
+                          className={cn(
+                            'pos-cue display absolute inset-0 flex items-center justify-center text-4xl',
+                            here.dir === 'add'
+                              ? 'text-[var(--color-clay-deep)] dark:text-[var(--color-accent)]'
+                              : 'text-[var(--color-stone)]'
+                          )}
+                        >
+                          {here.dir === 'add' ? '+1' : '−1'}
+                        </span>
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="mt-3 flex-1">
+                    <span className="line-clamp-2 text-sm leading-snug">{p.name}</span>
+                    <span className="mt-1 block text-xs text-[var(--color-muted)]">
+                      {/* Externally fulfilled stock carries no price here on
+                          purpose — the marketplace owns it, and $0.00 is worse
+                          than silence. */}
+                      {p.price_cents > 0 && (
+                        <>
+                          <span className="tabular-nums">{formatMoney(p.price_cents)}</span>
+                          {' · '}
+                        </>
+                      )}
                       {soldOut ? (
-                        <span className="text-amber-700 dark:text-amber-400">Out of stock</span>
+                        p.external_url ? (
+                          'Sold from the store'
+                        ) : (
+                          <span className="text-amber-700 dark:text-amber-400">Out of stock</span>
+                        )
                       ) : (
                         `${remaining} ${p.unit} left`
                       )}
                     </span>
                   </div>
 
-                  <div className="flex shrink-0 items-center gap-3">
-                    <span className="tabular-nums text-sm">{formatMoney(p.price_cents)}</span>
-                    {soldOut ? (
-                      p.external_url ? (
-                        <a
-                          href={p.external_url}
-                          target="_blank"
-                          rel="noreferrer noopener"
-                          className="label-caps flex min-h-11 items-center gap-1 px-2 text-[var(--color-accent)]"
-                        >
-                          Ship it
-                          <ExternalLink className="h-3 w-3" strokeWidth={2} />
-                        </a>
-                      ) : (
-                        <Badge tone="neutral">None left</Badge>
-                      )
+                  {soldOut ? (
+                    p.external_url ? (
+                      <a
+                        href={p.external_url}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        className="label-caps mt-3 flex min-h-11 items-center justify-center gap-1.5 border border-[var(--color-border)] text-[var(--color-accent)] hover:border-[var(--color-accent)]"
+                      >
+                        Ship it
+                        <ExternalLink className="h-3 w-3" strokeWidth={2} />
+                      </a>
                     ) : (
-                      <Button
-                        size="sm"
-                        variant="subtle"
+                      <p className="label-caps mt-3 flex min-h-11 items-center justify-center border border-dashed border-[var(--color-border)] text-[var(--color-muted)]">
+                        None left
+                      </p>
+                    )
+                  ) : (
+                    <div className="mt-3 flex items-stretch border border-[var(--color-border)]">
+                      <button
+                        type="button"
+                        onClick={() => subtract(p)}
+                        disabled={inCart <= 0}
+                        className="flex min-h-11 flex-1 items-center justify-center hover:bg-[var(--color-linen)] disabled:opacity-30 disabled:hover:bg-transparent dark:hover:bg-[var(--color-background)]"
+                      >
+                        <Minus className="h-4 w-4" strokeWidth={2} aria-hidden />
+                        <span className="sr-only">One fewer {p.name}</span>
+                      </button>
+                      <span className="flex w-10 shrink-0 items-center justify-center border-x border-[var(--color-border)] text-sm tabular-nums">
+                        {inCart}
+                      </span>
+                      <button
+                        type="button"
                         onClick={() => add(p)}
                         disabled={remaining <= 0}
+                        className="flex min-h-11 flex-1 items-center justify-center hover:bg-[var(--color-linen)] disabled:opacity-30 disabled:hover:bg-transparent dark:hover:bg-[var(--color-background)]"
                       >
-                        <Plus className="h-4 w-4" strokeWidth={2} />
-                        <span className="sr-only">Add {p.name}</span>
-                      </Button>
-                    )}
-                  </div>
+                        <Plus className="h-4 w-4" strokeWidth={2} aria-hidden />
+                        <span className="sr-only">One more {p.name}</span>
+                      </button>
+                    </div>
+                  )}
                 </li>
               )
             })}
           </ul>
         )}
+
+        {/* The same answer the tile gives, for anyone not watching it. */}
+        <p className="sr-only" role="status" aria-live="polite">
+          {cue?.said ?? ''}
+        </p>
       </div>
 
       <aside className="lg:sticky lg:top-24 lg:self-start">
@@ -432,7 +604,25 @@ export function PointOfSale({
           ) : (
             <ul className="mt-4 space-y-3">
               {lines.map((l) => (
-                <li key={l.product.id} className="flex items-start justify-between gap-2 text-sm">
+                <li key={l.product.id} className="flex items-start gap-2.5 text-sm">
+                  <div className="relative h-10 w-10 shrink-0 overflow-hidden bg-[var(--color-linen)] dark:bg-[var(--color-background)]">
+                    {l.product.image_url ? (
+                      <Image
+                        src={l.product.image_url}
+                        alt=""
+                        fill
+                        sizes="40px"
+                        className="object-contain p-1"
+                      />
+                    ) : (
+                      <Package
+                        className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 text-[var(--color-muted)]"
+                        strokeWidth={1}
+                        aria-hidden
+                      />
+                    )}
+                  </div>
+
                   <div className="min-w-0 flex-1">
                     <span className="block truncate">{l.product.name}</span>
                     <span className="text-xs tabular-nums text-[var(--color-muted)]">
@@ -443,7 +633,7 @@ export function PointOfSale({
                   <div className="flex items-center gap-1">
                     <button
                       type="button"
-                      onClick={() => setQty(l.product.id, l.qty - 1)}
+                      onClick={() => subtract(l.product)}
                       className="flex h-8 w-8 items-center justify-center border border-[var(--color-border)]"
                       aria-label={`One fewer ${l.product.name}`}
                     >
@@ -452,11 +642,7 @@ export function PointOfSale({
                     <span className="w-7 text-center tabular-nums">{l.qty}</span>
                     <button
                       type="button"
-                      onClick={() =>
-                        l.qty < l.product.stock_qty
-                          ? setQty(l.product.id, l.qty + 1)
-                          : toast.error(`Only ${l.product.stock_qty} on the shelf.`)
-                      }
+                      onClick={() => add(l.product)}
                       className="flex h-8 w-8 items-center justify-center border border-[var(--color-border)]"
                       aria-label={`One more ${l.product.name}`}
                     >
@@ -464,7 +650,10 @@ export function PointOfSale({
                     </button>
                     <button
                       type="button"
-                      onClick={() => setQty(l.product.id, 0)}
+                      onClick={() => {
+                        setQty(l.product.id, 0)
+                        flash(l.product.id, 'remove', `Removed ${l.product.name} from this sale.`)
+                      }}
                       className="ml-1 flex h-8 w-8 items-center justify-center text-[var(--color-muted)] hover:text-red-700"
                       aria-label={`Remove ${l.product.name}`}
                     >

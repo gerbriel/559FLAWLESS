@@ -141,6 +141,44 @@
     height: 1px;
     background-color: var(--color-border);
   }
+
+  /* ── The till ──────────────────────────────────────────────
+     A tap on a product tile has to read from arm's length, mid-conversation,
+     with a bottle in the other hand. `.pos-flash` washes the photo in accent
+     (added) or stone (taken back off); `.pos-cue` floats the ±1 out of it.
+     Both are the transient half — the tile's accent frame and its count are
+     what remain, and they are what survives reduced motion. */
+  .pos-flash {
+    animation: pos-flash 550ms ease-out forwards;
+  }
+
+  .pos-cue {
+    animation: pos-cue 750ms ease-out forwards;
+  }
+}
+
+@keyframes pos-flash {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes pos-cue {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.85);
+  }
+  25% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-16px) scale(1);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

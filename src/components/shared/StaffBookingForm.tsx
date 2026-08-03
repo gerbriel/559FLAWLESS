@@ -8,7 +8,21 @@ import { Input, Label, Field, Select } from '@/components/ui/field'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatMoney, formatDuration, initials } from '@/lib/utils'
+import {
+  addDaysToDateKey,
+  dateKeyInTimeZone,
+  dayLabelForDateKey,
+  formatTimeInTimeZone,
+  minutesToTime,
+  zonedParts,
+} from '@/lib/time'
 import { Search, AlertTriangle } from 'lucide-react'
+
+/** Only a fallback: every bookable provider row carries its own zone. */
+const FALLBACK_TZ = 'America/Los_Angeles'
+
+/** How far ahead the date picker offers, before any preselected day. */
+const DATE_WINDOW_DAYS = 30
 
 interface Service {
   id: number
@@ -39,14 +53,28 @@ interface Props {
   services: Service[]
   providers: Provider[]
   preselectedClient?: ClientProfile
+  /** Date key handed in by a tap on an empty diary slot. */
+  preselectedDate?: string
+  /** 'HH:MM' wall clock from that same tap. Only meaningful with a date. */
+  preselectedTime?: string
 }
 
 interface TimeSlot {
+  /** Absolute ISO instant — what the booking API is given. */
   time: string
+  /** e.g. '9:00 AM', rendered in the provider's zone. */
   display: string
+  /** 'HH:MM' wall clock in the provider's zone — how a diary tap is matched. */
+  wall: string
 }
 
-export function StaffBookingForm({ services, providers, preselectedClient }: Props) {
+export function StaffBookingForm({
+  services,
+  providers,
+  preselectedClient,
+  preselectedDate,
+  preselectedTime,
+}: Props) {
   const router = useRouter()
   const [searchTerm, setSearchTerm] = useState('')
   const [searchResults, setSearchResults] = useState<ClientProfile[]>([])
@@ -55,8 +83,16 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
   const [serviceIds, setServiceIds] = useState<number[]>([])
   const [providerId, setProviderId] = useState<string | null>(null)
   const [selectedAddonIds, setSelectedAddonIds] = useState<number[]>([])
-  const [selectedDate, setSelectedDate] = useState('')
-  const [availableSlots, setAvailableSlots] = useState<TimeSlot[]>([])
+  const [selectedDate, setSelectedDate] = useState(preselectedDate ?? '')
+  // The slot list carries the date it was fetched for. Keeping the two in one
+  // piece of state is what stops a list from being read against a *different*
+  // day: between changing the date and the next fetch landing there is a frame
+  // where the previous day's times are still in hand, and a 2pm from yesterday
+  // is a different instant from the 2pm being asked for.
+  const [slotData, setSlotData] = useState<{ date: string; slots: TimeSlot[] }>({
+    date: '',
+    slots: [],
+  })
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null)
   const [clientNotes, setClientNotes] = useState('')
   const [loading, setLoading] = useState(false)
@@ -153,7 +189,7 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
   // Fetch available slots when service, provider, and date are selected
   useEffect(() => {
     if (serviceIds.length === 0 || !providerId || !selectedDate) {
-      setAvailableSlots([])
+      setSlotData({ date: '', slots: [] })
       return
     }
 
@@ -178,26 +214,65 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
         }
 
         const data = await response.json()
-        // Response shape is { days: [{ date, slots: ISO[] }] }.
+        // Response shape is { timezone, days: [{ date, slots: ISO[] }] } — a
+        // bare list of instants, not { time, display }. It has to be mapped
+        // into the shape this form renders, or every slot button comes out
+        // blank and selecting one sets `undefined`.
+        const zone: string =
+          data.timezone ||
+          providers.find((p) => p.id === providerId)?.timezone ||
+          FALLBACK_TZ
         const day = (data.days ?? []).find(
           (d: { date: string }) => d.date === selectedDate
         )
-        setAvailableSlots(day?.slots ?? [])
+        const instants: string[] = day?.slots ?? []
+        setSlotData({
+          date: selectedDate,
+          slots: instants.map((iso) => {
+            const at = new Date(iso)
+            const parts = zonedParts(at, zone)
+            return {
+              time: iso,
+              display: formatTimeInTimeZone(at, zone),
+              // Wall clock in the same zone the diary grid labels its rows in,
+              // which is what makes a tapped '14:00' matchable against a slot.
+              wall: minutesToTime(parts.hour * 60 + parts.minute),
+            }
+          }),
+        })
       } catch (err) {
         console.error('Error fetching slots:', err)
-        setAvailableSlots([])
+        setSlotData({ date: selectedDate, slots: [] })
       } finally {
         setLoadingSlots(false)
       }
     }
 
     fetchSlots()
-  }, [serviceIds, providerId, selectedDate, services])
+  }, [serviceIds, providerId, selectedDate, services, providers])
+
+  // Only ever the slots that belong to the date on screen.
+  const availableSlots = slotData.date === selectedDate ? slotData.slots : []
+
+  // A time tapped in the diary is a *request* for a selection, not a selection:
+  // it only becomes one once the slot list has loaded and confirms that time is
+  // genuinely open. Derived here during render rather than pushed into state
+  // from an effect when the slots arrive — the slot list is asynchronous, and
+  // syncing state in an effect is exactly what the React Compiler lint refuses.
+  const preselectedSlot =
+    preselectedTime && selectedDate === preselectedDate
+      ? (availableSlots.find((s) => s.wall === preselectedTime)?.time ?? null)
+      : null
+
+  // The staff member's own pick always wins; the diary's is only the default.
+  // If the tapped time is not on offer (the grid is hourly, availability may
+  // not be) nothing is preselected and they pick from the list as usual.
+  const activeSlot = selectedSlot ?? preselectedSlot
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
-    if (!selectedClient || serviceIds.length === 0 || !providerId || !selectedSlot) {
+
+    if (!selectedClient || serviceIds.length === 0 || !providerId || !activeSlot) {
       setError('Please complete all required fields')
       return
     }
@@ -213,7 +288,7 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
           clientId: selectedClient.id,
           serviceIds,
           providerId,
-          startsAt: selectedSlot,
+          startsAt: activeSlot,
           addonIds: selectedAddonIds,
           notes: clientNotes.trim() || null,
         }),
@@ -239,19 +314,32 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
   const totalMinutes = chosenServices.reduce((n, s) => n + s.duration_minutes, 0)
   const selectedProvider = providers.find(p => p.id === providerId)
 
-  // Generate next 30 days for date selection
-  const availableDates = Array.from({ length: 30 }, (_, i) => {
-    const date = new Date()
-    date.setDate(date.getDate() + i)
-    return {
-      value: date.toISOString().split('T')[0],
-      label: date.toLocaleDateString('en-US', {
-        weekday: 'short',
-        month: 'short',
-        day: 'numeric',
-      }),
-    }
-  })
+  // Date options. "Today" is a calendar day in the provider's zone, resolved
+  // through time.ts — the previous version read the UTC slice of an instant,
+  // so after 5pm in Fresno the list started on tomorrow while the labels still
+  // said today, and value and label disagreed for the whole month.
+  const zone = selectedProvider?.timezone || providers[0]?.timezone || FALLBACK_TZ
+  const todayKey = dateKeyInTimeZone(new Date(), zone)
+  const dateKeys = Array.from({ length: DATE_WINDOW_DAYS }, (_, i) =>
+    addDaysToDateKey(todayKey, i)
+  )
+  // A day tapped in the diary can sit outside that window — the calendar
+  // navigates by month. Offer it anyway, in order; otherwise the select would
+  // render blank on a date the form is actually holding.
+  // ...but not a day that has already been. The diary pages backwards by month,
+  // so a tapped cell can easily be in the past, and it would sort to the top.
+  if (
+    preselectedDate &&
+    preselectedDate >= dateKeys[0] &&
+    !dateKeys.includes(preselectedDate)
+  ) {
+    dateKeys.push(preselectedDate)
+    dateKeys.sort()
+  }
+  const availableDates = dateKeys.map((value) => ({
+    value,
+    label: dayLabelForDateKey(value),
+  }))
 
   return (
     <form onSubmit={handleSubmit} className="space-y-8">
@@ -463,8 +551,8 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
                         key={slot.time}
                         type="button"
                         onClick={() => setSelectedSlot(slot.time)}
-                        className={`border px-3 py-2 text-sm transition-colors ${
-                          selectedSlot === slot.time
+                        className={`min-h-11 border px-3 py-2 text-sm transition-colors ${
+                          activeSlot === slot.time
                             ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-accent-fg)]'
                             : 'border-[var(--color-border)] hover:border-[var(--color-accent)]'
                         }`}
@@ -481,7 +569,7 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
       )}
 
       {/* Notes */}
-      {selectedSlot && (
+      {activeSlot && (
         <Card>
           <CardHeader>
             <CardTitle>4. Additional Notes (Optional)</CardTitle>
@@ -500,7 +588,7 @@ export function StaffBookingForm({ services, providers, preselectedClient }: Pro
       )}
 
       {/* Submit */}
-      {selectedSlot && (
+      {activeSlot && (
         <div className="flex items-center justify-between border-t border-[var(--color-border)] pt-6">
           {error && (
             <p className="text-sm text-red-600">{error}</p>

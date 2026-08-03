@@ -32,6 +32,20 @@ interface CalendarClientProps {
   timezone: string
   initialDate: string
   initialView: CalendarView
+  /**
+   * Whether the viewer may book on someone else's behalf — `isFrontDesk`,
+   * decided on the server by the page that renders this.
+   *
+   * Without it, empty slots are not tappable at all. The booking page redirects
+   * anyone below front desk to /dashboard, so an interactive slot would eject a
+   * provider from the diary they were reading. Passing `undefined` for
+   * `onSlotClick` is what makes that true all the way down: every consumer
+   * (CalendarView's day grid, DragScheduleBoard's drop cells) renders inert
+   * text instead of a button when the handler is absent, so there is no
+   * pointer cursor and no hover affordance promising something that cannot
+   * happen.
+   */
+  canBookForClients: boolean
 }
 
 export function CalendarClient({
@@ -44,6 +58,7 @@ export function CalendarClient({
   closures,
   initialDate,
   initialView,
+  canBookForClients,
 }: CalendarClientProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -83,8 +98,14 @@ export function CalendarClient({
   }
 
   const handleSlotClick = (date: string, time: string) => {
-    // Navigate to booking page with pre-filled date/time
-    router.push(`/dashboard/appointments/new?date=${date}&time=${time}`)
+    // book-for-client is the staff booking page — /dashboard/appointments/new
+    // has never existed, so every tap on an empty slot used to be a 404.
+    //
+    // `date` is a date key and `time` is 'HH:MM' wall clock in the diary's
+    // timezone, which is exactly what the form needs to reopen on the slot that
+    // was tapped. URLSearchParams so the colon is encoded properly.
+    const params = new URLSearchParams({ date, time })
+    router.push(`/dashboard/appointments/book-for-client?${params.toString()}`)
   }
 
   const handleCloseModal = () => {
@@ -124,7 +145,7 @@ export function CalendarClient({
         onViewChange={handleViewChange}
         onDateChange={handleDateChange}
         onAppointmentClick={handleAppointmentClick}
-        onSlotClick={handleSlotClick}
+        onSlotClick={canBookForClients ? handleSlotClick : undefined}
         onProviderFilterChange={setSelectedProviders}
       />
       

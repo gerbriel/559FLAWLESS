@@ -6,7 +6,7 @@ import { WaitlistTable, type WaitlistRow } from '@/components/shared/WaitlistTab
 import { WaitlistOpenings, type FreedSlot } from '@/components/shared/WaitlistOpenings'
 import { readLocationScope, withLocation } from '@/components/layout/LocationScope'
 import { requestNow } from '@/lib/time'
-import { isFrontDesk, type UserRole } from '@/types/database'
+import { isAdmin, isFrontDesk, type UserRole } from '@/types/database'
 import type { WaitlistStatus } from '@/types/resources'
 
 export const dynamic = 'force-dynamic'
@@ -52,6 +52,11 @@ export default async function WaitlistPage({ searchParams }: Props) {
   // A provider can see entries that named them, but the list as a whole — with
   // everyone's contact details on it — is front desk work.
   if (!isFrontDesk(role)) redirect('/dashboard')
+  // The list is front desk work; the rules behind it are not. 037 makes
+  // `waitlist_settings` staff-readable and admin-writable, and
+  // /dashboard/settings/waitlist redirects anyone below admin to the Settings
+  // index — so offering the link to the front desk would be an ejector seat.
+  const setsTheRules = isAdmin(role)
 
   const locationId = await readLocationScope()
   const now = requestNow()
@@ -178,17 +183,29 @@ export default async function WaitlistPage({ searchParams }: Props) {
                 : `first ${settings.batch_size} people`
             } automatically, and holds it for them for ${
               settings.claim_window_minutes
-            } minutes before anyone else hears. Inside ${
-              settings.urgent_within_hours
-            } hours of the appointment everyone matching is told at once.`
-          : 'Automatic offers are switched off, so nobody is told until someone here sends the offer.'}{' '}
-        <Link
-          href="/dashboard/settings"
-          className="underline underline-offset-4 hover:text-[var(--color-foreground)]"
-        >
-          Change that
-        </Link>
-        .
+            } minutes before anyone else hears.${
+              // Zero is not "everyone, instantly" — it switches the urgent path
+              // off, because `starts_at <= now()` is never true of a slot that
+              // is still bookable. Now that an admin can set it, the sentence
+              // has to stop claiming otherwise.
+              settings.urgent_within_hours > 0
+                ? ` Inside ${settings.urgent_within_hours} hours of the appointment everyone matching is told at once.`
+                : ''
+            }`
+          : 'Automatic offers are switched off, so a cancellation is not passed on the moment it happens — the ten-minute sweep picks it up instead.'}{' '}
+        {setsTheRules ? (
+          <>
+            <Link
+              href="/dashboard/settings/waitlist"
+              className="underline underline-offset-4 hover:text-[var(--color-foreground)]"
+            >
+              Change that
+            </Link>
+            .
+          </>
+        ) : (
+          <>An admin can change that under Settings.</>
+        )}
       </p>
 
       <WaitlistOpenings openings={openings} />

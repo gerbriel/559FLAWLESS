@@ -37,6 +37,9 @@ export const metadata: Metadata = {
 }
 
 export const viewport: Viewport = {
+  // Without this, env(safe-area-inset-*) resolves to 0 and anything padded for a
+  // notch or a home indicator quietly falls back to its own floor.
+  viewportFit: 'cover',
   themeColor: [
     { media: '(prefers-color-scheme: light)', color: '#faf7f4' },
     { media: '(prefers-color-scheme: dark)', color: '#171110' },
