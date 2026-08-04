@@ -15,13 +15,20 @@ import {
 import { SectionTabs } from '@/components/layout/SectionTabs'
 import { requestNow } from '@/lib/time'
 import { isFrontDesk, isManager, type UserRole } from '@/types/database'
+import {
+  BulkActionBar,
+  SelectAll,
+  SelectRow,
+  SelectionProvider,
+} from '@/components/shared/ClientSelection'
 
 export const dynamic = 'force-dynamic'
 
 /** Same page as the client roster, for the same reason — see that file. */
 const PAGE_SIZE = 25
 
-const COLUMNS = 'sm:grid-cols-[minmax(0,1.7fr)_minmax(0,1.7fr)_minmax(0,1fr)_auto_2.75rem]'
+const COLUMNS =
+  'sm:grid-cols-[1.25rem_minmax(0,1.7fr)_minmax(0,1.7fr)_minmax(0,1fr)_auto_2.75rem]'
 
 const ROW_ACTION =
   'flex h-11 w-11 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-foreground)] sm:h-9 sm:w-9'
@@ -238,12 +245,15 @@ export default async function ClientStubsPage({ searchParams }: Props) {
           />
         )
       ) : (
-        <>
-          <Panel className="mt-8 overflow-hidden">
+        <SelectionProvider pageIds={(stubs ?? []).map((s) => s.id)}>
+          <Panel className="mt-8 overflow-visible">
+            {/* Not aria-hidden: it carries the select-everyone tick, and a
+                focusable control inside a hidden subtree is Tab-reachable and
+                unannounced at the same time. */}
             <div
-              aria-hidden
-              className={`label-caps hidden gap-x-6 border-b border-[var(--color-border)] px-5 py-3.5 text-[var(--color-muted)] sm:grid ${COLUMNS}`}
+              className={`label-caps hidden items-center gap-x-6 border-b border-[var(--color-border)] px-5 py-3.5 text-[var(--color-muted)] sm:grid ${COLUMNS}`}
             >
+              <SelectAll />
               <span>Name</span>
               <span>Email</span>
               <span>Phone</span>
@@ -261,7 +271,11 @@ export default async function ClientStubsPage({ searchParams }: Props) {
                     key={stub.id}
                     className={`relative grid items-center gap-x-6 gap-y-2 px-5 py-4 transition-colors hover:bg-[var(--color-linen)] dark:hover:bg-[var(--color-background)] ${COLUMNS}`}
                   >
-                    <div className="flex min-w-0 items-center gap-3.5 pr-12 sm:pr-0">
+                    <div className="absolute left-5 top-4 sm:static">
+                      <SelectRow id={stub.id} label={name} />
+                    </div>
+
+                    <div className="flex min-w-0 items-center gap-3.5 pl-8 pr-12 sm:pl-0 sm:pr-0">
                       <Avatar name={name} />
                       <div className="min-w-0">
                         <Link
@@ -348,8 +362,14 @@ export default async function ClientStubsPage({ searchParams }: Props) {
             </ul>
           </Panel>
 
+          {/* Invite is the action this list exists for. Tagging, archiving and
+              marketing consent all key to a profile, and a contact does not
+              have one — so they are not offered here rather than being offered
+              and failing. */}
+          <BulkActionBar target="stub" canAdmin={isManager(role)} />
+
           <Pagination page={page} pageCount={pageCount} hrefFor={hrefFor} className="mt-8" />
-        </>
+        </SelectionProvider>
       )}
     </div>
   )

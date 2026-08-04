@@ -12,6 +12,12 @@ import {
   SearchField,
 } from '@/components/ui/dashboard'
 import { NewClientForm } from '@/components/shared/NewClientForm'
+import {
+  BulkActionBar,
+  SelectAll,
+  SelectRow,
+  SelectionProvider,
+} from '@/components/shared/ClientSelection'
 import { SectionTabs } from '@/components/layout/SectionTabs'
 import { formatMoney } from '@/lib/utils'
 import { isFrontDesk, type UserRole } from '@/types/database'
@@ -42,7 +48,7 @@ const PAGE_SIZE = 25
  * down, never sideways.
  */
 const COLUMNS =
-  'sm:grid-cols-[minmax(0,1.7fr)_minmax(0,1.7fr)_minmax(0,1fr)_auto_2.75rem]'
+  'sm:grid-cols-[1.25rem_minmax(0,1.7fr)_minmax(0,1.7fr)_minmax(0,1fr)_auto_2.75rem]'
 
 /** The small circle at the end of a row. Full 44px until there is a mouse. */
 const ROW_ACTION =
@@ -122,6 +128,7 @@ export default async function ClientsPage({ searchParams }: Props) {
     { data: intakes },
     { data: analytics },
     { data: stubMatches },
+    { data: tags },
   ] = await Promise.all([
     // A provider reaches this page — the sidebar offers Clients to her, and RLS
     // gives her the people she treats. What she cannot do is anything that goes
@@ -156,6 +163,9 @@ export default async function ClientsPage({ searchParams }: Props) {
           .order('created_at', { ascending: false })
           .limit(5)
       : Promise.resolve({ data: [] }),
+    // The tags a selection can be given. Read by everyone — 005 lets staff see
+    // them — and only offered to the roles that can apply one.
+    supabase.from('client_tags').select('id, name').order('name'),
   ])
 
   const role = (viewer?.role ?? 'provider') as UserRole
@@ -338,15 +348,20 @@ export default async function ClientsPage({ searchParams }: Props) {
           />
         )
       ) : (
-        <>
-          <Panel className="mt-8 overflow-hidden">
+        <SelectionProvider pageIds={(clients ?? []).map((c) => c.id)}>
+          <Panel className="mt-8 overflow-visible">
             {/* Column headings, for the widths that have columns. On a phone
                 the rows stack and each value reads for itself, so the header
                 would be a heading for nothing. */}
+            {/* Not aria-hidden any more: it holds the select-everyone tick, and
+                a focusable control inside a hidden subtree is reachable by Tab
+                and invisible to a screen reader at the same time. It is
+                `hidden sm:grid`, so on a phone it is display:none and announced
+                to nobody regardless. */}
             <div
-              aria-hidden
-              className={`label-caps hidden gap-x-6 border-b border-[var(--color-border)] px-5 py-3.5 text-[var(--color-muted)] sm:grid ${COLUMNS}`}
+              className={`label-caps hidden items-center gap-x-6 border-b border-[var(--color-border)] px-5 py-3.5 text-[var(--color-muted)] sm:grid ${COLUMNS}`}
             >
+              {booksForOthers ? <SelectAll /> : <span />}
               <span>Name</span>
               <span>Email</span>
               <span>Phone</span>
@@ -387,7 +402,22 @@ export default async function ClientsPage({ searchParams }: Props) {
                         opinion about worth relying on. The padding keeps a long
                         name off the action button on a phone, where that button
                         is pinned to the corner rather than stacked last. */}
-                    <div className="flex min-w-0 items-center gap-3.5 pr-12 sm:pr-0">
+                    {/* Sits in its own grid column from sm up; on a phone the
+                        row stacks, so it rides along beside the name instead of
+                        claiming a line of its own. */}
+                    {booksForOthers ? (
+                      <div className="absolute left-5 top-4 sm:static">
+                        <SelectRow id={c.id} label={label} />
+                      </div>
+                    ) : (
+                      <span className="hidden sm:block" />
+                    )}
+
+                    <div
+                      className={`flex min-w-0 items-center gap-3.5 pr-12 sm:pr-0 ${
+                        booksForOthers ? 'pl-8 sm:pl-0' : ''
+                      }`}
+                    >
                       <Avatar name={label} />
                       <div className="min-w-0">
                         <Link
@@ -513,8 +543,15 @@ export default async function ClientsPage({ searchParams }: Props) {
             </ul>
           </Panel>
 
+          {/* Only for the people who can act on a selection. A provider sees
+              the roster and no ticks — the actions behind them are front desk
+              and above, and two of them are admin. */}
+          {booksForOthers && (
+            <BulkActionBar target="client" tags={tags ?? []} canAdmin={role === 'admin'} />
+          )}
+
           <Pagination page={page} pageCount={pageCount} hrefFor={hrefFor} className="mt-8" />
-        </>
+        </SelectionProvider>
       )}
     </div>
   )

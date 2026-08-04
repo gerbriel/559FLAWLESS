@@ -127,20 +127,38 @@ async function namesOf(
 export async function exportEntity(
   client: Client,
   entity: CsvEntity,
-  timeZone: string
+  timeZone: string,
+  /**
+   * A selection made on screen, rather than the whole table.
+   *
+   * Only the ids the caller asked for, and only ones they could already see —
+   * this narrows a query that was already running as the signed-in person, so
+   * an id passed by hand cannot widen anything RLS would not have allowed.
+   * Undefined means what it always meant: export everything.
+   */
+  only?: { clientIds?: string[]; stubIds?: number[] }
 ): Promise<ExportedTable> {
   const headers = entity.fields.map((f) => f.label)
 
   if (entity.key === 'clients') {
-    const { rows, truncated } = await readAll((from, to) =>
-      client
-        .from('profiles')
-        .select('id, first_name, last_name, email, phone, date_of_birth, pronouns, marketing_opt_in, sms_opt_in, created_at')
-        .eq('role', 'client')
-        .order('created_at', { ascending: false })
-        .order('id')
-        .range(from, to)
-    )
+    const selection = only?.clientIds ?? only?.stubIds ? only : undefined
+
+    // A selection of contacts is not a selection of accounts, and vice versa:
+    // asking for one and getting the other's whole table would be a quiet way
+    // to export more than was ticked. So a selection naming no accounts filters
+    // on an empty list and returns none, rather than falling through to
+    // "everybody".
+    const { rows, truncated } =
+      await readAll((from, to) => {
+            let q = client
+              .from('profiles')
+              .select(
+                'id, first_name, last_name, email, phone, date_of_birth, pronouns, marketing_opt_in, sms_opt_in, created_at'
+              )
+              .eq('role', 'client')
+            if (selection) q = q.in('id', selection.clientIds ?? [])
+            return q.order('created_at', { ascending: false }).order('id').range(from, to)
+          })
 
     /*
      * THE CONTACTS ARE IN THIS FILE TOO, and leaving them out was the tempting
@@ -160,15 +178,14 @@ export async function exportEntity(
      * Claimed contacts are left out: those people have accounts now and are
      * already in the rows above, under the name they chose themselves.
      */
-    const contacts = await readAll((from, to) =>
-      client
+    const contacts = await readAll((from, to) => {
+      let q = client
         .from('client_stubs')
         .select('id, first_name, last_name, email, phone, note, created_at')
         .is('claimed_by', null)
-        .order('created_at', { ascending: false })
-        .order('id')
-        .range(from, to)
-    )
+      if (selection) q = q.in('id', selection.stubIds ?? [])
+      return q.order('created_at', { ascending: false }).order('id').range(from, to)
+    })
 
     return {
       headers,
