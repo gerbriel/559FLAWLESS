@@ -320,6 +320,16 @@ export function BulkActionBar({
               </Button>
             )}
 
+            {/* Stubs are the one thing here that is genuinely just deletable —
+                a contact with no clinical record, no money and no appointments
+                possible — so the button is front-desk like every other stub
+                write, per 051's RLS, rather than admin like the client one. */}
+            {target === 'stub' && (
+              <Button size="sm" variant="danger" disabled={busy} onClick={() => setPending({ kind: 'delete' })}>
+                Delete
+              </Button>
+            )}
+
             <button
               type="button"
               onClick={clear}
@@ -342,7 +352,26 @@ export function BulkActionBar({
           onCancel={() => setPending(null)}
           onConfirm={(confirmText) => {
             if (pending.kind === 'delete') {
-              void run({ action: 'delete', confirm: confirmText })
+              if (target === 'stub') {
+                void run({ action: 'delete_stubs', confirm: confirmText }, (data) => {
+                  toast.success(
+                    `${Number(data.affected ?? 0)} removed from the list.`
+                  )
+                  clear()
+                })
+              } else {
+                void run({ action: 'delete', confirm: confirmText }, (data) => {
+                  const shells = Number(data.shells ?? 0)
+                  // "Deleted" quietly meaning two things is how trust in the
+                  // button dies — say which happened.
+                  toast.success(
+                    shells === 0
+                      ? `${Number(data.affected ?? 0)} deleted.`
+                      : `${Number(data.affected ?? 0)} deleted — ${shells} ${shells === 1 ? 'stays' : 'stay'} as “Deleted Account” because appointments or signed forms still point ${shells === 1 ? 'at it' : 'at them'}.`
+                  )
+                  clear()
+                })
+              }
             } else if (pending.kind === 'archive') {
               void run({ action: 'archive' })
             } else {
@@ -456,10 +485,15 @@ function Confirm({
         }
 
   const copy = {
-    delete: {
-      title: `Delete ${count} ${noun}?`,
-      body: 'This removes their name, email, phone number, date of birth and every photograph of them, and it cannot be undone. Their signed consent forms, treatment notes and sales records are kept — the law requires it — but nothing left will identify who they were.',
-    },
+    delete: target === 'stub'
+      ? {
+          title: `Delete ${count} ${noun}?`,
+          body: 'They come off this list and that is the whole of it — a contact has no appointments, no signed forms and no purchases to keep. If the studio meets them again, they can be added again. This cannot be undone.',
+        }
+      : {
+          title: `Delete ${count} ${noun}?`,
+          body: 'This removes their name, email, phone number, date of birth and every photograph of them, and it cannot be undone. Anyone with appointments, signed forms or purchases stays on the roster as “Deleted Account” — the record is kept, the identity is not. Anyone with no history at all is removed from the list entirely.',
+        },
     archive: {
       title: `Archive ${count} ${noun}?`,
       body: 'They stop appearing in the client list and cannot sign in. Nothing is deleted, and you can restore them at any time.',

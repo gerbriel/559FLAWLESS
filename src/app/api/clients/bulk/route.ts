@@ -71,6 +71,11 @@ const Body = z.discriminatedUnion('action', [
     confirm: z.literal('DELETE'),
   }),
   z.object({
+    action: z.literal('delete_stubs'),
+    stubIds: z.array(z.number().int().positive()).min(1).max(MAX),
+    confirm: z.literal('DELETE'),
+  }),
+  z.object({
     action: z.literal('invite'),
     stubIds: z.array(z.number().int().positive()).min(1).max(MAX),
     expires_in_days: z.number().int().min(1).max(60).default(14),
@@ -203,6 +208,10 @@ export async function POST(request: NextRequest) {
       // recoverable — you can see which names are still there. A run that
       // limped past six failures and reported success is not.
       const done: string[] = []
+      // Anonymised but still on the roster, because something tangible points
+      // at the row. Named in the response so "deleted" never quietly means two
+      // different things.
+      let shells = 0
       for (const id of body.clientIds) {
         const { error } = await supabase.rpc('anonymise_account', { p_client: id })
         if (error) {
@@ -218,9 +227,63 @@ export async function POST(request: NextRequest) {
             { status: 400 }
           )
         }
+
+        // ── Then the shell itself, when it stands for nothing ──
+        //
+        // 056: purge_empty_profile deletes the anonymised row ONLY when no
+        // appointment, signature, intake, photo or gift card references it,
+        // and refuses with a sentence otherwise. A refusal is not a failure
+        // of this run — it is the shell doing its job — so it is counted,
+        // not surfaced as an error.
+        //
+        // The auth user goes strictly AFTER the purge commits, never before:
+        // profiles.id is ON DELETE CASCADE from auth.users, so deleting the
+        // login first would cascade the profile away around the very checks
+        // the function exists to make.
+        const { error: purgeRefused } = await supabase.rpc('purge_empty_profile', {
+          p_profile: id,
+        })
+        if (purgeRefused) {
+          shells++
+        } else {
+          const wipe = createAdminClient()
+          const { error: authError } = await wipe.auth.admin.deleteUser(id)
+          // The profile row is already gone; a stale auth row is invisible to
+          // every screen and harmless. Log rather than fail a delete that has
+          // in every user-visible sense succeeded.
+          if (authError) console.error('auth cleanup failed for', id, authError.message)
+        }
+
         done.push(id)
       }
-      return NextResponse.json({ ok: true, affected: done.length })
+      return NextResponse.json({ ok: true, affected: done.length, shells })
+    }
+
+    /* ── Delete stubs ────────────────────────────────────── */
+    case 'delete_stubs': {
+      // A stub is a contact and an intention — 051's words — with no clinical
+      // record, no money and no appointments possible, so this is the one
+      // delete in the app that is genuinely just a delete. RLS already scopes
+      // it: "front desk writes client stubs" is the policy, and this runs as
+      // the signed-in user, so the database is the thing refusing a provider.
+      //
+      // `claimed_by is null` matches what the screen shows. A claimed stub is
+      // the record of where an account came from; the Not-signed-up list does
+      // not show it and this action does not reach it.
+      const { data: removed, error } = await supabase
+        .from('client_stubs')
+        .delete()
+        .in('id', body.stubIds)
+        .is('claimed_by', null)
+        .select('id')
+
+      if (error) {
+        return NextResponse.json(
+          { error: 'failed', message: `Nothing was removed. ${error.message}` },
+          { status: 400 }
+        )
+      }
+      return NextResponse.json({ ok: true, affected: removed?.length ?? 0 })
     }
 
     /* ── Invite ──────────────────────────────────────────── */

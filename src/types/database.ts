@@ -2583,6 +2583,18 @@ export type Database = {
         Args: { p_client_membership: number }
         Returns: string
       }
+
+      // ── Added in 056 ────────────────────────────────────────
+      /**
+       * Delete an anonymised client row nothing tangible points at. Refuses —
+       * with a sentence — when an appointment, signature, intake, photo or
+       * gift card still references it. Admin only; the deleted_accounts audit
+       * row survives.
+       */
+      purge_empty_profile: {
+        Args: { p_profile: string }
+        Returns: string
+      }
     }
     Enums: {
       user_role: UserRole
