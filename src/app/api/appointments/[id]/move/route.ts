@@ -31,6 +31,7 @@ type MoveError =
   | 'not_movable'
   | 'unknown_provider'
   | 'provider_not_bookable'
+  | 'service_unavailable'
   | 'service_not_offered_by_provider'
   | 'slot_unavailable'
   | 'slot_taken'
@@ -49,6 +50,8 @@ const MOVE_ERROR_MESSAGES: Record<MoveError, string> = {
   slot_taken: 'That slot just went. Someone else took it while you were dragging.',
   room_taken: 'The room is already in use then.',
   move_failed: 'The move did not go through. The appointment has not been changed.',
+  service_unavailable:
+    'The calendar could not be checked just now. Nothing was moved — try again in a moment.',
 }
 
 const fail = (error: MoveError, status: number) =>
@@ -222,6 +225,11 @@ export async function POST(
       now,
     })
 
+    if (availability === 'unavailable') {
+      // The calendar could not be read — an outage, not a fact about the
+      // provider. Refusing the move with a retryable 503 beats moving blind.
+      return fail('service_unavailable', 503)
+    }
     if (!availability) return fail('provider_not_bookable', 409)
 
     // An appointment cannot be in its own way. Nudging 10:00 to 10:30 overlaps

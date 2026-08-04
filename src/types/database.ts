@@ -274,6 +274,16 @@ export type AvailabilityBlock = {
   created_at: string
 }
 
+/** A durable incident record — see migration 058. Manager-read, server-written. */
+export type AppError = {
+  id: number
+  scope: string
+  message: string
+  context: Json
+  digest: string | null
+  created_at: string
+}
+
 export type Closure = {
   id: number
   /** Which studio. Added in 032; defaults to the primary location. */
@@ -1458,6 +1468,7 @@ export type Database = {
       >
       provider_schedules: TableDef<ProviderSchedule, [ToProfile<'provider_schedules', 'provider_id'>]>
       availability_blocks: TableDef<AvailabilityBlock, [ToProfile<'availability_blocks', 'provider_id'>]>
+      app_errors: TableDef<AppError>
       closures: TableDef<Closure>
       calendar_busy: TableDef<CalendarBusy, [ToProfile<'calendar_busy', 'provider_id'>]>
       calendar_connections: TableDef<CalendarConnection, [ToProfile<'calendar_connections', 'provider_id'>]>
@@ -2596,6 +2607,14 @@ export type Database = {
        * while the caller is inside its budget. Fails open on bad arguments,
        * and the TypeScript caller fails open on any error. Added in 057.
        */
+      /**
+       * The one write path into app_errors: a durable incident record with a
+       * 30-day self-sweeping retention. Service-role only. Added in 058.
+       */
+      log_app_error: {
+        Args: { p_scope: string; p_message: string; p_context?: Json; p_digest?: string | null }
+        Returns: undefined
+      }
       check_rate_limit: {
         Args: { p_key: string; p_limit: number; p_window_seconds: number }
         Returns: boolean

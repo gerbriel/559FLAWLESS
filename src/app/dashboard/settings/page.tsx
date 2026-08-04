@@ -230,6 +230,13 @@ export default async function SettingsPage() {
           visible: userIsManager,
         },
         {
+          href: '/dashboard/settings/errors',
+          label: 'What went wrong',
+          description:
+            'Failures the server recorded in the last thirty days — the place to look when a client says a booking or a payment did not work. A quiet page is a healthy studio.',
+          visible: userIsManager,
+        },
+        {
           href: '/dashboard/settings/legal',
           label: 'Legal content',
           description:

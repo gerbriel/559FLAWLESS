@@ -78,6 +78,12 @@ export async function GET(request: NextRequest) {
     now,
   })
 
+  if (probe === 'unavailable') {
+    // The calendar could not be read. "No open slots" would be a fabricated
+    // fact and "not bookable" a worse one — 503 tells the flow to say
+    // "try again" instead of showing an empty week.
+    return NextResponse.json({ error: 'availability_unavailable' }, { status: 503 })
+  }
   if (!probe) {
     return NextResponse.json({ error: 'provider_not_bookable' }, { status: 409 })
   }
@@ -95,7 +101,11 @@ export async function GET(request: NextRequest) {
           fromDateKey,
           days,
           now,
-        })) ?? probe)
+        })) || probe)
+
+  if (input === 'unavailable') {
+    return NextResponse.json({ error: 'availability_unavailable' }, { status: 503 })
+  }
 
   const slots = generateSlots(input, fromDateKey, days)
 

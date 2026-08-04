@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
+import { logError } from '@/lib/log-error'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -182,7 +183,7 @@ export async function POST(request: NextRequest) {
     .single()
 
   if (orderError || !order) {
-    console.error('pos order insert failed', orderError)
+    void logError('pos/sale', orderError.message, { step: 'order_insert' })
     return NextResponse.json(
       { error: 'sale_failed', message: 'Could not start that sale.' },
       { status: 500 }
@@ -196,7 +197,7 @@ export async function POST(request: NextRequest) {
   if (itemsError) {
     // Nothing has been paid or decremented yet, so removing the shell is clean.
     await admin.from('orders').delete().eq('id', order.id)
-    console.error('pos items insert failed', itemsError)
+    void logError('pos/sale', itemsError.message, { step: 'items_insert' })
     return NextResponse.json(
       { error: 'sale_failed', message: 'Could not add those items.' },
       { status: 500 }
@@ -218,7 +219,7 @@ export async function POST(request: NextRequest) {
     .single()
 
   if (payError || !paid) {
-    console.error('pos mark-paid failed', payError)
+    void logError('pos/sale', payError.message, { step: 'mark_paid' })
     return NextResponse.json(
       { error: 'sale_failed', message: 'The sale was not completed. Nothing was charged.' },
       { status: 500 }
@@ -241,7 +242,7 @@ export async function POST(request: NextRequest) {
     // The sale itself stands — the customer has paid and has the product. A
     // missing ledger row is a reconciliation problem, not a reason to fail the
     // transaction in front of them.
-    console.error('pos payment record failed', paymentError, { orderId: paid.id })
+    void logError('pos/sale', paymentError.message, { step: 'record_payment', order_id: paid.id })
   }
 
   return NextResponse.json({ ok: true, order: paid }, { status: 201 })

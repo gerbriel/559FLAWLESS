@@ -101,7 +101,9 @@ export function BookingFlow({
   const [ageConfirmed, setAgeConfirmed] = useState(false)
 
   const [weekStart, setWeekStart] = useState<string | null>(null)
-  const [days, setDays] = useState<DayResult[]>([])
+  // null is an OUTAGE, [] is an empty week — the difference between "the
+  // calendar did not answer" and "fully booked", which must never look alike.
+  const [days, setDays] = useState<DayResult[] | null>([])
   const [timezone, setTimezone] = useState('America/Los_Angeles')
   const [loadingSlots, setLoadingSlots] = useState(false)
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null)
@@ -225,14 +227,17 @@ export function BookingFlow({
         })
         if (addonIds.length) qs.set('addons', addonIds.join(','))
 
-        const res = await fetch(`/api/availability?${qs}`)
-        if (!res.ok) {
-          setDays([])
+        // `.catch(() => null)`: a network failure must land as the outage
+        // panel, not escape as an unhandled rejection leaving stale slots.
+        const res = await fetch(`/api/availability?${qs}`).catch(() => null)
+        if (!res || !res.ok) {
+          // null is the outage signal — never an empty week. See `days`.
+          setDays(null)
           return
         }
-        const data = await res.json()
-        setDays(data.days ?? [])
-        setTimezone(data.timezone ?? provider.timezone)
+        const data = await res.json().catch(() => null)
+        setDays(data ? (data.days ?? []) : null)
+        if (data) setTimezone(data.timezone ?? provider.timezone)
       } finally {
         setLoadingSlots(false)
       }
@@ -849,9 +854,26 @@ export function BookingFlow({
               <div className="flex items-center justify-center py-20 text-[var(--color-muted)]">
                 <Loader2 className="h-5 w-5 animate-spin" strokeWidth={1.5} />
               </div>
+            ) : days === null ? (
+              <div className="mt-8 border border-[var(--color-border)] bg-[var(--color-surface)] p-10 text-center">
+                <p className="text-sm">We couldn&rsquo;t load the times just now.</p>
+                <p className="mt-1 text-sm text-[var(--color-muted)]">
+                  That&rsquo;s on our side, not yours — the calendar didn&rsquo;t answer. Nothing is booked out.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoadingSlots(true)
+                    if (weekStart) void loadSlots(weekStart)
+                  }}
+                  className="label-caps mt-6 border-b border-[var(--color-foreground)] pb-1"
+                >
+                  Try again
+                </button>
+              </div>
             ) : (
               <div className="mt-8 grid grid-cols-2 gap-px border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-4 lg:grid-cols-7">
-                {days.map((d) => (
+                {(days ?? []).map((d) => (
                   <div key={d.date} className="min-h-40 bg-[var(--color-background)] p-3">
                     <p className="label-caps mb-3 text-center text-[var(--color-muted)]">
                       {WEEK_DAYS[dayIndex(d.date)]}
@@ -890,7 +912,7 @@ export function BookingFlow({
 
             {/* A full week is the moment the waitlist is worth offering — not
                 buried in a contact form the client has to think to use. */}
-            {days.length > 0 && days.every((d) => d.slots.length === 0) && !loadingSlots && (
+            {days !== null && days.length > 0 && days.every((d) => d.slots.length === 0) && !loadingSlots && (
               <WaitlistJoin
                 className="mt-8"
                 services={services.map((s) => ({ id: s.id, name: s.name }))}

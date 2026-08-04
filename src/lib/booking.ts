@@ -22,6 +22,7 @@
  */
 
 import 'server-only'
+import { logError } from '@/lib/log-error'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { syncAppointmentToCalendar } from '@/lib/calendar-push'
 import { applyMembershipBenefit } from '@/lib/memberships'
@@ -51,6 +52,9 @@ export type BookingError =
   | 'slot_taken'
   | 'rate_limited'
   | 'booking_failed'
+  /** The availability picture could not be read at all — an outage, not a fact
+   *  about the provider or the slot. 503; the client should simply retry. */
+  | 'service_unavailable'
 
 export interface BookingRequest {
   providerId: string
@@ -110,16 +114,29 @@ export async function loadAvailability(opts: {
    */
   serviceIds?: number[]
   now?: Date
-}): Promise<AvailabilityInput | null> {
+}): Promise<AvailabilityInput | null | 'unavailable'> {
+  /*
+   * Three answers, and the difference between the last two is the difference
+   * between a fact and an outage:
+   *   AvailabilityInput  — here is the picture
+   *   null               — this provider is genuinely not bookable
+   *   'unavailable'      — the database did not answer; nothing is known.
+   * Callers must not translate 'unavailable' into anything that sounds like a
+   * fact about the provider or the slot.
+   */
   const supabase = createAdminClient()
   const now = opts.now ?? new Date()
 
-  const { data: provider } = await supabase
+  const { data: provider, error: providerError } = await supabase
     .from('profiles')
     .select('timezone, accepts_online_booking, suspended_at, role')
     .eq('id', opts.providerId)
     .maybeSingle()
 
+  if (providerError) {
+    void logError('availability', providerError.message, { provider_id: opts.providerId })
+    return 'unavailable'
+  }
   // Any non-client staff member who takes bookings — see migration 020.
   if (!provider || provider.role === 'client') return null
   if (provider.suspended_at || !provider.accepts_online_booking) return null
@@ -135,13 +152,13 @@ export async function loadAvailability(opts: {
   ).toISOString()
 
   const [
-    { data: settings },
-    { data: schedules },
-    { data: blocks },
-    { data: closureRows },
-    { data: appts },
-    { data: calBusy },
-    { data: resourceBusy },
+    settingsRes,
+    schedulesRes,
+    blocksRes,
+    closuresRes,
+    apptsRes,
+    calBusyRes,
+    resourceBusyRes,
   ] = await Promise.all([
     supabase
       .from('booking_settings')
@@ -183,6 +200,38 @@ export async function loadAvailability(opts: {
       p_service_ids: opts.serviceIds ?? [],
     }),
   ])
+
+  // A failed read here must not become an empty calendar. Coalescing a
+  // transient database error to zero rows produced the worst kind of outage:
+  // no schedule meant "no open slots" — indistinguishable from fully booked —
+  // and no existing appointments meant every colliding client passed the check
+  // and was bounced by the exclusion constraint with "slot taken" on a slot
+  // that looked free. An outage should look like an outage: refuse loudly and
+  // let the route say "try again", while the durable record keeps the reason.
+  const failed = [
+    ['booking_settings', settingsRes.error],
+    ['provider_schedules', schedulesRes.error],
+    ['availability_blocks', blocksRes.error],
+    ['closures', closuresRes.error],
+    ['appointments', apptsRes.error],
+    ['calendar_busy', calBusyRes.error],
+    ['resource_busy_intervals', resourceBusyRes.error],
+  ].filter(([, e]) => e)
+  if (failed.length > 0) {
+    void logError('availability', failed.map(([t, e]) => `${t}: ${(e as { message: string }).message}`).join('; '), {
+      provider_id: opts.providerId,
+      from: opts.fromDateKey,
+    })
+    return 'unavailable'
+  }
+
+  const settings = settingsRes.data
+  const schedules = schedulesRes.data
+  const blocks = blocksRes.data
+  const closureRows = closuresRes.data
+  const appts = apptsRes.data
+  const calBusy = calBusyRes.data
+  const resourceBusy = resourceBusyRes.data
 
   // An existing appointment occupies its window PLUS its own turnover buffer.
   const busy = [
@@ -405,6 +454,11 @@ export async function createBooking(req: BookingRequest): Promise<BookingOutcome
     now,
   })
 
+  if (availability === 'unavailable') {
+    // Nothing is known — "not bookable" or "slot taken" would be a fabricated
+    // fact. 503 with retry semantics is the honest answer.
+    return failure('service_unavailable', 503)
+  }
   if (!availability) return failure('provider_not_bookable', 409)
 
   const [day] = generateSlots(availability, dateKey, 1)
@@ -463,7 +517,11 @@ export async function createBooking(req: BookingRequest): Promise<BookingOutcome
     if (insertError.code === '23P01') return failure('slot_taken', 409)
     // 23P02 comes from appointments_refuse_banned_client (039).
     if (insertError.code === '23P02') return failure('client_banned', 403)
-    console.error('booking insert failed', insertError)
+    void logError('api/book', insertError.message, {
+      provider_id: req.providerId,
+      starts_at: req.startsAt,
+      guest_email: req.email ?? null,
+    })
     return failure('booking_failed', 500)
   }
 
@@ -604,6 +662,8 @@ export const BOOKING_ERROR_MESSAGES: Record<BookingError, string> = {
     'We are not able to book this one online. Please call the studio and we will take it from there.',
   rate_limited: 'That is a lot of bookings at once. Please wait a few minutes.',
   booking_failed: 'We could not complete the booking. Please try again or call us.',
+  service_unavailable:
+    'We could not check the calendar just now. Nothing is wrong on your side — give it a moment and try again.',
 }
 
 // ── Staff bookings ──────────────────────────────────────────
@@ -684,7 +744,12 @@ export async function createStaffBooking(req: StaffBookingRequest): Promise<Book
       days: 1,
       now,
     })
-    if (!availability) return failure('provider_not_bookable', 409)
+    if (availability === 'unavailable') {
+    // Nothing is known — "not bookable" or "slot taken" would be a fabricated
+    // fact. 503 with retry semantics is the honest answer.
+    return failure('service_unavailable', 503)
+  }
+  if (!availability) return failure('provider_not_bookable', 409)
 
     const [day] = generateSlots(availability, dateKey, 1)
     const offered = day?.slots.some((s) => s.getTime() === requested.getTime()) ?? false

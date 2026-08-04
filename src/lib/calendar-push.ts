@@ -1,4 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { logError } from '@/lib/log-error'
 import {
   pushEvent,
   deleteEvent,
@@ -104,7 +105,7 @@ export async function syncAppointmentToCalendar(appointmentId: string): Promise<
       await admin.from('appointments').update({ google_event_id: eventId }).eq('id', appt.id)
     }
   } catch (err) {
-    console.error('appointment calendar sync failed', appointmentId, err)
+    void logError('calendar/push', err, { appointment_id: appointmentId })
   }
 }
 
@@ -170,7 +171,7 @@ export async function syncBlockToCalendar(blockId: number): Promise<void> {
         .eq('id', block.id)
     }
   } catch (err) {
-    console.error('block calendar sync failed', blockId, err)
+    void logError('calendar/push', err, { block_id: blockId })
   }
 }
 
@@ -185,7 +186,7 @@ export async function removeBlockFromCalendar(
     if (!target) return
     await deleteEvent(providerId, target.calendarId, googleEventId)
   } catch (err) {
-    console.error('block calendar removal failed', googleEventId, err)
+    void logError('calendar/push', err, { google_event_id: googleEventId })
   }
 }
 
@@ -239,6 +240,6 @@ export async function refreshBusyIfStale(providerId: string): Promise<void> {
     })
   } catch (err) {
     // Never surfaces to a client looking at available times.
-    console.error('opportunistic calendar refresh failed', providerId, err)
+    void logError('calendar/refresh', err, { provider_id: providerId })
   }
 }

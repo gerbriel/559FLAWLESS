@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
+import { logError } from '@/lib/log-error'
 import type Stripe from 'stripe'
 import { getStripe, stripeConfigured } from '@/lib/stripe'
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -215,7 +216,7 @@ export async function POST(request: NextRequest) {
     }
   } catch (err) {
     // A 500 makes Stripe retry, which is what we want for a transient failure.
-    console.error('webhook handler failed', event.type, event.id, err)
+    void logError('stripe/webhook', err, { event_type: event.type, event_id: event.id })
     return NextResponse.json({ error: 'handler_failed' }, { status: 500 })
   }
 
