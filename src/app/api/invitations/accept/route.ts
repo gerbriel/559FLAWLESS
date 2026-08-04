@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
+import { checkRateLimit, rateLimitedResponse } from '@/lib/rate-limit'
 import { z } from 'zod'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createPublicClient } from '@/lib/supabase/public'
@@ -49,6 +50,11 @@ const AcceptSchema = z.object({
  * allowed to exist.
  */
 export async function POST(request: NextRequest) {
+  // A stranger's route: budgeted per address, failing open. See lib/rate-limit.
+  if (!(await checkRateLimit(request, 'inviteAccept')).allowed) {
+    return rateLimitedResponse('inviteAccept')
+  }
+
   const parsed = AcceptSchema.safeParse(await request.json().catch(() => null))
   if (!parsed.success) {
     return NextResponse.json(

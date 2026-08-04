@@ -281,6 +281,12 @@ export function BookingFlow({
       const data = await res.json()
 
       if (!res.ok) {
+        // The limiter's refusal has no message field — give it a human one
+        // rather than the generic fallback, since the fix is simply waiting.
+        if (data.error === 'rate_limited') {
+          setError('That is a lot of bookings from one place in a short time. Give it a few minutes and try again.')
+          return
+        }
         setError(data.message ?? 'Something went wrong. Please try again.')
         // The slot went stale mid-flow — refresh what's on offer.
         if (data.error === 'slot_taken' || data.error === 'slot_unavailable') {

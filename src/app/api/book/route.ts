@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
+import { checkRateLimit, rateLimitedResponse } from '@/lib/rate-limit'
 import { z } from 'zod'
 import { createBooking, BOOKING_ERROR_MESSAGES, MAX_ADDONS } from '@/lib/booking'
 import { createClient } from '@/lib/supabase/server'
@@ -27,6 +28,11 @@ const BookingSchema = z.object({
 })
 
 export async function POST(request: NextRequest) {
+  // A stranger's route: budgeted per address, failing open. See lib/rate-limit.
+  if (!(await checkRateLimit(request, 'book')).allowed) {
+    return rateLimitedResponse('book')
+  }
+
   const raw = await request.text()
   if (raw.length > MAX_BODY_BYTES) {
     return NextResponse.json({ error: 'payload_too_large' }, { status: 413 })

@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
+import { checkRateLimit, rateLimitedResponse } from '@/lib/rate-limit'
 import { loadAvailability, priceService } from '@/lib/booking'
 import { generateSlots } from '@/lib/availability'
 import { dateKeyInTimeZone } from '@/lib/time'
@@ -20,6 +21,11 @@ const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/
  * will accept there. Duration comes from the database, never the query string.
  */
 export async function GET(request: NextRequest) {
+  // A stranger's route: budgeted per address, failing open. See lib/rate-limit.
+  if (!(await checkRateLimit(request, 'availability')).allowed) {
+    return rateLimitedResponse('availability')
+  }
+
   const params = request.nextUrl.searchParams
 
   const providerId = params.get('provider') ?? ''

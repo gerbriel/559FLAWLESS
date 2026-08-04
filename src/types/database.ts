@@ -2591,6 +2591,15 @@ export type Database = {
        * gift card still references it. Admin only; the deleted_accounts audit
        * row survives.
        */
+      /**
+       * One atomic upsert per request against the fixed-window counter. True
+       * while the caller is inside its budget. Fails open on bad arguments,
+       * and the TypeScript caller fails open on any error. Added in 057.
+       */
+      check_rate_limit: {
+        Args: { p_key: string; p_limit: number; p_window_seconds: number }
+        Returns: boolean
+      }
       purge_empty_profile: {
         Args: { p_profile: string }
         Returns: string

@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { checkRateLimit, rateLimitedResponse } from '@/lib/rate-limit'
 import { NextRequest, NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic'
@@ -12,6 +13,11 @@ export const dynamic = 'force-dynamic'
  */
 
 export async function POST(request: NextRequest) {
+  // A stranger's route: budgeted per address, failing open. See lib/rate-limit.
+  if (!(await checkRateLimit(request, 'newsletter')).allowed) {
+    return rateLimitedResponse('newsletter')
+  }
+
   const supabase = await createClient()
   const body = await request.json()
   const { action, email, token, source, utm_source, utm_medium, utm_campaign } = body
