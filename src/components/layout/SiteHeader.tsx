@@ -1,12 +1,13 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Menu, X, User } from 'lucide-react'
+import { Menu, X, User, ShoppingBag } from 'lucide-react'
 import { ButtonLink } from '@/components/ui/button'
 import { Container } from '@/components/ui/section'
 import { cn } from '@/lib/utils'
+import { useCart } from '@/store/cart'
 
 interface NavCategory {
   name: string
@@ -20,6 +21,42 @@ const STATIC_LINKS = [
   { href: '/faq', label: 'FAQ' },
   { href: '/contact', label: 'Contact' },
 ]
+
+/**
+ * The bag, with what is in it.
+ *
+ * The count comes through useSyncExternalStore with a server snapshot of zero:
+ * the cart lives in localStorage (zustand persist), which the server cannot
+ * read, so the hydration render shows an empty bag everywhere and the real
+ * count arrives in the very next client render. No effect, no setState, no
+ * mismatch — the one hydration-safe shape for client-only state in a header
+ * that every public page server-renders.
+ */
+function CartButton() {
+  const count = useSyncExternalStore(
+    useCart.subscribe,
+    () => useCart.getState().lines.reduce((n, l) => n + l.qty, 0),
+    () => 0
+  )
+
+  return (
+    <Link
+      href="/cart"
+      className="relative flex h-11 w-11 items-center justify-center transition-colors hover:text-[var(--color-accent)]"
+      aria-label={count > 0 ? `Your bag, ${count} ${count === 1 ? 'item' : 'items'}` : 'Your bag'}
+    >
+      <ShoppingBag className="h-5 w-5" strokeWidth={1.5} />
+      {count > 0 && (
+        <span
+          aria-hidden
+          className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center bg-[var(--color-accent)] px-1 text-[0.5625rem] tabular-nums text-white"
+        >
+          {count > 99 ? '99+' : count}
+        </span>
+      )}
+    </Link>
+  )
+}
 
 export function SiteHeader({ categories }: { categories: NavCategory[] }) {
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -103,6 +140,9 @@ export function SiteHeader({ categories }: { categories: NavCategory[] }) {
           </nav>
 
           <div className="flex items-center gap-3">
+            {/* Visible at every size — adding to a bag you cannot find again is
+                the whole complaint this button answers. */}
+            <CartButton />
             {/* Always /account — it redirects anonymous visitors to sign in and
                 staff to the dashboard. Resolving that here would need a session,
                 which would make every public page render dynamically. */}
