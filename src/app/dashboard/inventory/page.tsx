@@ -41,7 +41,7 @@ const FILTERS = [
 // One literal, however long — postgrest parses the select string at the type
 // level and a concatenation widens it to `string`.
 const PRODUCT_COLUMNS =
-  'id, sku, barcode, name, unit, stock_qty, low_stock_threshold, price_cents, cost_cents, is_retail, is_professional, is_active, external_url, image_url, brands(name), product_categories(name)'
+  'id, sku, barcode, name, unit, stock_qty, low_stock_threshold, price_cents, cost_cents, is_retail, is_professional, is_active, external_url, image_url, gallery, brands(name), product_categories(name)'
 
 export default async function InventoryPage({ searchParams }: Props) {
   const { filter, focus, q } = await searchParams
@@ -457,6 +457,8 @@ export default async function InventoryPage({ searchParams }: Props) {
                           price_cents: p.price_cents,
                           cost_cents: p.cost_cents,
                           external_url: p.external_url,
+                          image_url: p.image_url,
+                          gallery: Array.isArray(p.gallery) ? (p.gallery as string[]) : [],
                         }}
                       />
                     </div>

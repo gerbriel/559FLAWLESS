@@ -2527,6 +2527,35 @@ export type Database = {
         Returns: undefined
       }
 
+      // ── Added in 055 ────────────────────────────────────────
+      /**
+       * Has this client ever signed in, and is an invitation outstanding for
+       * them. The only way to ask anything of `auth.users` from this app:
+       * booleans keyed by profile id, never a row, an address or a timestamp
+       * out of that table.
+       *
+       * Omit `p_ids` (or pass null) for the whole client roster.
+       *
+       * Refuses anyone below front desk, and the reason is what the answer is
+       * FOR rather than what a provider may read: 001's "staff read all
+       * profiles" policy is `is_staff()`, so a provider already sees every
+       * client row — 005 narrows the clinical tables, not this one. Inviting is
+       * front-desk work everywhere else in this app (the gate on
+       * /dashboard/clients/stubs, and `invite` in /api/clients/bulk), so the
+       * boolean that only exists to decide whether to offer an invitation is
+       * gated where the invitation is.
+       */
+      client_claim_status: {
+        Args: { p_ids?: string[] | null }
+        Returns: {
+          profile_id: string
+          /** False is the interesting one: the account was never claimed. */
+          has_signed_in: boolean
+          /** A live, unexpired invitation exists for their email address. */
+          invitation_pending: boolean
+        }[]
+      }
+
       // ── Memberships, added in 050 ───────────────────────────
       /**
        * The benefit test: status is 'active' AND the period has not run out.

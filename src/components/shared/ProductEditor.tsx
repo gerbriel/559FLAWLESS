@@ -3,10 +3,12 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { X, Plus } from 'lucide-react'
+import { X, Plus, Trash2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Field, Input, Select, Textarea } from '@/components/ui/field'
+import { ImageField, ImageGalleryField } from '@/components/shared/ImageField'
+import { describe, productBlockers, productSaleCount } from '@/lib/catalog-delete'
 import { BarcodeField } from './BarcodeField'
 import { normalizeBarcode, isValidGtin } from '@/types/barcode'
 import { slugify } from '@/lib/utils'
@@ -33,6 +35,9 @@ export interface EditableProduct {
   cost_cents: number
   /** Where clients are sent when there is none left, if anywhere. */
   external_url: string | null
+  /** The shop's main shot, and the extra angles beside it. */
+  image_url?: string | null
+  gallery?: string[]
 }
 
 /** A brand or a category to file a new product under. Both are optional. */
@@ -165,6 +170,7 @@ function NewProduct({
 
   const [description, setDescription] = useState('')
   const [imageUrl, setImageUrl] = useState('')
+  const [gallery, setGallery] = useState<string[]>([])
   const [externalUrl, setExternalUrl] = useState('')
 
   const trimmedName = name.trim()
@@ -193,6 +199,7 @@ function NewProduct({
     setThreshold('3')
     setDescription('')
     setImageUrl('')
+    setGallery([])
     setExternalUrl('')
   }
 
@@ -282,6 +289,8 @@ function NewProduct({
         // Only meaningful on something a client can see.
         description: retail ? description.trim() || null : null,
         image_url: imageUrl.trim() || null,
+        // A jsonb array since 007, with nothing ever able to fill it until now.
+        gallery: gallery,
         external_url: retail && external ? externalUrl.trim() : null,
         price_cents: retail ? priceCents : 0,
         cost_cents: costCents,
@@ -600,20 +609,22 @@ function NewProduct({
               />
             </Field>
 
-            <Field
+            <ImageField
               label="Photograph"
-              htmlFor="np_img"
-              hint="A link to the image. Optional — without one it shows a placeholder."
-            >
-              <Input
-                id="np_img"
-                type="url"
-                inputMode="url"
-                value={imageUrl}
-                onChange={(e) => setImageUrl(e.target.value)}
-                placeholder="https://…"
-              />
-            </Field>
+              value={imageUrl || null}
+              onChange={(url) => setImageUrl(url ?? '')}
+              bucket="products"
+              folder="products"
+              hint="Upload one, or link to the brand's own shot. Optional — without one the shop and the till show a placeholder."
+            />
+
+            <ImageGalleryField
+              value={gallery}
+              onChange={setGallery}
+              bucket="products"
+              folder="products"
+              hint="Extra angles for the shop page, in the order they appear."
+            />
 
             <Field
               label="Where to buy it when you run out"
@@ -700,6 +711,8 @@ function EditProduct({ product }: { product: EditableProduct }) {
   const [threshold, setThreshold] = useState(String(product.low_stock_threshold))
   const [price, setPrice] = useState(money(product.price_cents))
   const [cost, setCost] = useState(money(product.cost_cents))
+  const [imageUrl, setImageUrl] = useState(product.image_url ?? null)
+  const [gallery, setGallery] = useState<string[]>(product.gallery ?? [])
 
   async function applyStock(e: React.FormEvent) {
     e.preventDefault()
@@ -768,6 +781,8 @@ function EditProduct({ product }: { product: EditableProduct }) {
         low_stock_threshold: t,
         price_cents: priceCents,
         cost_cents: costCents,
+        image_url: imageUrl,
+        gallery,
       })
       .eq('id', product.id)
     setBusy(false)
@@ -778,6 +793,87 @@ function EditProduct({ product }: { product: EditableProduct }) {
     }
 
     toast.success('Saved.')
+    router.refresh()
+  }
+
+  /**
+   * Take it off the shelf without taking it out of the books.
+   *
+   * `archived_at` has been on `products` since 007 and every screen already
+   * filters on it — the inventory list, the till, the shop — so this column has
+   * always been the intended way to retire something. Nothing could set it.
+   * That is why a studio that stopped carrying a line had no move except
+   * unticking retail and back bar, which leaves the row in the list forever.
+   */
+  async function archive() {
+    if (!confirm(`Archive "${product.name}"? It leaves the list, the shop and the till, and every past sale keeps it.`)) {
+      return
+    }
+
+    setBusy(true)
+    const { error } = await createClient()
+      .from('products')
+      .update({ archived_at: new Date().toISOString(), is_active: false })
+      .eq('id', product.id)
+    setBusy(false)
+
+    if (error) {
+      toast.error(error.message || 'Could not archive that product.')
+      return
+    }
+    toast.success(`${product.name} archived.`)
+    setOpen(false)
+    router.refresh()
+  }
+
+  /**
+   * And the actual delete, for the row that should never have existed.
+   *
+   * A duplicate, a typo, something added to the wrong studio. Anything that has
+   * been sold is an archive instead and this says so — not because the receipt
+   * would break (`order_items` snapshots the name and the price, so it would
+   * not) but because a product with a sales history is a thing the studio had,
+   * and pretending otherwise makes the inventory reports lie about what was on
+   * the shelf that year.
+   */
+  async function remove() {
+    setBusy(true)
+    const [sold, blockers] = await Promise.all([
+      productSaleCount(product.id),
+      productBlockers(product.id),
+    ])
+    setBusy(false)
+
+    if (sold > 0) {
+      toast.error(
+        `${product.name} has been sold ${sold} ${sold === 1 ? 'time' : 'times'} — archive it instead.`,
+        { description: 'Past receipts keep their own copy of the name and price, but the product itself is part of what the studio stocked.' }
+      )
+      return
+    }
+
+    const severe = blockers.filter((b) => b.severe)
+    const warning =
+      severe.length > 0
+        ? `\n\nThis also removes ${severe.map(describe).join(', ')}, which go without a warning of their own.`
+        : ''
+
+    if (!confirm(`Delete "${product.name}" for good? It has never been sold.${warning}`)) return
+
+    setBusy(true)
+    const { error } = await createClient().from('products').delete().eq('id', product.id)
+    setBusy(false)
+
+    if (error) {
+      toast.error(
+        error.code === '23503'
+          ? 'Something still refers to this product, so the database refused to delete it. Archive it instead.'
+          : error.message || 'Could not delete that product.'
+      )
+      return
+    }
+    toast.success(`${product.name} deleted.`)
+    setOpen(false)
     router.refresh()
   }
 
@@ -945,9 +1041,53 @@ function EditProduct({ product }: { product: EditableProduct }) {
           />
         </Field>
 
-        <Button type="button" size="sm" variant="subtle" onClick={saveSettings} disabled={busy}>
-          Save settings
-        </Button>
+        {/* Retail only. A back-bar item is never on a page anybody outside the
+            studio sees, so a photograph of it is storage nobody looks at. */}
+        {retail && (
+          <>
+            <ImageField
+              label="Photograph"
+              value={imageUrl}
+              onChange={setImageUrl}
+              bucket="products"
+              folder="products"
+              hint="Shown in the shop and at the till. Saves with the settings below."
+            />
+
+            <ImageGalleryField
+              value={gallery}
+              onChange={setGallery}
+              bucket="products"
+              folder="products"
+              hint="Extra angles for the shop page."
+            />
+          </>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" size="sm" variant="subtle" onClick={saveSettings} disabled={busy}>
+            Save settings
+          </Button>
+
+          {/* Archive first and delete second, in that order and with that
+              weight: retiring a line is the ordinary thing and deleting is for
+              the row that should not have existed. */}
+          <Button type="button" size="sm" variant="ghost" onClick={archive} disabled={busy}>
+            Archive
+          </Button>
+
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={remove}
+            disabled={busy}
+            className="text-[var(--color-muted)] hover:text-red-700"
+          >
+            <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden />
+            Delete
+          </Button>
+        </div>
       </div>
     </div>
   )

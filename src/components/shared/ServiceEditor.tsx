@@ -7,6 +7,8 @@ import { X, Trash2, Plus, Lock } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Field, Input, Select, Textarea } from '@/components/ui/field'
+import { ImageField } from '@/components/shared/ImageField'
+import { describe, serviceBlockers, serviceBookingCount } from '@/lib/catalog-delete'
 import { formLinkForService, formLinkIsInherited } from '@/lib/forms'
 
 export interface EditableService {
@@ -17,6 +19,8 @@ export interface EditableService {
   description: string | null
   details: string | null
   aftercare: string | null
+  /** The photograph on the menu and on the service's own page. */
+  image_url: string | null
   price_cents: number
   price_is_starting: boolean
   duration_minutes: number
@@ -89,6 +93,7 @@ const BLANK: Omit<EditableService, 'id'> = {
   description: null,
   details: null,
   aftercare: null,
+  image_url: null,
   price_cents: 0,
   price_is_starting: false,
   duration_minutes: 60,
@@ -439,6 +444,7 @@ export function ServiceEditor({
       description: form.description?.trim() || null,
       details: form.details?.trim() || null,
       aftercare: form.aftercare?.trim() || null,
+      image_url: form.image_url,
       price_cents: priceCents,
       price_is_starting: form.price_is_starting,
       duration_minutes: form.duration_minutes,
@@ -537,11 +543,48 @@ export function ServiceEditor({
     router.refresh()
   }
 
+  /**
+   * Delete, once it is clear what that costs.
+   *
+   * This used to be a `confirm()` reading "if it has ever been booked, switch it
+   * off instead" — which put the checking on the person, in a dialog, from
+   * memory. It now asks the database. Bookings are advice, because
+   * `appointment_services` snapshots the name and the price and keeps them
+   * either way. The cascades are the real warning: a membership benefit or a
+   * waitlist entry does not error on the way out, it disappears.
+   */
   async function remove() {
     if (!service) return
-    if (!confirm(`Delete "${service.name}"? If it has ever been booked, switch it off instead.`)) {
-      return
+
+    setBusy(true)
+    const [booked, blockers] = await Promise.all([
+      serviceBookingCount(service.id),
+      serviceBlockers(service.id),
+    ])
+    setBusy(false)
+
+    const severe = blockers.filter((b) => b.severe)
+    const lines: string[] = []
+
+    if (severe.length > 0) {
+      lines.push(
+        `Deleting it also removes ${severe
+          .map(describe)
+          .join(', ')} — those go without a warning of their own.`
+      )
     }
+    if (booked > 0) {
+      lines.push(
+        `It has been booked ${booked} ${booked === 1 ? 'time' : 'times'}. Those appointments keep the name and the price that were on them, so the record survives — but switching it off keeps it bookable-in-the-past and out of the menu, which is usually what is wanted.`
+      )
+    }
+
+    const question =
+      lines.length > 0
+        ? `Delete "${service.name}"?\n\n${lines.join('\n\n')}\n\nDelete anyway?`
+        : `Delete "${service.name}"? Nothing depends on it and it has never been booked.`
+
+    if (!confirm(question)) return
 
     setBusy(true)
     const { error } = await createClient().from('services').delete().eq('id', service.id)
@@ -694,6 +737,17 @@ export function ServiceEditor({
               onChange={(e) => set('description', e.target.value)}
             />
           </Field>
+
+          <ImageField
+            label="Photograph"
+            value={form.image_url}
+            onChange={(url) => set('image_url', url)}
+            bucket="site"
+            folder="services"
+            aspect="wide"
+            className="sm:col-span-2"
+            hint="Shown on the menu and at the top of this service's own page. Without one, the category's picture stands in."
+          />
 
           <Field
             label="Full details"

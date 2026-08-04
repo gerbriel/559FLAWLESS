@@ -15,6 +15,15 @@ export async function GET(request: NextRequest) {
   const { searchParams, origin } = request.nextUrl
   const code = searchParams.get('code')
   const rawNext = searchParams.get('next')
+  // The other way in. `exchangeCodeForSession` is the PKCE half and needs a
+  // verifier this browser only has if it started the flow here. A link the
+  // studio generated with the admin API and handed over in person has no
+  // verifier and never will, so it arrives as a one-time token to be redeemed
+  // instead. Without this branch those links reach this route and are turned
+  // away for a missing code, which is the whole of "the sign-in link does not
+  // work".
+  const tokenHash = searchParams.get('token_hash')
+  const otpType = searchParams.get('type')
 
   // A provider reports a refusal here rather than by failing the exchange.
   const oauthError = searchParams.get('error')
@@ -25,12 +34,26 @@ export async function GET(request: NextRequest) {
 
   const next = rawNext && rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : null
 
-  if (!code) {
+  if (!code && !tokenHash) {
     return NextResponse.redirect(`${origin}/login?error=missing_code`)
   }
 
   const supabase = await createClient()
-  const { data, error } = await supabase.auth.exchangeCodeForSession(code)
+
+  // Only the types this app actually issues. An open `type` would let a crafted
+  // link redeem a token of a kind nobody here mints.
+  const ALLOWED_OTP = ['magiclink', 'recovery', 'invite', 'email'] as const
+  type AllowedOtp = (typeof ALLOWED_OTP)[number]
+
+  const { data, error } =
+    tokenHash && otpType && (ALLOWED_OTP as readonly string[]).includes(otpType)
+      ? await supabase.auth.verifyOtp({
+          token_hash: tokenHash,
+          type: otpType as AllowedOtp,
+        })
+      : code
+        ? await supabase.auth.exchangeCodeForSession(code)
+        : { data: { user: null }, error: new Error('unsupported link') }
 
   if (error || !data.user) {
     return NextResponse.redirect(`${origin}/login?error=invalid_code`)

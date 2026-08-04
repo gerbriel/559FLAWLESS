@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input, Textarea, Field, Select } from '@/components/ui/field'
+import { ImageField } from '@/components/shared/ImageField'
 import { Badge } from '@/components/ui/badge'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
@@ -669,18 +670,15 @@ export function AdminAnnouncementSettings({
                   </Select>
                 </Field>
 
-                <Field
-                  label="Image URL"
-                  htmlFor="image_url"
-                  hint="Optional. Shown as a thumbnail on banners, full width elsewhere."
-                >
-                  <Input
-                    id="image_url"
-                    value={formData.image_url}
-                    onChange={(e) => setFormData({ ...formData, image_url: e.target.value })}
-                    placeholder="https://…"
-                  />
-                </Field>
+                <ImageField
+                  label="Picture"
+                  value={formData.image_url || null}
+                  onChange={(url) => setFormData({ ...formData, image_url: url ?? '' })}
+                  bucket="site"
+                  folder="announcements"
+                  aspect="wide"
+                  hint="Optional. A thumbnail on a banner, full width on a modal or a card."
+                />
               </div>
 
               {(formData.display_style === 'modal' || formData.display_style === 'corner') && (

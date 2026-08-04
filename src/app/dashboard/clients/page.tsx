@@ -54,28 +54,76 @@ const COLUMNS =
 const ROW_ACTION =
   'flex h-11 w-11 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-foreground)] sm:h-9 sm:w-9'
 
+/**
+ * The filter's two pills, which are links.
+ *
+ * Same shape as the kit's `FilterPills`, deliberately not that component: it is
+ * a radiogroup with an onChange and would drag a client boundary across a page
+ * whose filter already lives in the URL beside the search and the page number.
+ * Anchors keep it there — shareable, refreshable, and back-buttonable. Full
+ * 44px until there is a mouse, like everything else that gets tapped.
+ */
+const PILL =
+  'flex min-h-11 items-center rounded-full border px-4 text-sm transition-colors sm:min-h-9'
+const PILL_ON =
+  'border-[var(--color-foreground)] bg-[var(--color-foreground)] text-[var(--color-background)]'
+const PILL_OFF =
+  'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-foreground)] hover:border-[var(--color-accent)]'
+
 interface Props {
-  searchParams: Promise<{ q?: string; page?: string }>
+  searchParams: Promise<{ q?: string; page?: string; show?: string }>
 }
 
 export default async function ClientsPage({ searchParams }: Props) {
-  const { q, page: pageParam } = await searchParams
+  const { q, page: pageParam, show } = await searchParams
   const supabase = await createClient()
 
   const term = q?.trim() ?? ''
   const page = Math.max(1, Number.parseInt(pageParam ?? '1', 10) || 1)
   const offset = (page - 1) * PAGE_SIZE
+  const unclaimedOnly = show === 'unclaimed'
 
   // Paging lives in the URL so a refresh lands where you were and a link can be
-  // handed to someone else. The search comes along for the ride; page 1 is the
-  // bare URL rather than `?page=1`.
+  // handed to someone else. The search and the filter come along for the ride;
+  // page 1 is the bare URL rather than `?page=1`.
   function hrefFor(n: number): string {
     const params = new URLSearchParams()
     if (term) params.set('q', term)
+    if (unclaimedOnly) params.set('show', 'unclaimed')
     if (n > 1) params.set('page', String(n))
     const query = params.toString()
     return query ? `/dashboard/clients?${query}` : '/dashboard/clients'
   }
+
+  /**
+   * The filter's own two URLs. Changing filter drops the page number on
+   * purpose — the same reasoning as the search box, which is deliberately not
+   * a field of the pager: a different question starts at the top of its own
+   * answer rather than on whatever page you were on.
+   */
+  function viewHref(which: 'all' | 'unclaimed'): string {
+    const params = new URLSearchParams()
+    if (term) params.set('q', term)
+    if (which === 'unclaimed') params.set('show', 'unclaimed')
+    const query = params.toString()
+    return query ? `/dashboard/clients?${query}` : '/dashboard/clients'
+  }
+
+  /**
+   * Who has never signed in — the thing `auth.users` knows and nothing here
+   * could ask until 055. It comes back as booleans keyed by profile id: no
+   * address, no timestamp, nothing out of that table.
+   *
+   * In this mode it has to run FIRST. The roster query pages and counts under
+   * the filter, so the ids have to be in hand before it is built. 055 refuses
+   * anyone below front desk, and a provider has no button that sets this — so
+   * one who arrives with the URL by hand is put back on the plain roster
+   * rather than shown an error page.
+   */
+  const rosterClaims = unclaimedOnly
+    ? await supabase.rpc('client_claim_status', { p_ids: null })
+    : null
+  if (rosterClaims?.error) redirect(viewHref('all'))
 
   let query = supabase
     .from('profiles')
@@ -98,6 +146,16 @@ export default async function ClientsPage({ searchParams }: Props) {
     const pattern = `%${term}%`
     query = query.or(
       `first_name.ilike.${pattern},last_name.ilike.${pattern},email.ilike.${pattern},phone.ilike.${pattern}`
+    )
+  }
+
+  if (unclaimedOnly) {
+    // Narrowed by id rather than by a column, because the answer is not in
+    // this table. An empty list is a real answer — everybody has signed in —
+    // and PostgREST renders it as no rows rather than as no filter.
+    query = query.in(
+      'id',
+      (rosterClaims?.data ?? []).filter((r) => !r.has_signed_in).map((r) => r.profile_id)
     )
   }
 
@@ -171,6 +229,27 @@ export default async function ClientsPage({ searchParams }: Props) {
   const role = (viewer?.role ?? 'provider') as UserRole
   const booksForOthers = isFrontDesk(role)
 
+  // Filtered, the roster-wide read above already covers every row on screen.
+  // Unfiltered, ask about the twenty-five that are — and only for the people
+  // 055 will answer, which is the same set who have anything to do about it.
+  const pageClaims =
+    booksForOthers && !unclaimedOnly && clientIds.length > 0
+      ? (await supabase.rpc('client_claim_status', { p_ids: clientIds })).data
+      : null
+
+  const claimByClient = new Map<string, { signedIn: boolean; invited: boolean }>()
+  for (const row of rosterClaims?.data ?? pageClaims ?? []) {
+    claimByClient.set(row.profile_id, {
+      signedIn: row.has_signed_in,
+      invited: row.invitation_pending,
+    })
+  }
+
+  // The ids on this page the bulk bar can actually invite. The server re-reads
+  // all of it before issuing anything; this is what lets the button appear for
+  // a selection that has somebody in it and stay away from one that does not.
+  const unclaimedOnPage = clientIds.filter((id) => claimByClient.get(id)?.signedIn === false)
+
   // Build status maps
   const now = new Date()
   const expiredConsentsMap = new Map<string, number>()
@@ -212,11 +291,17 @@ export default async function ClientsPage({ searchParams }: Props) {
   const lede =
     total === 0
       ? undefined
-      : term
-        ? `${total} ${total === 1 ? 'match' : 'matches'} for “${term}”.`
-        : pageCount > 1
-          ? `${total} clients, newest first — showing ${offset + 1}–${offset + shown}.`
-          : `${total} ${total === 1 ? 'client' : 'clients'}, newest first.`
+      : unclaimedOnly
+        ? term
+          ? `${total} ${total === 1 ? 'match' : 'matches'} for “${term}” who have never signed in.`
+          : `${total} ${total === 1 ? 'client has' : 'clients have'} never signed in${
+              pageCount > 1 ? ` — showing ${offset + 1}–${offset + shown}` : ''
+            }.`
+        : term
+          ? `${total} ${total === 1 ? 'match' : 'matches'} for “${term}”.`
+          : pageCount > 1
+            ? `${total} clients, newest first — showing ${offset + 1}–${offset + shown}.`
+            : `${total} ${total === 1 ? 'client' : 'clients'}, newest first.`
 
   return (
     <div>
@@ -270,12 +355,38 @@ export default async function ClientsPage({ searchParams }: Props) {
         ]}
       />
 
-      {/* A GET form, so the search is in the URL like everything else here.
-          `page` is deliberately not a field: a new search starts at the top of
-          its own results rather than on whatever page you happened to be on. */}
-      <form role="search" className="mt-6 max-w-xl">
-        <SearchField name="q" defaultValue={q ?? ''} label="Search by name, email, or phone" />
-      </form>
+      <div className="mt-6 flex flex-wrap items-end justify-between gap-4">
+        {/* A GET form, so the search is in the URL like everything else here.
+            `page` is deliberately not a field: a new search starts at the top
+            of its own results rather than on whatever page you happened to be
+            on. `show` is one, so searching does not silently drop the filter. */}
+        <form role="search" className="w-full max-w-xl">
+          {unclaimedOnly && <input type="hidden" name="show" value="unclaimed" />}
+          <SearchField name="q" defaultValue={q ?? ''} label="Search by name, email, or phone" />
+        </form>
+
+        {/* "Who do I still need to get onto the system", in one press. Front
+            desk only: 055 answers nobody below it, and the invitation behind
+            the filter is front-desk work in every other part of this app. */}
+        {booksForOthers && (
+          <nav aria-label="Filter the roster" className="flex flex-wrap gap-2">
+            <Link
+              href={viewHref('all')}
+              aria-current={unclaimedOnly ? undefined : 'page'}
+              className={`${PILL} ${unclaimedOnly ? PILL_OFF : PILL_ON}`}
+            >
+              Everyone
+            </Link>
+            <Link
+              href={viewHref('unclaimed')}
+              aria-current={unclaimedOnly ? 'page' : undefined}
+              className={`${PILL} ${unclaimedOnly ? PILL_ON : PILL_OFF}`}
+            >
+              Never signed in
+            </Link>
+          </nav>
+        )}
+      </div>
 
       {/* Above the results rather than below them, because the case this is for
           is a search that otherwise looks like a dead end: the person is on the
@@ -322,7 +433,23 @@ export default async function ClientsPage({ searchParams }: Props) {
       )}
 
       {total === 0 ? (
-        term ? (
+        unclaimedOnly ? (
+          <EmptyState
+            className="mt-8"
+            icon={CheckCircle2}
+            title={term ? 'Nobody matching that is waiting' : 'Everyone has signed in'}
+            description={
+              term
+                ? `Nobody matching “${term}” is sitting on an account they have never used.`
+                : 'Every client on the roster has been into their account at least once. People the studio knows who have no account at all are under Not signed up.'
+            }
+            action={
+              <ButtonLink href={viewHref('all')} variant="subtle" size="sm">
+                Show all clients
+              </ButtonLink>
+            }
+          />
+        ) : term ? (
           <EmptyState
             className="mt-8"
             icon={SearchX}
@@ -384,6 +511,7 @@ export default async function ClientsPage({ searchParams }: Props) {
                 const hasIntake = hasIntakeSet.has(c.id)
                 const intakeUnreviewed = intakeNeedsReviewSet.has(c.id)
                 const hasConsent = hasConsentSet.has(c.id)
+                const claim = claimByClient.get(c.id)
 
                 // A record created by staff mid-call can be missing a name;
                 // the email is what the person is known by until it arrives,
@@ -428,6 +556,19 @@ export default async function ClientsPage({ searchParams }: Props) {
                         </Link>
 
                         <div className="mt-1.5 flex flex-wrap gap-1.5">
+                          {/* Never signed in. Neutral, not a warning: an
+                              account made for a walk-in in the room is a
+                              perfectly ordinary thing for the studio to be
+                              holding, and most of a healthy roster will never
+                              show this. It says which of the two states it is,
+                              because "we have not asked them" and "we asked
+                              and they have not come" want different follow-ups
+                              from the person reading the row. */}
+                          {claim?.signedIn === false && (
+                            <Badge tone="neutral" size="sm">
+                              {claim.invited ? 'Invited, not signed in' : 'Never signed in'}
+                            </Badge>
+                          )}
                           {/* Forms status, always shown — a client with nothing
                               on file is the one you most need to spot. */}
                           {!hasIntake ? (
@@ -547,7 +688,16 @@ export default async function ClientsPage({ searchParams }: Props) {
               the roster and no ticks — the actions behind them are front desk
               and above, and two of them are admin. */}
           {booksForOthers && (
-            <BulkActionBar target="client" tags={tags ?? []} canAdmin={role === 'admin'} />
+            <BulkActionBar
+              target="client"
+              tags={tags ?? []}
+              canAdmin={role === 'admin'}
+              // Which of the ticked rows Invite would actually reach. The bar
+              // shows the button only when the selection holds one of them,
+              // and the confirmation says how many of a mixed selection it
+              // will leave alone.
+              unclaimedIds={unclaimedOnPage}
+            />
           )}
 
           <Pagination page={page} pageCount={pageCount} hrefFor={hrefFor} className="mt-8" />
