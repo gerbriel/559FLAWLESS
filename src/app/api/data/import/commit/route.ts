@@ -5,6 +5,12 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { summariseProblems } from '@/lib/csv/prepare'
 
 export const dynamic = 'force-dynamic'
+/**
+ * A 500-row import re-validates and writes in chunks; on Hobby the default
+ * 10 seconds could cut it off mid-commit — a truncated import that looks
+ * finished. 60 is the plan's ceiling.
+ */
+export const maxDuration = 60
 
 /**
  * Write it.

@@ -43,14 +43,16 @@ const nextConfig: NextConfig = {
     //     (BarcodeCameraScanner), so Permissions-Policy allows camera for
     //     this origin and the CSP allows blob: media.
     //   - 'unsafe-inline' for scripts is what Next's own bootstrap and the
-    //     inline gtag snippet need without a nonce pipeline. That is the main
-    //     thing to fix before enforcing.
+    //     inline gtag snippet need without a nonce pipeline. Removing it means
+    //     building nonces — the next tightening step, not a blocker.
     //
-    // REPORT-ONLY on purpose. Enforcing a first CSP on a live booking site is
-    // how a studio finds out at 9am that nobody can pay a deposit. Watch the
-    // browser console (and any report endpoint added later) for violations;
-    // when it has been quiet for a while, rename the header to
-    // Content-Security-Policy and delete this sentence.
+    // ENFORCED since the live HTML was audited: the only external origins the
+    // served pages reference are an instagram.com link (links are not governed
+    // by resource directives) and ramarketplace.com (already in img-src). No
+    // external script exists outside the allowed googletagmanager. If a
+    // legitimate resource is ever blocked, the rollback is renaming this
+    // header back to Content-Security-Policy-Report-Only — one word, one
+    // deploy — and the console names exactly what was refused.
     const csp = [
       "default-src 'self'",
       "script-src 'self' 'unsafe-inline' https://www.googletagmanager.com",
@@ -91,7 +93,7 @@ const nextConfig: NextConfig = {
             key: 'Permissions-Policy',
             value: 'camera=(self), microphone=(), geolocation=(), payment=()',
           },
-          { key: 'Content-Security-Policy-Report-Only', value: csp },
+          { key: 'Content-Security-Policy', value: csp },
         ],
       },
     ]

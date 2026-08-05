@@ -4,6 +4,11 @@ import { summariseProblems } from '@/lib/csv/prepare'
 import { PREVIEW_SAMPLE } from '@/lib/csv/limits'
 
 export const dynamic = 'force-dynamic'
+/**
+ * The preview parses the entire file and dry-runs the plan; same clock as
+ * the commit, same ceiling.
+ */
+export const maxDuration = 60
 
 /**
  * What this file would do, without doing any of it.
