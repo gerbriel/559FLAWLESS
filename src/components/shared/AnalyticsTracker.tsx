@@ -3,18 +3,11 @@
 import { useEffect, useRef } from 'react'
 import { usePathname, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-
-const SESSION_KEY = 'fl_session'
-
-function sessionId(): string {
-  if (typeof window === 'undefined') return ''
-  let id = sessionStorage.getItem(SESSION_KEY)
-  if (!id) {
-    id = crypto.randomUUID()
-    sessionStorage.setItem(SESSION_KEY, id)
-  }
-  return id
-}
+// This module used to carry its own private sessionId() copy. It happened to
+// use the same storage key as ClientAnalytics, so nothing broke — but two
+// implementations one keystroke apart is exactly how session stitching would
+// have. There is one implementation now; it lives with the consent helpers.
+import { sessionId } from '@/components/shared/ClientAnalytics'
 
 /**
  * Fire-and-forget pageview tracking. Writes go straight to Supabase under the

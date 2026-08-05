@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
 import { ButtonLink } from '@/components/ui/button'
 import { ClientNoteForm } from '@/components/shared/ClientNoteForm'
+import { ClientBagPanel, type BagItem } from '@/components/shared/ClientBagPanel'
 import { ClientBanPanel } from '@/components/shared/ClientBanPanel'
 import { ClientTagPicker, type ClientTagOption } from '@/components/shared/ClientTagPicker'
 import { ClientTimeline } from '@/components/shared/ClientTimeline'
@@ -243,6 +244,52 @@ export default async function ClientDetailPage({ params }: Props) {
       signedUrl: byPath.get(p.storage_path) ?? null,
     }))
   }
+
+  // ── What is in their shopping bag right now (060) ──────────
+  // Read as the viewer, so 060's staff SELECT policy is the thing saying yes.
+  // One row per browsing session, and someone who shopped signed-in on two
+  // devices can hold two — the freshest by updated_at is the bag as it stands.
+  // Fetched after the batches above rather than inside them: those are already
+  // close enough to TS2589 that one more select string in the destructure is
+  // what finds it (same reasoning as the membership panel).
+  const { data: bagRow } = await supabase
+    .from('cart_snapshots')
+    .select('lines, updated_at')
+    .eq('client_id', id)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  const bagLines = parseBagLines(bagRow?.lines)
+  let bagItems: BagItem[] = []
+  if (bagLines.length > 0) {
+    const { data: bagProducts } = await supabase
+      .from('products')
+      .select('id, name, price_cents, stock_qty, is_active, archived_at')
+      .in(
+        'id',
+        bagLines.map((l) => l.productId),
+      )
+    const bagProductById = new Map((bagProducts ?? []).map((p) => [p.id, p]))
+    // A line whose product has left the catalogue names nothing the desk can
+    // point at, so it is dropped rather than rendered as "unknown product".
+    bagItems = bagLines.flatMap((line) => {
+      const product = bagProductById.get(line.productId)
+      if (!product) return []
+      return [
+        {
+          productId: product.id,
+          name: product.name,
+          qty: line.qty,
+          priceCents: product.price_cents,
+          onShelf: product.stock_qty > 0 && product.is_active && !product.archived_at,
+        },
+      ]
+    })
+  }
+  // No row, an empty bag, or nothing left the catalogue still knows: no panel
+  // at all. A client with no bag needs no empty box.
+  const bag = bagRow && bagItems.length > 0 ? { items: bagItems, updatedAt: bagRow.updated_at } : null
 
   const promptRows = (prompts ?? []) as AppointmentPhotoPrompt[]
   const duePrompts = promptRows.filter(
@@ -513,6 +560,20 @@ export default async function ClientDetailPage({ params }: Props) {
             />
           )}
 
+          {/* Only when there is something in it — the empty case renders no
+              box at all. Staff-wide read (060), but the reminder is front desk
+              and up, same as the other client-facing doors above. */}
+          {bag && (
+            <ClientBagPanel
+              clientId={client.id}
+              items={bag.items}
+              updatedAt={bag.updatedAt}
+              timeZone={timeZone}
+              canNudge={isFrontDesk(role)}
+              marketingOptIn={client.marketing_opt_in}
+            />
+          )}
+
           {/* Somebody the studio already knew, who accepted an invitation and
               claimed their own record. Worth saying on the file: it explains
               why a brand new account arrived with a phone number nobody here
@@ -727,6 +788,27 @@ export default async function ClientDetailPage({ params }: Props) {
       </div>
     </div>
   )
+}
+
+/**
+ * `cart_snapshots.lines` is jsonb written by `upsert_cart_snapshot()` (060) —
+ * [{ productId, qty }], the cart store's own shape. The function caps size and
+ * shape but does not inspect elements, so each is checked here before it can
+ * become a rendered row. Garbage elements are dropped, never thrown over.
+ */
+function parseBagLines(lines: Json | null | undefined): { productId: number; qty: number }[] {
+  if (!Array.isArray(lines)) return []
+  const out: { productId: number; qty: number }[] = []
+  for (const raw of lines) {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) continue
+    const line = raw as { productId?: Json; qty?: Json }
+    if (typeof line.productId !== 'number' || !Number.isInteger(line.productId)) continue
+    const qty = typeof line.qty === 'number' && Number.isFinite(line.qty) ? Math.trunc(line.qty) : 0
+    if (qty <= 0) continue
+    // The store caps a line at 99; a snapshot claiming more is not believed.
+    out.push({ productId: line.productId, qty: Math.min(qty, 99) })
+  }
+  return out
 }
 
 function Row({ label, value }: { label: string; value: string }) {

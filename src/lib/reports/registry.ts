@@ -49,10 +49,12 @@ const ENTRIES: Record<string, RegistryEntry> = {
   appointments: { group: 'operations', load: () => import('./appointments').then((m) => m.appointmentsReport) },
   'utilisation-retention': { group: 'operations', load: () => import('./utilisation-retention').then((m) => m.utilisationRetentionReport) },
   inventory: { group: 'operations', load: () => import('./inventory').then((m) => m.inventoryReport) },
+  'added-not-bought': { group: 'operations', load: () => import('./added-not-bought').then((m) => m.addedNotBoughtReport) },
 
   // ── People ─────────────────────────────────────────────────
   'most-valuable-clients': { group: 'people', load: () => import('./most-valuable-clients').then((m) => m.mostValuableClientsReport) },
   'staff-performance': { group: 'people', load: () => import('./staff-performance').then((m) => m.staffPerformanceReport) },
+  'bags-abandonment': { group: 'people', load: () => import('./bags-abandonment').then((m) => m.bagsAbandonmentReport) },
 }
 
 /**

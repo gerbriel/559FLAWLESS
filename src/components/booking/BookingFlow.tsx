@@ -15,6 +15,7 @@ import {
   timeZoneAbbreviation,
 } from '@/lib/time'
 import { trackEvent } from '@/components/shared/AnalyticsTracker'
+import { clearConsidered, rememberConsidered } from '@/lib/interest'
 import { FormRequirementChecker } from '@/components/shared/FormRequirementChecker'
 import { DepositRedirect } from '@/components/shared/DepositRedirect'
 import { WaitlistJoin } from '@/components/booking/WaitlistJoin'
@@ -306,6 +307,8 @@ export function BookingFlow({
         service_ids: selected.map((x) => x.id),
         provider_id: provider.id,
       })
+      // A booked service is not a pending thought — drop the home page note.
+      clearConsidered()
 
       // An older server build that does not send this is treated as the status
       // the studio has run on until now.
@@ -734,6 +737,18 @@ export function BookingFlow({
                   void trackEvent('booking_started', {
                     service_ids: selected.map((x) => x.id),
                   })
+                  // The first chosen service becomes the home page's "still
+                  // considering?" note. The intimate flag is frozen at write
+                  // time — service OR its category — so the reader can refuse
+                  // it without ever needing the catalogue (interest.ts).
+                  const first = selected[0]
+                  if (first) {
+                    rememberConsidered({
+                      slug: first.slug,
+                      name: first.name,
+                      intimate: first.is_intimate || first.category.is_intimate,
+                    })
+                  }
                 }}
                 disabled={!hasSelection || !ageGateSatisfied}
                 size="lg"

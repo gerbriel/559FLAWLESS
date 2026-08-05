@@ -7,7 +7,13 @@ import { createClient } from '@/lib/supabase/client'
 const SESSION_KEY = 'fl_session'
 const ANALYTICS_STORAGE_KEY = 'fl_analytics_consent'
 
-function sessionId(): string {
+/**
+ * THE session id. Every analytics row, every cart snapshot, and the
+ * sign-in stitch (claim_browsing_session, migration 060) key on this exact
+ * value — a second implementation with its own storage key is how stitching
+ * silently breaks. Import this one; don't copy it.
+ */
+export function sessionId(): string {
   if (typeof window === 'undefined') return ''
   let id = sessionStorage.getItem(SESSION_KEY)
   if (!id) {

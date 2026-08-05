@@ -6,6 +6,7 @@ import { ButtonLink } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { formatMoney } from '@/lib/utils'
 import { formatDateTimeInTimeZone, requestNow } from '@/lib/time'
+import { interestedServiceId } from '@/lib/interest'
 import {
   DEPOSIT_LABEL,
   DEPOSIT_TONE,
@@ -55,6 +56,41 @@ export default async function AccountPage() {
     ])
 
   const next = upcoming?.[0]
+
+  // ── Pick up where you left off ───────────────────────────
+  // Their OWN analytics events, read as them: migration 060's "client reads
+  // own events" policy is what admits the rows, and every step here degrades
+  // to "no card" — before the policy is applied, on any query error, when the
+  // service has since been retired, or when it is already on their calendar
+  // (nudging what is booked is noise). A personalization card must never be
+  // the reason the account page errors (058's rule). No intimacy filter: this
+  // is their private signed-in page, the one place that is allowed.
+  let resume: { name: string; slug: string } | null = null
+  const interestId = await interestedServiceId(supabase, user.id, requestNow())
+  if (interestId !== null) {
+    const [{ data: interestService }, { data: alreadyBooked }] = await Promise.all([
+      supabase
+        .from('services')
+        .select('name, slug')
+        .eq('id', interestId)
+        .eq('is_active', true)
+        // The booking flow cannot take a consultation-first service, so the
+        // card must not point at one.
+        .eq('requires_consultation', false)
+        .maybeSingle(),
+      supabase
+        .from('appointments')
+        .select('id, appointment_services!inner(service_id)')
+        .eq('client_id', user.id)
+        .in('status', ['pending', 'confirmed'])
+        .gte('starts_at', now)
+        .eq('appointment_services.service_id', interestId)
+        .limit(1),
+    ])
+    if (interestService && (alreadyBooked ?? []).length === 0) {
+      resume = { name: interestService.name, slug: interestService.slug }
+    }
+  }
 
   return (
     <div>
@@ -121,6 +157,23 @@ export default async function AccountPage() {
           </p>
           <ButtonLink href="/book" className="mt-8">
             Book an appointment
+          </ButtonLink>
+        </div>
+      )}
+
+      {resume && (
+        <div className="mt-8 flex flex-wrap items-center justify-between gap-6 border border-[var(--color-border)] bg-[var(--color-surface)] p-8">
+          <div>
+            <p className="label-caps mb-4 text-[var(--color-accent)]">
+              Pick up where you left off
+            </p>
+            <p className="display text-2xl">{resume.name}</p>
+            <p className="mt-2 text-sm text-[var(--color-muted)]">
+              You were looking at this recently and it never made it to the calendar.
+            </p>
+          </div>
+          <ButtonLink href={`/book?service=${resume.slug}`} variant="subtle" size="sm">
+            Book it
           </ButtonLink>
         </div>
       )}

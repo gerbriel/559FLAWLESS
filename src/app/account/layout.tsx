@@ -5,6 +5,7 @@ import { Container } from '@/components/ui/section'
 import { SignOutButton } from '@/components/layout/SignOutButton'
 import { NotificationBell } from '@/components/layout/NotificationBell'
 import { AccountNav } from '@/components/layout/AccountNav'
+import { SessionStitch } from '@/components/shared/SessionStitch'
 import { isStaff } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
@@ -100,6 +101,10 @@ export default async function AccountLayout({
           <div className="min-w-0">{children}</div>
         </div>
       </Container>
+
+      {/* Only signed-in clients reach this layout, which is exactly why the
+          anonymous-session stitch fires here and nowhere public. */}
+      <SessionStitch />
     </div>
   )
 }

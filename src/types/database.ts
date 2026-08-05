@@ -955,6 +955,21 @@ export type AnalyticsEvent = {
   created_at: string
 }
 
+/**
+ * The current contents of a visitor's shopping bag, one row per analytics
+ * session, overwritten in place — a snapshot, not a log. Written only through
+ * `upsert_cart_snapshot()`; staff-read; sweeps itself at 30 days. See
+ * migration 060.
+ */
+export type CartSnapshot = {
+  session_id: string
+  /** Stamped from auth.uid() by the write function, never from a parameter. */
+  client_id: string | null
+  /** [{ productId, qty }] — product ids and quantities ONLY, never prices. */
+  lines: Json
+  updated_at: string
+}
+
 export type SiteContent = {
   key: string
   value: Json
@@ -1625,6 +1640,7 @@ export type Database = {
       announcements: TableDef<Announcement>
       testimonials: TableDef<Testimonial, [ToProfile<'testimonials', 'client_id'>]>
       analytics_events: TableDef<AnalyticsEvent, [ToProfile<'analytics_events', 'user_id'>]>
+      cart_snapshots: TableDef<CartSnapshot, [ToProfile<'cart_snapshots', 'client_id'>]>
       newsletter_subscribers: TableDef<NewsletterSubscriber, [ToProfile<'newsletter_subscribers', 'client_id'>]>
       user_activity_log: TableDef<
         UserActivityLog,
@@ -2622,6 +2638,34 @@ export type Database = {
       purge_empty_profile: {
         Args: { p_profile: string }
         Returns: string
+      }
+
+      // ── Added in 060 ────────────────────────────────────────
+      /**
+       * The one write path into cart_snapshots: upsert the current bag for
+       * one analytics session. Anon-callable on purpose — a stranger's bag
+       * is the point. Caps its inputs (64-char session, jsonb array, 50
+       * lines, ~4KB serialized) and refuses by silently returning, never by
+       * raising — a bag snapshot must not error a browsing session. An
+       * empty array deletes the row. client_id is stamped from auth.uid(),
+       * never from a parameter. Respect the analytics consent key before
+       * calling.
+       */
+      upsert_cart_snapshot: {
+        Args: { p_session: string; p_lines: Json }
+        Returns: undefined
+      }
+      /**
+       * Called once after sign-in: stitch the anonymous trail for this
+       * session id (analytics_events, cart_snapshots) to the calling
+       * account. Moves ONLY rows with a null owner — never reassigns
+       * anything that already belongs to someone — and collapses the
+       * caller's snapshots to the freshest one (one person, one bag).
+       * Idempotent; authenticated only, raises for anon.
+       */
+      claim_browsing_session: {
+        Args: { p_session: string }
+        Returns: undefined
       }
     }
     Enums: {

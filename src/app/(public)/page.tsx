@@ -5,6 +5,7 @@ import { createPublicClient } from '@/lib/supabase/public'
 import { Container, Section, SectionHeading } from '@/components/ui/section'
 import { ButtonLink } from '@/components/ui/button'
 import { formatServicePrice, formatDuration } from '@/lib/utils'
+import { ConsideredService } from '@/components/shared/ConsideredService'
 
 export const revalidate = 300
 
@@ -85,6 +86,12 @@ export default async function HomePage() {
           </div>
         </Container>
       </section>
+
+      {/* A service they carried into the booking flow and left there. Client
+          component over a static page: nothing in the server HTML, and the
+          reader in src/lib/interest.ts is what decides whether there is
+          anything to say — including refusing intimate services here. */}
+      <ConsideredService />
 
       {/* ── Categories ───────────────────────────────────── */}
       <Section>

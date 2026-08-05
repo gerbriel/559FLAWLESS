@@ -5,6 +5,7 @@ import { SiteFooter, type FooterContact } from '@/components/layout/SiteFooter'
 import { Announcements } from '@/components/layout/Announcements'
 import type { LiveAnnouncement } from '@/lib/announcements'
 import { ClientAnalytics } from '@/components/shared/ClientAnalytics'
+import { CartSnapshotSync } from '@/components/shared/CartSnapshotSync'
 
 /**
  * Everything this layout reads is public, so the whole marketing site can be
@@ -78,6 +79,9 @@ export default async function PublicLayout({
       <Suspense fallback={null}>
         <ClientAnalytics />
       </Suspense>
+
+      {/* No Suspense needed: unlike ClientAnalytics it reads no search params. */}
+      <CartSnapshotSync />
     </>
   )
 }

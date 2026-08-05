@@ -2,6 +2,8 @@ import type { Metadata } from 'next'
 import { isProfileComplete } from '@/lib/profile'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { requestNow } from '@/lib/time'
+import { interestedServiceId } from '@/lib/interest'
 import { Container, Section } from '@/components/ui/section'
 import { BookingFlow, type BookableService, type BookableProvider } from '@/components/booking/BookingFlow'
 import {
@@ -187,6 +189,30 @@ export default async function BookPage({ searchParams }: Props) {
     redirect(`/account/complete?next=${encodeURIComponent(bookingUrl)}`)
   }
 
+  // ── The gentle reorder ───────────────────────────────────
+  // When their own recent events point at a service (interest.ts, under
+  // migration 060's "client reads own events" policy), that service's whole
+  // CATEGORY floats to the top — the category, not the lone service pinned
+  // above its group, so the flow's grouping survives and the nudge stays
+  // gentle. The partition is stable, so order within every category is
+  // untouched. A deep link has already chosen a service, so the query is
+  // skipped; and every failure — policy not applied yet, no events, a service
+  // not on this studio's menu — leaves the order exactly as it was.
+  let orderedServices = scopedServices
+  if (!serviceSlug) {
+    const interestId = await interestedServiceId(supabase, user.id, requestNow())
+    const interestCategoryId =
+      interestId !== null
+        ? scopedServices.find((s) => s.id === interestId)?.category_id
+        : undefined
+    if (interestCategoryId !== undefined) {
+      orderedServices = [
+        ...scopedServices.filter((s) => s.category_id === interestCategoryId),
+        ...scopedServices.filter((s) => s.category_id !== interestCategoryId),
+      ]
+    }
+  }
+
   return (
     <Section>
       <Container>
@@ -247,7 +273,7 @@ export default async function BookPage({ searchParams }: Props) {
           </div>
         ) : (
           <BookingFlow
-            services={scopedServices}
+            services={orderedServices}
             providers={scopedProviders}
             initialServiceSlug={serviceSlug}
             // Everything the profile already holds, so the details step can ask
