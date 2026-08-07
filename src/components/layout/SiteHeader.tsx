@@ -3,8 +3,9 @@
 import { useState, useSyncExternalStore } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Menu, X, User, ShoppingBag } from 'lucide-react'
+import { Menu, X, User, ShoppingBag, Search } from 'lucide-react'
 import { ButtonLink } from '@/components/ui/button'
+import { SearchField } from '@/components/ui/dashboard'
 import { Container } from '@/components/ui/section'
 import { cn } from '@/lib/utils'
 import { useCart } from '@/store/cart'
@@ -58,8 +59,43 @@ function CartButton() {
   )
 }
 
+/**
+ * The search, as a plain GET form pointed at /search.
+ *
+ * A form and not a controlled input with a router push: this is the header of
+ * a server-rendered marketing site, and a form submits before React has loaded
+ * and works with the browser's own history.
+ *
+ * It searches the whole site — treatments, products, questions and the pages
+ * themselves. A box in the header that silently only covered one of those would
+ * be worse than no box at all, which is why /search exists rather than this
+ * pointing at /shop. The shop keeps its own field for searching within it.
+ */
+function NavSearchForm({
+  autoFocus = false,
+  onSubmit,
+  className,
+}: {
+  autoFocus?: boolean
+  onSubmit?: () => void
+  className?: string
+}) {
+  return (
+    <form method="get" action="/search" onSubmit={onSubmit} className={className}>
+      <SearchField
+        label="Search treatments, products and answers"
+        name="q"
+        // autoFocus rather than a ref and an effect: the field only ever mounts
+        // in response to the click that asked for it.
+        autoFocus={autoFocus}
+      />
+    </form>
+  )
+}
+
 export function SiteHeader({ categories }: { categories: NavCategory[] }) {
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
   const [openCategory, setOpenCategory] = useState<string | null>(null)
   const pathname = usePathname()
 
@@ -140,6 +176,27 @@ export function SiteHeader({ categories }: { categories: NavCategory[] }) {
           </nav>
 
           <div className="flex items-center gap-3">
+            {/* A toggle rather than a field sitting in the bar: the header is
+                five words wide by design, and a permanent input would crowd out
+                the nav long before it reached a laptop. Hidden below sm, where
+                the mobile menu carries the same form full width. */}
+            <button
+              className="hidden h-11 w-11 items-center justify-center transition-colors hover:text-[var(--color-accent)] sm:flex"
+              onClick={() => {
+                setSearchOpen((o) => !o)
+                setMobileOpen(false)
+              }}
+              aria-label={searchOpen ? 'Close search' : 'Search the site'}
+              aria-expanded={searchOpen}
+              aria-controls="site-search"
+            >
+              {searchOpen ? (
+                <X className="h-5 w-5" strokeWidth={1.5} />
+              ) : (
+                <Search className="h-5 w-5" strokeWidth={1.5} />
+              )}
+            </button>
+
             {/* Visible at every size — adding to a bag you cannot find again is
                 the whole complaint this button answers. */}
             <CartButton />
@@ -160,7 +217,10 @@ export function SiteHeader({ categories }: { categories: NavCategory[] }) {
 
             <button
               className="-mr-2 flex h-11 w-11 items-center justify-center lg:hidden"
-              onClick={() => setMobileOpen((o) => !o)}
+              onClick={() => {
+                setMobileOpen((o) => !o)
+                setSearchOpen(false)
+              }}
               aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
               aria-expanded={mobileOpen}
             >
@@ -174,11 +234,36 @@ export function SiteHeader({ categories }: { categories: NavCategory[] }) {
         </div>
       </Container>
 
+      {/* The search row, under the bar rather than inside it, so opening it
+          moves nothing else. Escape closes it the way a dialog would. */}
+      {searchOpen && (
+        <div
+          id="site-search"
+          className="hidden border-t border-[var(--color-border)] bg-[var(--color-background)] sm:block"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setSearchOpen(false)
+          }}
+        >
+          <Container className="py-4">
+            <NavSearchForm
+              autoFocus
+              onSubmit={() => setSearchOpen(false)}
+              className="mx-auto max-w-xl"
+            />
+          </Container>
+        </div>
+      )}
+
       {/* Mobile nav */}
       {mobileOpen && (
         <div className="border-t border-[var(--color-border)] bg-[var(--color-background)] lg:hidden">
           <Container className="py-6">
             <nav className="space-y-6" aria-label="Mobile">
+              {/* Full width and always visible here, rather than behind another
+                  tap: the toggle in the bar is hidden on a phone precisely so
+                  this can be the one obvious way in. */}
+              <NavSearchForm onSubmit={() => setMobileOpen(false)} />
+
               <div>
                 <p className="label-caps mb-3 text-[var(--color-accent)]">Services</p>
                 <ul className="space-y-2.5 pl-1">

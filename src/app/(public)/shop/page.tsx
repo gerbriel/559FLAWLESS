@@ -4,8 +4,25 @@ import type { Metadata } from 'next'
 import { ArrowUpRight } from 'lucide-react'
 import { createPublicClient } from '@/lib/supabase/public'
 import { Container, Section, SectionHeading } from '@/components/ui/section'
+import { SearchField } from '@/components/ui/dashboard'
 import { Badge } from '@/components/ui/badge'
 import { formatMoney } from '@/lib/utils'
+
+/**
+ * A shop URL with the category and the search each kept or dropped.
+ *
+ * The two are independent — picking a category should not throw away what
+ * someone typed, and searching should not throw away the category they are
+ * standing in — so every link on this page goes through here rather than
+ * hand-writing a query string that remembers one and forgets the other.
+ */
+function shopHref(category: string | null, search: string): string {
+  const params = new URLSearchParams()
+  if (category) params.set('category', category)
+  if (search) params.set('q', search)
+  const qs = params.toString()
+  return qs ? `/shop?${qs}` : '/shop'
+}
 
 export const revalidate = 120
 
@@ -24,11 +41,12 @@ interface ShopCopy {
 }
 
 interface Props {
-  searchParams: Promise<{ category?: string }>
+  searchParams: Promise<{ category?: string; q?: string }>
 }
 
 export default async function ShopPage({ searchParams }: Props) {
-  const { category } = await searchParams
+  const { category, q } = await searchParams
+  const search = (q ?? '').trim()
   const supabase = createPublicClient()
 
   const [{ data: shopRow }, { data: categories }, { data: products }] = await Promise.all([
@@ -55,9 +73,27 @@ export default async function ShopPage({ searchParams }: Props) {
   const storeUrl = shop.external_store_url
 
   const activeCategory = (categories ?? []).find((c) => c.slug === category)
-  const visible = activeCategory
-    ? (products ?? []).filter((p) => p.category_id === activeCategory.id)
-    : (products ?? [])
+
+  /**
+   * The search, matched here rather than in the query.
+   *
+   * This page already reads the whole retail catalogue to render it, and it is
+   * a couple of hundred rows on a route that revalidates every two minutes. A
+   * `.ilike()` would cost a second uncached round trip per keystroke-driven
+   * navigation and match less: a shopper who types "rhonda" or "cleanser" means
+   * the brand and the category, and neither is a column on `products`.
+   */
+  const term = search.toLowerCase()
+  const nameOf = (embed: unknown) => (embed as { name: string } | null)?.name ?? null
+  const visible = (products ?? [])
+    .filter((p) => (activeCategory ? p.category_id === activeCategory.id : true))
+    .filter((p) => {
+      if (!term) return true
+      const category = (categories ?? []).find((c) => c.id === p.category_id)
+      return [p.name, p.description ?? '', nameOf(p.brands) ?? '', category?.name ?? ''].some(
+        (field) => field.toLowerCase().includes(term)
+      )
+    })
 
   return (
     <Section>
@@ -102,10 +138,19 @@ export default async function ShopPage({ searchParams }: Props) {
           </a>
         )}
 
+        {/* A GET form, so a search lands in the URL: it survives a refresh, it
+            can be sent to someone, and it works before React has loaded. The
+            category rides along as a hidden field, so searching inside a
+            category stays inside it. */}
+        <form method="get" action="/shop" className="mt-14 max-w-md">
+          {activeCategory && <input type="hidden" name="category" value={activeCategory.slug} />}
+          <SearchField label="Search products" name="q" defaultValue={search} />
+        </form>
+
         {(categories?.length ?? 0) > 0 && (
-          <nav className="mt-14 flex flex-wrap gap-x-7 gap-y-3" aria-label="Product categories">
+          <nav className="mt-8 flex flex-wrap gap-x-7 gap-y-3" aria-label="Product categories">
             <Link
-              href="/shop"
+              href={shopHref(null, search)}
               className={`label-caps -my-2 inline-flex min-h-11 items-center py-2 ${
                 !activeCategory
                   ? 'border-b border-[var(--color-foreground)]'
@@ -117,7 +162,7 @@ export default async function ShopPage({ searchParams }: Props) {
             {(categories ?? []).map((c) => (
               <Link
                 key={c.slug}
-                href={`/shop?category=${c.slug}`}
+                href={shopHref(c.slug, search)}
                 className={`label-caps -my-2 inline-flex min-h-11 items-center py-2 ${
                   activeCategory?.slug === c.slug
                     ? 'border-b border-[var(--color-foreground)]'
@@ -130,16 +175,43 @@ export default async function ShopPage({ searchParams }: Props) {
           </nav>
         )}
 
+        {search && (
+          <p className="mt-6 text-sm text-[var(--color-muted)]">
+            {visible.length} {visible.length === 1 ? 'product' : 'products'} matching “{search}”
+            {activeCategory ? ` in ${activeCategory.name}` : ''}.{' '}
+            <Link
+              href={shopHref(activeCategory?.slug ?? null, '')}
+              className="border-b border-current"
+            >
+              Clear
+            </Link>
+          </p>
+        )}
+
         {visible.length === 0 ? (
           <div className="mt-12 border border-[var(--color-border)] bg-[var(--color-surface)] p-12 text-center">
             <p className="display text-2xl">
-              {activeCategory ? `Nothing listed under ${activeCategory.name} yet.` : 'Picks coming soon.'}
+              {search
+                ? `Nothing matches “${search}”.`
+                : activeCategory
+                  ? `Nothing listed under ${activeCategory.name} yet.`
+                  : 'Picks coming soon.'}
             </p>
             <p className="mx-auto mt-3 max-w-md text-sm text-[var(--color-muted)]">
-              {storeUrl
-                ? 'The full range is on the Rhonda Allison store above. Ask at your next appointment and I will point you at the right things for your skin.'
-                : 'Ask about home care at your next appointment.'}
+              {search
+                ? 'Try a product name, an ingredient, or the concern you are treating.'
+                : storeUrl
+                  ? 'The full range is on the Rhonda Allison store above. Ask at your next appointment and I will point you at the right things for your skin.'
+                  : 'Ask about home care at your next appointment.'}
             </p>
+            {search && (
+              <Link
+                href={shopHref(null, '')}
+                className="label-caps mt-6 inline-flex min-h-11 items-center border-b border-[var(--color-foreground)]"
+              >
+                Show everything
+              </Link>
+            )}
           </div>
         ) : (
           <div className="mt-12 grid gap-px border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-2 lg:grid-cols-3">

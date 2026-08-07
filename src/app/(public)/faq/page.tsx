@@ -40,7 +40,9 @@ export default async function FaqPage() {
               <h2 className="label-caps mb-8 text-[var(--color-accent)]">{category}</h2>
               <dl className="divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
                 {(items ?? []).map((f) => (
-                  <div key={f.id} className="py-7">
+                  // Search links here by id. scroll-mt clears the sticky header,
+                  // which would otherwise land the question underneath it.
+                  <div key={f.id} id={`faq-${f.id}`} className="scroll-mt-28 py-7">
                     <dt className="display text-xl">{f.question}</dt>
                     <dd className="mt-3 max-w-3xl leading-relaxed text-[var(--color-muted)]">
                       {f.answer}
