@@ -6,6 +6,13 @@ import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
 import { FilterPills, Stepper, type PillOption } from '@/components/ui/dashboard-client'
+import { Select } from '@/components/ui/field'
+import {
+  inventoryHref,
+  SORT_DEFAULT_DIR,
+  type InventoryView,
+  type SortKey,
+} from '@/lib/inventory-view'
 
 /**
  * The two parts of the inventory list that need a handler.
@@ -29,14 +36,13 @@ const SETTLE_MS = 900
  */
 export function InventoryFilterPills({
   options,
-  value,
-  search,
+  view,
   className,
 }: {
   options: PillOption[]
-  value: string
-  /** Carried across so changing filter does not silently drop the search. */
-  search?: string
+  /** The whole list state, so changing the pill keeps the search, the category,
+   *  the brand and the sort someone already chose. */
+  view: InventoryView
   className?: string
 }) {
   const router = useRouter()
@@ -45,18 +51,98 @@ export function InventoryFilterPills({
     <FilterPills
       label="Filter stock"
       options={options}
-      value={value}
-      onChange={(next) => {
-        const params = new URLSearchParams({ filter: next })
-        if (search) params.set('q', search)
-        // `focus` is deliberately not carried: it is a one-shot instruction
-        // from the scanner to jump to a row, not a state of the list.
-        router.push(`/dashboard/inventory?${params.toString()}`)
-      }}
+      value={view.filter}
+      onChange={(next) => router.push(inventoryHref(view, { filter: next }))}
       // The kit sizes its pills for a mouse. On a phone they get the same 44px
       // the shared Button gives itself.
       className={cn('[&>button]:min-h-11 sm:[&>button]:min-h-9', className)}
     />
+  )
+}
+
+/**
+ * Category and brand, as two dropdowns.
+ *
+ * Dropdowns rather than another row of pills: there are a dozen categories and
+ * however many brands the studio stocks, and a pill row that wraps to three
+ * lines stops being a way to scan the options. The stock filter stays pills
+ * because it is four fixed choices with counts on them.
+ *
+ * Each option carries its own count so an empty category reads as empty before
+ * it is chosen, rather than after.
+ */
+export function InventoryScope({
+  view,
+  categories,
+  brands,
+  sorts,
+  className,
+}: {
+  view: InventoryView
+  categories: { slug: string; name: string; count: number }[]
+  brands: { slug: string; name: string; count: number }[]
+  /** Sort choices for narrow screens, where the sortable column headings are
+   *  not rendered at all. Hidden from xl up, where the headings do this job. */
+  sorts: { key: SortKey; label: string }[]
+  className?: string
+}) {
+  const router = useRouter()
+  const label = (name: string, count: number) => `${name} (${count})`
+
+  return (
+    <div className={cn('flex flex-wrap items-center gap-2.5', className)}>
+      <label className="min-w-0">
+        <span className="sr-only">Filter by category</span>
+        <Select
+          className="w-auto min-w-44"
+          value={view.category}
+          onChange={(e) => router.push(inventoryHref(view, { category: e.target.value }))}
+        >
+          <option value="">All categories</option>
+          {categories.map((c) => (
+            <option key={c.slug} value={c.slug}>
+              {label(c.name, c.count)}
+            </option>
+          ))}
+        </Select>
+      </label>
+
+      <label className="min-w-0">
+        <span className="sr-only">Filter by brand</span>
+        <Select
+          className="w-auto min-w-40"
+          value={view.brand}
+          onChange={(e) => router.push(inventoryHref(view, { brand: e.target.value }))}
+        >
+          <option value="">All brands</option>
+          {brands.map((b) => (
+            <option key={b.slug} value={b.slug}>
+              {label(b.name, b.count)}
+            </option>
+          ))}
+        </Select>
+      </label>
+
+      <label className="min-w-0 xl:hidden">
+        <span className="sr-only">Sort by</span>
+        <Select
+          className="w-auto min-w-36"
+          value={view.sort}
+          onChange={(e) => {
+            const sort = e.target.value as SortKey
+            // A column picked from here starts at its own natural direction,
+            // exactly as it would if its heading had been clicked.
+            router.push(inventoryHref(view, { sort, dir: SORT_DEFAULT_DIR[sort] }))
+          }}
+        >
+          {sorts.map((s) => (
+            <option key={s.key} value={s.key}>
+              Sort: {s.label}
+            </option>
+          ))}
+        </Select>
+      </label>
+    </div>
   )
 }
 

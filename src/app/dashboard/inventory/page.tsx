@@ -1,6 +1,16 @@
 import type { ReactNode } from 'react'
+import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { AlertTriangle, FileBarChart, Package, ScanLine, Store, type LucideIcon } from 'lucide-react'
+import {
+  AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  FileBarChart,
+  Package,
+  ScanLine,
+  Store,
+  type LucideIcon,
+} from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
 import { ButtonLink } from '@/components/ui/button'
@@ -16,8 +26,16 @@ import type { PillOption } from '@/components/ui/dashboard-client'
 import { ProductEditor } from '@/components/shared/ProductEditor'
 import { BarcodeField } from '@/components/shared/BarcodeField'
 import { BarcodeInventoryScan } from '@/components/shared/BarcodeInventoryScan'
-import { InventoryFilterPills, StockStepper } from '@/components/shared/InventoryControls'
-import { formatMoney } from '@/lib/utils'
+import { InventoryFilterPills, InventoryScope, StockStepper } from '@/components/shared/InventoryControls'
+import {
+  inventoryHref,
+  readView,
+  sortHref,
+  SORT_COLUMN,
+  type InventoryView,
+  type SortKey,
+} from '@/lib/inventory-view'
+import { cn, formatMoney } from '@/lib/utils'
 import { isFrontDesk, isManager, isStaff, type UserRole } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
@@ -25,10 +43,19 @@ export const dynamic = 'force-dynamic'
 interface Props {
   /**
    * `focus` is set by the scanner when the code it read is outside the filter.
-   * `q` is the search box, kept in the URL so a filtered shelf survives a
-   * refresh and so the scanner's own navigation can clear it.
+   * Everything else is the list's own state and is read through `readView` —
+   * kept in the URL so a filtered shelf survives a refresh, can be sent to
+   * someone, and so the scanner's own navigation can clear it.
    */
-  searchParams: Promise<{ filter?: string; focus?: string; q?: string }>
+  searchParams: Promise<{
+    filter?: string
+    focus?: string
+    q?: string
+    category?: string
+    brand?: string
+    sort?: string
+    dir?: string
+  }>
 }
 
 const FILTERS = [
@@ -38,17 +65,58 @@ const FILTERS = [
   { key: 'low', label: 'Low stock' },
 ]
 
+/**
+ * A column heading that sorts.
+ *
+ * A link rather than a button: the sort is in the URL like everything else on
+ * this screen, so it survives a refresh and can be sent to someone. The arrow
+ * only appears on the column actually in force — an arrow on every heading
+ * tells you nothing about which one is doing the work.
+ */
+function SortHeader({
+  label,
+  column,
+  view,
+  align = 'left',
+}: {
+  label: string
+  column: SortKey
+  view: InventoryView
+  align?: 'left' | 'right'
+}) {
+  const activeHere = view.sort === column
+  const Arrow = view.dir === 'asc' ? ArrowUp : ArrowDown
+
+  return (
+    <Link
+      href={sortHref(view, column)}
+      // aria-sort belongs on the cell in a real table; this grid has none, so
+      // the state goes in the accessible name instead of being mimed.
+      aria-label={
+        activeHere
+          ? `${label}, sorted ${view.dir === 'asc' ? 'ascending' : 'descending'}. Reverse the order.`
+          : `Sort by ${label.toLowerCase()}`
+      }
+      className={cn(
+        'label-caps -my-1 inline-flex items-center gap-1 py-1 transition-colors hover:text-[var(--color-foreground)]',
+        align === 'right' && 'flex-row-reverse',
+        activeHere ? 'text-[var(--color-foreground)]' : 'text-[var(--color-muted)]'
+      )}
+    >
+      {label}
+      {activeHere && <Arrow className="h-3 w-3" strokeWidth={2} aria-hidden />}
+    </Link>
+  )
+}
+
 // One literal, however long — postgrest parses the select string at the type
 // level and a concatenation widens it to `string`.
 const PRODUCT_COLUMNS =
   'id, sku, barcode, name, unit, stock_qty, low_stock_threshold, price_cents, cost_cents, is_retail, is_professional, is_active, external_url, image_url, gallery, brands(name), product_categories(name)'
 
 export default async function InventoryPage({ searchParams }: Props) {
-  const { filter, focus, q } = await searchParams
-  const active = filter ?? 'all'
-  const focusId = /^\d+$/.test(focus ?? '') ? Number(focus) : null
-  const search = (q ?? '').trim()
-  const term = search.toLowerCase()
+  const params = await searchParams
+  const focusId = /^\d+$/.test(params.focus ?? '') ? Number(params.focus) : null
 
   const supabase = await createClient()
   const {
@@ -78,47 +146,66 @@ export default async function InventoryPage({ searchParams }: Props) {
   // action the database refuses.
   const canCreate = isManager(role)
 
+  // Brands and categories are read before the products, not alongside them,
+  // because the products query filters on their ids and the URL only carries
+  // slugs. Two tiny reads in sequence rather than one round trip is the price
+  // of a URL that says `?category=enzymes-masks` instead of `?category=7`.
+  //
+  // They used to be fetched only for the "New product" form. Now every member
+  // of staff needs them, because they are also the filter pickers.
+  const [{ data: brands }, { data: productCategories }] = await Promise.all([
+    supabase.from('brands').select('id, name, slug').eq('is_active', true).order('name'),
+    supabase
+      .from('product_categories')
+      .select('id, name, slug')
+      .eq('is_active', true)
+      .order('sort_order')
+      .order('name'),
+  ])
+
+  const view = readView(params, canSeeCost)
+  const categoryId = (productCategories ?? []).find((c) => c.slug === view.category)?.id ?? null
+  const brandId = (brands ?? []).find((b) => b.slug === view.brand)?.id ?? null
+  // A slug that matches nothing filters nothing, and the picker should say so
+  // rather than sit blank on a value it has no option for.
+  if (categoryId === null) view.category = ''
+  if (brandId === null) view.brand = ''
+
   let query = supabase
     .from('products')
     .select(PRODUCT_COLUMNS)
     .eq('is_active', true)
     .is('archived_at', null)
+    .order(SORT_COLUMN[view.sort], { ascending: view.dir === 'asc' })
+    // Name breaks every tie. Without it two products at the same price come
+    // back in whatever order the planner felt like, and the list reshuffles
+    // under someone counting from it.
     .order('name')
 
-  if (active === 'retail') query = query.eq('is_retail', true)
-  if (active === 'backbar') query = query.eq('is_professional', true)
+  if (view.filter === 'retail') query = query.eq('is_retail', true)
+  if (view.filter === 'backbar') query = query.eq('is_professional', true)
+  if (categoryId !== null) query = query.eq('category_id', categoryId)
+  if (brandId !== null) query = query.eq('brand_id', brandId)
 
-  // The pills carry counts, and a count of the slice you are already looking at
-  // is no use for deciding whether to look somewhere else. This second read is
-  // the same set of products with none of the filters applied.
-  //
-  // Brands and categories are only read for the "New product" form, so they are
-  // asked for only when the person looking may actually create one.
-  const [{ data: products }, { data: tally }, { data: brands }, { data: productCategories }] =
-    await Promise.all([
-      query,
-      supabase
-        .from('products')
-        .select('id, is_retail, is_professional, stock_qty, low_stock_threshold, external_url')
-        .eq('is_active', true)
-        .is('archived_at', null),
-      canCreate
-        ? supabase.from('brands').select('id, name').eq('is_active', true).order('name')
-        : Promise.resolve({ data: null }),
-      canCreate
-        ? supabase
-            .from('product_categories')
-            .select('id, name')
-            .eq('is_active', true)
-            .order('sort_order')
-            .order('name')
-        : Promise.resolve({ data: null }),
-    ])
+  // Counts come from a second read of the whole active catalogue, because a
+  // count of the slice you are already looking at is no use for deciding
+  // whether to look somewhere else.
+  const [{ data: products }, { data: tally }] = await Promise.all([
+    query,
+    supabase
+      .from('products')
+      .select(
+        'id, is_retail, is_professional, stock_qty, low_stock_threshold, external_url, category_id, brand_id'
+      )
+      .eq('is_active', true)
+      .is('archived_at', null),
+  ])
 
   type ProductRow = NonNullable<typeof products>[number]
 
   const nameOf = (embed: unknown) => (embed as { name: string } | null)?.name ?? null
 
+  const term = view.q.toLowerCase()
   const matchesSearch = (p: ProductRow) => {
     if (!term) return true
     const fields = [p.name, p.sku, p.barcode ?? '', nameOf(p.brands) ?? '', nameOf(p.product_categories) ?? '']
@@ -161,17 +248,65 @@ export default async function InventoryPage({ searchParams }: Props) {
     (p.external_url === null || Number(p.stock_qty) > 0)
 
   const rows = (products ?? [])
-    .filter((p) => (active === 'low' ? isLow(p) : true))
+    .filter((p) => (view.filter === 'low' ? isLow(p) : true))
     .filter(matchesSearch)
 
+  /**
+   * The counts on the controls, each scoped by the OTHER controls.
+   *
+   * Picking "Enzymes & masks" and still reading "Retail (150)" beside a list of
+   * nine is a number that answers a question nobody asked. So the pills count
+   * within the chosen category and brand, and each category counts within the
+   * chosen pill and brand.
+   *
+   * The search box is deliberately not part of the scope: the tally read does
+   * not carry names or SKUs to match against, and a count that moved on every
+   * keystroke would be noise rather than information.
+   */
   const everything = tally ?? []
-  const lowCount = everything.filter(isLow).length
+  type TallyRow = (typeof everything)[number]
+  const inCategory = (p: TallyRow) => categoryId === null || p.category_id === categoryId
+  const inBrand = (p: TallyRow) => brandId === null || p.brand_id === brandId
+  const inPill = (p: TallyRow) =>
+    view.filter === 'retail'
+      ? p.is_retail
+      : view.filter === 'backbar'
+        ? p.is_professional
+        : view.filter === 'low'
+          ? isLow(p)
+          : true
+
+  const forPills = everything.filter((p) => inCategory(p) && inBrand(p))
+  const lowCount = forPills.filter(isLow).length
   const counts: Record<string, number> = {
-    all: everything.length,
-    retail: everything.filter((p) => p.is_retail).length,
-    backbar: everything.filter((p) => p.is_professional).length,
+    all: forPills.length,
+    retail: forPills.filter((p) => p.is_retail).length,
+    backbar: forPills.filter((p) => p.is_professional).length,
     low: lowCount,
   }
+
+  const categoryOptions = (productCategories ?? []).map((c) => ({
+    slug: c.slug,
+    name: c.name,
+    count: everything.filter((p) => p.category_id === c.id && inPill(p) && inBrand(p)).length,
+  }))
+  const brandOptions = (brands ?? []).map((b) => ({
+    slug: b.slug,
+    name: b.name,
+    count: everything.filter((p) => p.brand_id === b.id && inPill(p) && inCategory(p)).length,
+  }))
+  /** Is anything hiding rows? The sort is not — it only reorders them. */
+  const narrowed = !!view.q || !!view.category || !!view.brand || view.filter !== 'all'
+
+  // Cost is a manager's column, so it is not offered as a sort to anyone who
+  // cannot see it — `readView` refuses the same key from a hand-typed URL.
+  const sortOptions: { key: SortKey; label: string }[] = [
+    { key: 'name', label: 'Name' },
+    { key: 'price', label: 'Price' },
+    ...(canSeeCost ? ([{ key: 'cost', label: 'Cost' }] as const) : []),
+    { key: 'qty', label: 'Quantity' },
+  ]
+
   const filterOptions: PillOption[] = FILTERS.map((f) => ({
     value: f.key,
     label: f.label,
@@ -246,11 +381,17 @@ export default async function InventoryPage({ searchParams }: Props) {
                 refresh, it can be sent to someone, and it works before React
                 has loaded. */}
             <form method="get" className="w-full sm:w-80">
-              <input type="hidden" name="filter" value={active} />
+              {/* Everything else about the view rides along as hidden fields, so
+                  searching inside a category stays inside it. */}
+              <input type="hidden" name="filter" value={view.filter} />
+              <input type="hidden" name="category" value={view.category} />
+              <input type="hidden" name="brand" value={view.brand} />
+              <input type="hidden" name="sort" value={view.sort} />
+              <input type="hidden" name="dir" value={view.dir} />
               <SearchField
                 label="Search by product name or brand"
                 name="q"
-                defaultValue={search}
+                defaultValue={view.q}
               />
             </form>
             {canCreate && (
@@ -275,12 +416,15 @@ export default async function InventoryPage({ searchParams }: Props) {
         ))}
       </div>
 
-      <InventoryFilterPills
-        options={filterOptions}
-        value={active}
-        search={search}
-        className="mt-8"
-      />
+      <div className="mt-8 flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
+        <InventoryFilterPills options={filterOptions} view={view} />
+        <InventoryScope
+          view={view}
+          categories={categoryOptions}
+          brands={brandOptions}
+          sorts={sortOptions}
+        />
+      </div>
 
       {/* The scanner is untouched — same props, same behaviour, same two ways
           in. It predates the dashboard's rounded corners and is not this
@@ -306,14 +450,25 @@ export default async function InventoryPage({ searchParams }: Props) {
         <EmptyState
           className="mt-6"
           icon={Package}
-          title={search ? `Nothing matches “${search}”.` : 'Nothing here yet.'}
+          title={view.q ? `Nothing matches “${view.q}”.` : 'Nothing here yet.'}
           description={
-            search ? 'Names, brands, categories, SKUs and barcodes are all searched.' : undefined
+            view.q
+              ? 'Names, brands, categories, SKUs and barcodes are all searched.'
+              : narrowed
+                ? 'Nothing on the shelf answers to all of those at once.'
+                : undefined
           }
           action={
-            search ? (
-              <ButtonLink href={`/dashboard/inventory?filter=${active}`} variant="subtle" size="sm">
-                Clear the search
+            narrowed ? (
+              // Clears what is hiding rows and keeps the sort, which is not.
+              <ButtonLink
+                href={inventoryHref(view, { q: '', category: '', brand: '', filter: 'all' })}
+                variant="subtle"
+                size="sm"
+              >
+                {view.q && view.filter === 'all' && !view.category && !view.brand
+                  ? 'Clear the search'
+                  : 'Clear the filters'}
               </ButtonLink>
             ) : undefined
           }
@@ -323,14 +478,22 @@ export default async function InventoryPage({ searchParams }: Props) {
           <div
             className={`hidden gap-x-4 border-b border-[var(--color-border)] px-5 pb-3 pt-4 xl:grid ${columns}`}
           >
-            <span className="label-caps text-[var(--color-muted)]">Product</span>
+            <SortHeader label="Product" column="name" view={view} />
+            {/* Brand and category are filters, not sorts — the picker above
+                does the useful version of "group by brand" already. */}
             <span className="label-caps text-[var(--color-muted)]">Brand</span>
             <span className="label-caps text-[var(--color-muted)]">Category</span>
-            <span className="label-caps text-right text-[var(--color-muted)]">Price</span>
+            <span className="text-right">
+              <SortHeader label="Price" column="price" view={view} align="right" />
+            </span>
             {canSeeCost && (
-              <span className="label-caps text-right text-[var(--color-muted)]">Cost</span>
+              <span className="text-right">
+                <SortHeader label="Cost" column="cost" view={view} align="right" />
+              </span>
             )}
-            <span className="label-caps text-right text-[var(--color-muted)]">Quantity</span>
+            <span className="text-right">
+              <SortHeader label="Quantity" column="qty" view={view} align="right" />
+            </span>
           </div>
 
           <ul>
