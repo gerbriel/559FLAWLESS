@@ -4,7 +4,8 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { toast } from 'sonner'
-import { UserPlus, X } from 'lucide-react'
+import { UserPlus } from 'lucide-react'
+import { Modal } from '@/components/ui/modal'
 import { Button } from '@/components/ui/button'
 import { Field, Input, Textarea } from '@/components/ui/field'
 
@@ -74,30 +75,25 @@ export function NewClientForm() {
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 sm:items-center"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Add a client"
-      onClick={() => !busy && setOpen(false)}
+    <Modal
+      label="Add a client"
+      title="Add a client"
+      onClose={() => setOpen(false)}
+      busy={busy}
+      onSubmit={submit}
+      width="md"
+      footer={
+        <>
+          <Button type="submit" disabled={busy}>
+            {busy ? 'Adding…' : 'Add client'}
+          </Button>
+          <Button type="button" variant="subtle" onClick={() => setOpen(false)} disabled={busy}>
+            Cancel
+          </Button>
+        </>
+      }
     >
-      <form
-        onSubmit={submit}
-        onClick={(e) => e.stopPropagation()}
-        className="relative my-8 w-full max-w-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-6 shadow-2xl sm:my-0 sm:p-8"
-      >
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          disabled={busy}
-          className="absolute right-3 top-3 flex h-11 w-11 items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-foreground)]"
-          aria-label="Close"
-        >
-          <X className="h-5 w-5" strokeWidth={1.5} />
-        </button>
-
-        <h2 className="display pr-10 text-2xl">Add a client</h2>
-        <p className="mt-2 text-sm text-[var(--color-muted)]">
+        <p className="text-sm text-[var(--color-muted)]">
           For walk-ins and phone bookings. They can claim the account later with a
           sign-in link — no password needed now.
         </p>
@@ -221,15 +217,6 @@ export function NewClientForm() {
           </div>
         )}
 
-        <div className="mt-7 flex flex-wrap gap-3">
-          <Button type="submit" disabled={busy}>
-            {busy ? 'Adding…' : 'Add client'}
-          </Button>
-          <Button type="button" variant="subtle" onClick={() => setOpen(false)} disabled={busy}>
-            Cancel
-          </Button>
-        </div>
-      </form>
-    </div>
+    </Modal>
   )
 }

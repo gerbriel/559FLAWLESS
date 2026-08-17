@@ -3,9 +3,10 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { X, Trash2, Plus, Lock } from 'lucide-react'
+import { Trash2, Plus, Lock } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
+import { Modal } from '@/components/ui/modal'
 import { Field, Input, Select, Textarea } from '@/components/ui/field'
 import { ImageField } from '@/components/shared/ImageField'
 import { describe, serviceBlockers, serviceBookingCount } from '@/lib/catalog-delete'
@@ -615,32 +616,38 @@ export function ServiceEditor({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 sm:items-center"
-      role="dialog"
-      aria-modal="true"
-      aria-label={isNew ? 'Add a service' : `Edit ${service.name}`}
-      onClick={() => !busy && close()}
+    <Modal
+      label={isNew ? 'Add a service' : `Edit ${service.name}`}
+      title={isNew ? 'Add a service' : service.name}
+      onClose={close}
+      busy={busy}
+      onSubmit={save}
+      footer={
+        <>
+          <Button type="submit" disabled={busy}>
+            {/* Once the insert has landed the service exists, so a retry of the
+                form writes is a save, not another add. */}
+            {busy ? 'Saving…' : isNew && createdId === null ? 'Add service' : 'Save'}
+          </Button>
+          <Button type="button" variant="subtle" onClick={close} disabled={busy}>
+            Cancel
+          </Button>
+          {!isNew && isAdmin && (
+            <button
+              type="button"
+              onClick={remove}
+              disabled={busy}
+              className="ml-auto flex items-center gap-1.5 text-sm text-red-700 hover:underline dark:text-red-400"
+            >
+              <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+              Delete
+            </button>
+          )}
+        </>
+      }
     >
-      <form
-        onSubmit={save}
-        onClick={(e) => e.stopPropagation()}
-        className="relative my-8 w-full max-w-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-6 shadow-2xl sm:my-0 sm:p-8"
-      >
-        <button
-          type="button"
-          onClick={close}
-          disabled={busy}
-          className="absolute right-3 top-3 flex h-11 w-11 items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-foreground)]"
-          aria-label="Close"
-        >
-          <X className="h-5 w-5" strokeWidth={1.5} />
-        </button>
-
-        <h2 className="display pr-10 text-2xl">{isNew ? 'Add a service' : service.name}</h2>
-
         {unwritten.length > 0 && (
-          <div className="mt-4 border-l-2 border-[var(--color-accent)] bg-[var(--color-clay-soft)] p-4 text-sm dark:bg-[var(--color-background)]">
+          <div className="border-l-2 border-[var(--color-accent)] bg-[var(--color-clay-soft)] p-4 text-sm dark:bg-[var(--color-background)]">
             <p className="text-red-700 dark:text-red-400">
               {isNew ? 'The service was created' : 'The service was saved'}, but these forms
               were not changed:
@@ -1030,28 +1037,6 @@ export function ServiceEditor({
           </fieldset>
         )}
 
-        <div className="mt-7 flex flex-wrap items-center gap-3">
-          <Button type="submit" disabled={busy}>
-            {/* Once the insert has landed the service exists, so a retry of the
-                form writes is a save, not another add. */}
-            {busy ? 'Saving…' : isNew && createdId === null ? 'Add service' : 'Save'}
-          </Button>
-          <Button type="button" variant="subtle" onClick={close} disabled={busy}>
-            Cancel
-          </Button>
-          {!isNew && isAdmin && (
-            <button
-              type="button"
-              onClick={remove}
-              disabled={busy}
-              className="ml-auto flex items-center gap-1.5 text-sm text-red-700 hover:underline dark:text-red-400"
-            >
-              <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
-              Delete
-            </button>
-          )}
-        </div>
-      </form>
-    </div>
+    </Modal>
   )
 }

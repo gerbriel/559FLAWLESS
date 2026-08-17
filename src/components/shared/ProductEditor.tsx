@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { X, Plus, Trash2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
+import { Modal } from '@/components/ui/modal'
 import { Field, Input, Select, Textarea } from '@/components/ui/field'
 import { ImageField, ImageGalleryField } from '@/components/shared/ImageField'
 import { describe, productBlockers, productSaleCount } from '@/lib/catalog-delete'
@@ -367,31 +368,30 @@ function NewProduct({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 sm:items-center"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Add a product"
-      onClick={() => !busy && setOpen(false)}
+    <Modal
+      label="Add a product"
+      title="Add a product"
+      onClose={() => setOpen(false)}
+      busy={busy}
+      onSubmit={save}
+      bodyClassName="text-left"
+      footer={
+        <>
+          <Button type="submit" disabled={busy}>
+            {busy ? 'Adding…' : 'Add product'}
+          </Button>
+          <Button
+            type="button"
+            variant="subtle"
+            disabled={busy}
+            onClick={() => setOpen(false)}
+          >
+            Cancel
+          </Button>
+        </>
+      }
     >
-      <form
-        onSubmit={save}
-        onClick={(e) => e.stopPropagation()}
-        className="relative my-8 w-full max-w-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-6 text-left shadow-2xl sm:my-0 sm:p-8"
-      >
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          disabled={busy}
-          className="absolute right-3 top-3 flex h-11 w-11 items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-foreground)]"
-          aria-label="Close"
-        >
-          <X className="h-5 w-5" strokeWidth={1.5} />
-        </button>
-
-        <h2 className="display pr-10 text-2xl">Add a product</h2>
-
-        <div className="mt-6 grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Name" htmlFor="np_name" className="sm:col-span-2">
             <Input
               id="np_name"
@@ -671,21 +671,7 @@ function NewProduct({
           </div>
         )}
 
-        <div className="mt-6 flex flex-wrap items-center gap-2.5 border-t border-[var(--color-border)] pt-5">
-          <Button type="submit" disabled={busy}>
-            {busy ? 'Adding…' : 'Add product'}
-          </Button>
-          <Button
-            type="button"
-            variant="subtle"
-            disabled={busy}
-            onClick={() => setOpen(false)}
-          >
-            Cancel
-          </Button>
-        </div>
-      </form>
-    </div>
+    </Modal>
   )
 }
 

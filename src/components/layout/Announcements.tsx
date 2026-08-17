@@ -305,7 +305,7 @@ function Modal({ a, onDismiss }: Props) {
       onClick={() => onDismiss(a)}
     >
       <div
-        className="relative w-full max-w-md border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl"
+        className="relative max-h-[calc(100dvh-2.5rem)] w-full max-w-md overflow-y-auto border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {a.image_url && (

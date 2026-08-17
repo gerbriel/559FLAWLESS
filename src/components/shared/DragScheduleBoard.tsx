@@ -769,7 +769,7 @@ function MoveDialog({
         aria-modal="true"
         aria-labelledby="move_dialog_title"
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md border border-[var(--color-border)] bg-[var(--color-surface)] p-6"
+        className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto border border-[var(--color-border)] bg-[var(--color-surface)] p-6"
       >
         <h2 id="move_dialog_title" className="display flex items-center gap-2 text-2xl">
           <CalendarClock className="h-5 w-5 text-[var(--color-muted)]" strokeWidth={1.5} aria-hidden />

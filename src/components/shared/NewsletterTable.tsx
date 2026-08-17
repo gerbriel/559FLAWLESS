@@ -278,7 +278,7 @@ function AddSubscriberForm({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-md bg-[var(--color-background)] p-6 shadow-xl">
+      <div className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto bg-[var(--color-background)] p-6 shadow-xl">
         <div className="flex items-start justify-between">
           <h2 className="display text-xl">Add subscriber</h2>
           <button

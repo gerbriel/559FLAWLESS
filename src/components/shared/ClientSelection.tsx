@@ -514,7 +514,7 @@ function Confirm({
         role="dialog"
         aria-modal="true"
         data-ui="panel"
-        className="relative w-full max-w-md border border-[var(--color-border)] bg-[var(--color-surface)] p-6"
+        className="relative max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto border border-[var(--color-border)] bg-[var(--color-surface)] p-6"
       >
         <h2 className="display text-2xl">{copy.title}</h2>
         <p className="mt-3 text-sm leading-relaxed text-[var(--color-muted)]">{copy.body}</p>

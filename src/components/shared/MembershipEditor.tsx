@@ -3,7 +3,8 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { X, Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2 } from 'lucide-react'
+import { Modal } from '@/components/ui/modal'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Field, Input, Select, Textarea } from '@/components/ui/field'
@@ -242,30 +243,33 @@ export function MembershipEditor({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 sm:items-center"
-      role="dialog"
-      aria-modal="true"
-      aria-label={isNew ? 'Add a membership' : `Edit ${plan.name}`}
-      onClick={() => !busy && setOpen(false)}
-    >
-      <form
-        onSubmit={save}
-        onClick={(e) => e.stopPropagation()}
-        data-ui="panel"
-        className="relative my-8 w-full max-w-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-6 shadow-2xl sm:p-8"
-      >
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          className="absolute right-5 top-5 text-[var(--color-muted)] hover:text-[var(--color-foreground)]"
-          aria-label="Close"
-        >
-          <X className="h-5 w-5" strokeWidth={1.5} />
-        </button>
+    <Modal
+      label={isNew ? 'Add a membership' : `Edit ${plan.name}`}
+      title={isNew ? 'New membership' : plan.name}
+      onClose={() => setOpen(false)}
+      busy={busy}
+      onSubmit={save}
+      footer={
+        <div className="flex w-full flex-wrap items-center justify-between gap-3">
+          <div className="flex gap-2.5">
+            <Button type="submit" size="sm" disabled={busy}>
+              {busy ? 'Saving…' : isNew ? 'Add membership' : 'Save'}
+            </Button>
+            <Button type="button" size="sm" variant="subtle" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+          </div>
 
-        <h2 className="display text-2xl">{isNew ? 'New membership' : plan.name}</h2>
-        <p className="mt-2 max-w-prose text-sm text-[var(--color-muted)]">
+          {!isNew && (
+            <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={remove}>
+              <Trash2 className="h-4 w-4" strokeWidth={1.75} />
+              Delete
+            </Button>
+          )}
+        </div>
+      }
+    >
+        <p className="max-w-prose text-sm text-[var(--color-muted)]">
           A standing arrangement, charged again every period. Nothing here takes a
           card — the studio records each period as it is paid.
         </p>
@@ -463,24 +467,6 @@ export function MembershipEditor({
           not: each member keeps the price they joined at.
         </p>
 
-        <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex gap-2.5">
-            <Button type="submit" size="sm" disabled={busy}>
-              {busy ? 'Saving…' : isNew ? 'Add membership' : 'Save'}
-            </Button>
-            <Button type="button" size="sm" variant="subtle" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-          </div>
-
-          {!isNew && (
-            <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={remove}>
-              <Trash2 className="h-4 w-4" strokeWidth={1.75} />
-              Delete
-            </Button>
-          )}
-        </div>
-      </form>
-    </div>
+    </Modal>
   )
 }

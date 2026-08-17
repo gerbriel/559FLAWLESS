@@ -3,7 +3,8 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { X, Lock, Plus, AlertTriangle } from 'lucide-react'
+import { Lock, Plus, AlertTriangle } from 'lucide-react'
+import { Modal } from '@/components/ui/modal'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -194,34 +195,46 @@ export function ConsentFormEditor({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 sm:items-center"
-      role="dialog"
-      aria-modal="true"
-      aria-label={isNew ? 'New consent form' : `Edit ${form.title}`}
-      onClick={() => !busy && setOpen(false)}
+    <Modal
+      label={isNew ? 'New consent form' : `Edit ${form.title}`}
+      title={isNew ? 'New consent form' : form.title}
+      onClose={() => setOpen(false)}
+      busy={busy}
+      onSubmit={save}
+      footer={
+        <>
+          <Button type="submit" disabled={busy}>
+            {busy
+              ? 'Saving…'
+              : willVersion
+                ? `Publish version ${form.version + 1}`
+                : isNew
+                  ? 'Create form'
+                  : 'Save'}
+          </Button>
+          <Button type="button" variant="subtle" onClick={() => setOpen(false)} disabled={busy}>
+            Cancel
+          </Button>
+          {!isNew && !signed && (
+            <button
+              type="button"
+              onClick={remove}
+              disabled={busy}
+              className="ml-auto text-sm text-red-700 hover:underline dark:text-red-400"
+            >
+              Delete
+            </button>
+          )}
+          {!isNew && signed && (
+            <span className="ml-auto">
+              <Badge tone="neutral">Signed — cannot be deleted</Badge>
+            </span>
+          )}
+        </>
+      }
     >
-      <form
-        onSubmit={save}
-        onClick={(e) => e.stopPropagation()}
-        className="relative my-8 w-full max-w-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-6 shadow-2xl sm:my-0 sm:p-8"
-      >
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          disabled={busy}
-          className="absolute right-3 top-3 flex h-11 w-11 items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-foreground)]"
-          aria-label="Close"
-        >
-          <X className="h-5 w-5" strokeWidth={1.5} />
-        </button>
-
-        <h2 className="display pr-10 text-2xl">
-          {isNew ? 'New consent form' : form.title}
-        </h2>
-
-        {form && signed && (
-          <div className="mt-4 flex items-start gap-2.5 border-l-2 border-[var(--color-accent)] bg-[var(--color-clay-soft)] p-4 text-sm dark:bg-[var(--color-background)]">
+      {form && signed && (
+          <div className="flex items-start gap-2.5 border-l-2 border-[var(--color-accent)] bg-[var(--color-clay-soft)] p-4 text-sm dark:bg-[var(--color-background)]">
             <Lock className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-accent)]" strokeWidth={1.75} />
             <p className="text-[var(--color-muted)]">
               {form.signature_count} {form.signature_count === 1 ? 'client has' : 'clients have'}{' '}
@@ -374,36 +387,6 @@ export function ConsentFormEditor({
           )}
         </div>
 
-        <div className="mt-7 flex flex-wrap items-center gap-3">
-          <Button type="submit" disabled={busy}>
-            {busy
-              ? 'Saving…'
-              : willVersion
-                ? `Publish version ${form.version + 1}`
-                : isNew
-                  ? 'Create form'
-                  : 'Save'}
-          </Button>
-          <Button type="button" variant="subtle" onClick={() => setOpen(false)} disabled={busy}>
-            Cancel
-          </Button>
-          {!isNew && !signed && (
-            <button
-              type="button"
-              onClick={remove}
-              disabled={busy}
-              className="ml-auto text-sm text-red-700 hover:underline dark:text-red-400"
-            >
-              Delete
-            </button>
-          )}
-          {!isNew && signed && (
-            <span className="ml-auto">
-              <Badge tone="neutral">Signed — cannot be deleted</Badge>
-            </span>
-          )}
-        </div>
-      </form>
-    </div>
+    </Modal>
   )
 }

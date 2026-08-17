@@ -179,7 +179,7 @@ export function BarcodeCameraScanner({
         aria-modal="true"
         aria-labelledby="camera_scan_title"
         onClick={(e) => e.stopPropagation()}
-        className="relative w-full max-w-md border border-[var(--color-border)] bg-[var(--color-surface)] p-6"
+        className="relative max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto border border-[var(--color-border)] bg-[var(--color-surface)] p-6"
       >
         <button
           type="button"
