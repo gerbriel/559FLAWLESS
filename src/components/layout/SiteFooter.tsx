@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { Mail, Phone } from 'lucide-react'
 import { Container } from '@/components/ui/section'
+import { Logo } from '@/components/layout/Logo'
 import { NewsletterForm } from '@/components/shared/NewsletterForm'
 import { DirectionsLink, type StudioLocation } from '@/components/shared/DirectionsLink'
 
@@ -56,8 +57,7 @@ export function SiteFooter({
       <Container className="py-16">
         <div className="grid gap-12 md:grid-cols-2 lg:grid-cols-4">
           <div>
-            <span className="display block text-3xl leading-none">559</span>
-            <span className="label-caps block text-[var(--color-accent)]">Flawless</span>
+            <Logo className="h-16 text-[var(--color-accent)]" />
             <p className="mt-5 max-w-xs text-sm leading-relaxed text-[var(--color-muted)]">
               A private skin studio. Facials, hard-wax hair removal, and corrective
               treatments by a Licensed Cosmetologist.

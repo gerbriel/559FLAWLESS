@@ -3,6 +3,7 @@ import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { DashboardNav } from '@/components/layout/DashboardNav'
+import { Logo } from '@/components/layout/Logo'
 import { SignOutButton } from '@/components/layout/SignOutButton'
 import { NotificationBell } from '@/components/layout/NotificationBell'
 import { LocationSwitcher } from '@/components/layout/LocationSwitcher'
@@ -67,11 +68,12 @@ export default async function DashboardLayout({
       <header className="sticky top-0 z-30 border-b border-[var(--color-border)] bg-[var(--color-background)]">
         <div className="flex h-16 items-center justify-between gap-6 px-6">
           <div className="flex items-center gap-8">
-            <Link href="/dashboard" className="flex items-baseline gap-2">
-              <span className="display text-xl leading-none">559</span>
-              <span className="label-caps text-[0.5625rem] text-[var(--color-accent)]">
-                Studio
-              </span>
+            <Link
+              href="/dashboard"
+              className="flex items-center gap-2.5 text-[var(--color-accent)]"
+            >
+              <Logo className="h-10" />
+              <span className="label-caps text-[0.5625rem]">Studio</span>
             </Link>
             <span className="label-caps hidden text-[var(--color-muted)] sm:block">
               {ROLE_LABELS[role]}

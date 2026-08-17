@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { Menu, X, User, ShoppingBag, Search } from 'lucide-react'
 import { ButtonLink } from '@/components/ui/button'
+import { Logo } from '@/components/layout/Logo'
 import { SearchField } from '@/components/ui/dashboard'
 import { Container } from '@/components/ui/section'
 import { cn } from '@/lib/utils'
@@ -103,11 +104,11 @@ export function SiteHeader({ categories }: { categories: NavCategory[] }) {
     <header className="sticky top-0 z-40 border-b border-[var(--color-border)] bg-[var(--color-background)]/95 backdrop-blur">
       <Container>
         <div className="flex h-20 items-center justify-between gap-6">
-          <Link href="/" className="flex min-h-11 shrink-0 flex-col justify-center">
-            <span className="display block text-2xl leading-none tracking-tight">559</span>
-            <span className="label-caps block text-[0.625rem] text-[var(--color-accent)]">
-              Flawless
-            </span>
+          <Link
+            href="/"
+            className="flex min-h-11 shrink-0 items-center text-[var(--color-accent)]"
+          >
+            <Logo className="h-14" />
           </Link>
 
           {/* Desktop nav */}

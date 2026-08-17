@@ -1,15 +1,13 @@
 import Link from 'next/link'
+import { Logo } from '@/components/layout/Logo'
 
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen flex-col">
       <header className="border-b border-[var(--color-border)]">
         <div className="mx-auto flex h-20 max-w-6xl items-center px-6 lg:px-10">
-          <Link href="/" className="flex min-h-11 flex-col justify-center">
-            <span className="display block text-2xl leading-none">559</span>
-            <span className="label-caps block text-[0.625rem] text-[var(--color-accent)]">
-              Flawless
-            </span>
+          <Link href="/" className="flex min-h-11 items-center text-[var(--color-accent)]">
+            <Logo className="h-14" />
           </Link>
         </div>
       </header>
