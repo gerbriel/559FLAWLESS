@@ -18,7 +18,7 @@ export const revalidate = 300
 export const metadata: Metadata = {
   title: 'The Team',
   description:
-    'The licensed estheticians behind 559 Flawless in Fresno — what they specialise in, how they work, and how to book with them.',
+    'The Licensed Cosmetologists behind 559 Flawless in Fresno — what they specialise in, how they work, and how to book with them.',
 }
 
 export default async function TeamPage() {
@@ -74,14 +74,14 @@ export default async function TeamPage() {
         <SectionHeading
           eyebrow="The team"
           title="Who you will be seeing."
-          lede="One room, one client, and a licensed esthetician who has time to actually look at your skin. You can book with whoever you like — or ask for the same person every visit."
+          lede="One room, one client, and a Licensed Cosmetologist who has time to actually look at your skin. You can book with whoever you like — or ask for the same person every visit."
         />
 
         {team.length === 0 ? (
           <div className="mt-20 border border-[var(--color-border)] bg-[var(--color-surface)] p-10 text-center">
             <p className="display text-2xl">Introductions are on their way.</p>
             <p className="mt-3 text-sm text-[var(--color-muted)]">
-              In the meantime, every treatment is performed by a licensed esthetician —
+              In the meantime, every treatment is performed by a Licensed Cosmetologist —
               you are welcome to ask about training and scope before you book.
             </p>
           </div>

@@ -108,7 +108,7 @@ export default async function CategoryPage({ params }: Props) {
             </p>
             <p className="text-[var(--color-muted)]">
               These services are for clients 18 and older and are performed privately by
-              a licensed esthetician. You will be told exactly what is involved before
+              a Licensed Cosmetologist. You will be told exactly what is involved before
               anything begins, you may request that another person be present, and you
               can stop at any point without giving a reason.
             </p>

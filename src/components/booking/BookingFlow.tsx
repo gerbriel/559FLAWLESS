@@ -701,7 +701,7 @@ export function BookingFlow({
                       Age confirmation required
                     </p>
                     <p className="mb-4 text-sm leading-relaxed text-[var(--color-muted)]">
-                      This service is performed privately by a licensed esthetician. You
+                      This service is performed privately by a Licensed Cosmetologist. You
                       will be told exactly what is involved before anything begins, you
                       may ask for another person to be present, and you can stop at any
                       point without giving a reason.

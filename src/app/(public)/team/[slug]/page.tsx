@@ -119,7 +119,7 @@ export default async function TeamMemberPage({ params }: Props) {
             {member.photo_url ? (
               <Image
                 src={member.photo_url}
-                alt={`${member.display_name}, ${member.headline ?? 'licensed esthetician'}`}
+                alt={`${member.display_name}, ${member.headline ?? 'Licensed Cosmetologist'}`}
                 fill
                 priority
                 sizes="(max-width: 1024px) 100vw, 40vw"

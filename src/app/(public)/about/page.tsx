@@ -23,7 +23,7 @@ const PRINCIPLES = [
   },
   {
     title: 'Licensed and current',
-    body: 'Every treatment is performed by a licensed esthetician working within scope. Anything medical gets referred out, not improvised.',
+    body: 'Every treatment is performed by a Licensed Cosmetologist working within scope. Anything medical gets referred out, not improvised.',
   },
   {
     title: 'Your comfort sets the pace',

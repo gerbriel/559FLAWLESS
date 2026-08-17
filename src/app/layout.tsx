@@ -27,7 +27,7 @@ export const metadata: Metadata = {
     template: '%s — 559 Flawless',
   },
   description:
-    'A private skin studio in Fresno. Custom facials, hard-wax hair removal, and corrective skin treatments by a licensed esthetician.',
+    'A private skin studio in Fresno. Custom facials, hard-wax hair removal, and corrective skin treatments by a Licensed Cosmetologist.',
   openGraph: {
     type: 'website',
     siteName: '559 Flawless',

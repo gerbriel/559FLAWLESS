@@ -279,7 +279,7 @@ export function StaffProfileEditor({
         <Field
           label="Headline"
           htmlFor={`sp_headline_${id}`}
-          hint="One line under your name, e.g. “Licensed esthetician · corrective skin”."
+          hint="One line under your name, e.g. “Licensed Cosmetologist · corrective skin”."
         >
           <Input
             id={`sp_headline_${id}`}

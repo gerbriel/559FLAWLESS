@@ -33,7 +33,7 @@ export function TeamMemberCard({
         {member.photo_url ? (
           <Image
             src={member.photo_url}
-            alt={`${member.display_name}, ${member.headline ?? 'licensed esthetician'}`}
+            alt={`${member.display_name}, ${member.headline ?? 'Licensed Cosmetologist'}`}
             fill
             sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
             className="object-cover transition-transform duration-700 group-hover:scale-[1.03]"

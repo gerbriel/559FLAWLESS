@@ -170,7 +170,7 @@ from public.service_categories c,
 (values
   ('Full Brazilian', 'full-brazilian',
    'Full hair removal, front to back, with underarms included.',
-$$Performed privately by a licensed esthetician using hard wax, which is gentler on intimate skin than strip wax. Underarms are included in the price.
+$$Performed privately by a Licensed Cosmetologist using hard wax, which is gentler on intimate skin than strip wax. Underarms are included in the price.
 
 First-time clients are walked through the whole process beforehand and can stop at any point, for any reason, without explaining. You may ask for another person to be present.
 
@@ -336,7 +336,7 @@ insert into public.consent_forms (slug, version, title, body, category_ids, reva
 select 'intimate-services', 1, 'Intimate Service Consent',
 $$I confirm that I am 18 years of age or older.
 
-I understand that this service involves the intimate areas of my body, that it will be performed by a licensed esthetician in a private treatment room, and that I may request that another person be present.
+I understand that this service involves the intimate areas of my body, that it will be performed by a Licensed Cosmetologist in a private treatment room, and that I may request that another person be present.
 
 I understand exactly which areas will be treated, because they were described to me before the service began, and I consent to that specific scope. I understand I may narrow that scope or stop the service at any point, and that I do not need to give a reason.
 
@@ -408,7 +408,7 @@ on conflict (slug, version) do nothing;
 -- ── Site copy ────────────────────────────────────────────────
 insert into public.site_content (key, value, label) values
   ('hero', '{
-     "eyebrow": "Licensed Esthetician — Fresno, CA",
+     "eyebrow": "Licensed Cosmetologist — Fresno, CA",
      "heading": "Skin that looks like itself, only better.",
      "sub": "A private studio near Fig Garden Village. Corrective facials, chemical peels, hard-wax hair removal, skin lightening, and nails — with an honest read on your skin and a protocol built for it.",
      "cta": "Book an appointment"
@@ -423,7 +423,7 @@ insert into public.site_content (key, value, label) values
      "cancellation": "Please give at least 24 hours notice to cancel or reschedule. Cancellations inside 24 hours forfeit the deposit.",
      "late": "After 15 minutes late, your service may need to be shortened or rescheduled so the next client is not affected.",
      "deposits": "Deposits go toward your service total and are only kept for late cancellations or no-shows.",
-     "intimate": "Intimate waxing and skin lightening are for clients 18 and older, are performed privately by a licensed esthetician, and can be stopped at any point without explanation."
+     "intimate": "Intimate waxing and skin lightening are for clients 18 and older, are performed privately by a Licensed Cosmetologist, and can be stopped at any point without explanation."
    }'::jsonb, 'Policies'),
 
   ('contact', '{

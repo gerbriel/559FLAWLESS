@@ -60,7 +60,7 @@ export function SiteFooter({
             <span className="label-caps block text-[var(--color-accent)]">Flawless</span>
             <p className="mt-5 max-w-xs text-sm leading-relaxed text-[var(--color-muted)]">
               A private skin studio. Facials, hard-wax hair removal, and corrective
-              treatments by a licensed esthetician.
+              treatments by a Licensed Cosmetologist.
             </p>
             {contact.instagram && (
               <a
