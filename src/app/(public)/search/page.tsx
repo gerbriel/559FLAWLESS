@@ -96,14 +96,14 @@ const PAGES: { title: string; href: string; blurb: string; keywords: string; con
       title: 'About',
       href: '/about',
       blurb: 'Who you are seeing, and how the studio works.',
-      keywords: 'about studio esthetician licensed fresno story',
+      keywords: 'about studio cosmetologist esthetician licensed fresno story',
       contentKey: 'about',
     },
     {
       title: 'The team',
       href: '/team',
       blurb: 'Who works here and what they treat.',
-      keywords: 'team staff provider esthetician who',
+      keywords: 'team staff provider cosmetologist esthetician who',
     },
     {
       title: 'Questions',

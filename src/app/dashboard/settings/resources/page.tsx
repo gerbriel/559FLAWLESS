@@ -77,7 +77,7 @@ export default async function ResourceSettingsPage() {
 
       <h1 className="display mt-6 text-3xl">Rooms &amp; equipment</h1>
       <p className="mt-4 max-w-2xl text-sm leading-relaxed text-[var(--color-muted)]">
-        A treatment needs more than a free esthetician. List what it also needs — the
+        A treatment needs more than a free cosmetologist. List what it also needs — the
         room, the bed, the warmer, the LED mask — and say how many of each there are.
         Availability then accounts for all of it: a slot with a free provider but no
         free room is not a slot, and two clients cannot share the one mask however

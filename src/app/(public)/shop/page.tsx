@@ -29,7 +29,7 @@ export const revalidate = 120
 export const metadata: Metadata = {
   title: 'Shop',
   description:
-    'Professional Rhonda Allison skincare, chosen by your esthetician. Shipped direct from the authorized 559 Flawless store.',
+    'Professional Rhonda Allison skincare, chosen by your cosmetologist. Shipped direct from the authorized 559 Flawless store.',
 }
 
 interface ShopCopy {

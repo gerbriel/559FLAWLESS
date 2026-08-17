@@ -98,7 +98,7 @@ export default async function TeamPage() {
         )}
 
         <p className="mt-24 max-w-2xl border-t border-[var(--color-border)] pt-10 text-sm leading-relaxed text-[var(--color-muted)]">
-          Every service is performed within the scope of a current California esthetician
+          Every service is performed within the scope of a current California cosmetology
           licence. Anything outside that scope is referred out rather than improvised, and
           you can ask to see credentials at any visit.
         </p>

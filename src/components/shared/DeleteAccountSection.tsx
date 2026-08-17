@@ -42,7 +42,7 @@ const KEPT = [
     why: 'A consent form is only evidence of what you agreed to if it still shows who agreed. Removing the name would leave a document that proves nothing.',
   },
   {
-    what: 'Your health intake, patch tests, and your esthetician’s treatment notes.',
+    what: 'Your health intake, patch tests, and your cosmetologist’s treatment notes.',
     why: 'These are clinical records. They are held for the same period as any other treatment record, and a note written at the time cannot honestly be rewritten later.',
   },
   {
