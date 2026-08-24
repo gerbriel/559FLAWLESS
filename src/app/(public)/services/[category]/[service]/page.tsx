@@ -83,7 +83,7 @@ export default async function ServiceDetailPage({ params }: Props) {
   return (
     <Section>
       <Container className="grid gap-16 lg:grid-cols-[1.4fr_1fr]">
-        <div>
+        <div data-edit-key={`services:${service.id}`}>
           <Link href={`/services/${cat.slug}`} className="label-caps -my-2 inline-flex min-h-11 items-center py-2 text-[var(--color-muted)]">
             ← {cat.name}
           </Link>
@@ -96,10 +96,17 @@ export default async function ServiceDetailPage({ params }: Props) {
             )}
           </div>
 
-          <h1 className="display mt-5 text-4xl sm:text-5xl">{service.name}</h1>
+          {/* The same row the menu edits. Whichever page it is typed on,
+              both show it — and the save revalidates both. */}
+          <h1 data-edit-field="name" className="display mt-5 text-4xl sm:text-5xl">
+            {service.name}
+          </h1>
 
           {service.description && (
-            <p className="mt-6 text-lg leading-relaxed text-[var(--color-muted)]">
+            <p
+              data-edit-field="description"
+              className="mt-6 text-lg leading-relaxed text-[var(--color-muted)]"
+            >
               {service.description}
             </p>
           )}
@@ -107,7 +114,10 @@ export default async function ServiceDetailPage({ params }: Props) {
           {service.details && (
             <div className="mt-10 border-t border-[var(--color-border)] pt-10">
               <h2 className="label-caps mb-5 text-[var(--color-accent)]">What to expect</h2>
-              <p className="whitespace-pre-line leading-relaxed text-[var(--color-muted)]">
+              <p
+                data-edit-field="details"
+                className="whitespace-pre-line leading-relaxed text-[var(--color-muted)]"
+              >
                 {service.details}
               </p>
             </div>
@@ -116,7 +126,10 @@ export default async function ServiceDetailPage({ params }: Props) {
           {service.aftercare && (
             <div className="mt-10 border-t border-[var(--color-border)] pt-10">
               <h2 className="label-caps mb-5 text-[var(--color-accent)]">Aftercare</h2>
-              <p className="whitespace-pre-line leading-relaxed text-[var(--color-muted)]">
+              <p
+                data-edit-field="aftercare"
+                className="whitespace-pre-line leading-relaxed text-[var(--color-muted)]"
+              >
                 {service.aftercare}
               </p>
             </div>

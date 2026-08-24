@@ -261,7 +261,7 @@ export default async function ShopPage({ searchParams }: Props) {
                     <p className="label-caps mb-2 text-[var(--color-muted)]">{brand.name}</p>
                   )}
                   <h3 className="flex items-start gap-1.5 text-base">
-                    {p.name}
+                    <span data-edit-field="name">{p.name}</span>
                     {external && (
                       <ArrowUpRight
                         className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-muted)]"
@@ -270,7 +270,10 @@ export default async function ShopPage({ searchParams }: Props) {
                     )}
                   </h3>
                   {p.description && (
-                    <p className="mt-1.5 line-clamp-2 text-sm text-[var(--color-muted)]">
+                    <p
+                      data-edit-field="description"
+                      className="mt-1.5 line-clamp-2 text-sm text-[var(--color-muted)]"
+                    >
                       {p.description}
                     </p>
                   )}
@@ -297,11 +300,17 @@ export default async function ShopPage({ searchParams }: Props) {
                   target="_blank"
                   rel="noreferrer noopener"
                   className={className}
+                  data-edit-key={`products:${p.id}`}
                 >
                   {body}
                 </a>
               ) : (
-                <Link key={p.id} href={`/shop/${p.slug}`} className={className}>
+                <Link
+                  key={p.id}
+                  href={`/shop/${p.slug}`}
+                  className={className}
+                  data-edit-key={`products:${p.id}`}
+                >
                   {body}
                 </Link>
               )

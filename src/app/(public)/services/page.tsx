@@ -65,14 +65,16 @@ export default async function ServicesPage() {
 
                 <ul className="mt-10 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
                   {services.map((s) => (
-                    <li key={s.id}>
+                    <li key={s.id} data-edit-key={`services:${s.id}`}>
                       <Link
                         href={`/services/${cat.slug}/${s.slug}`}
                         className="group flex flex-wrap items-baseline justify-between gap-x-8 gap-y-2 py-5 transition-colors sm:py-6 hover:text-[var(--color-accent)]"
                       >
                         <div className="min-w-0 flex-1">
                           <h3 className="flex flex-wrap items-center gap-3 text-lg">
-                            {s.name}
+                            {/* Edited here or on the service's own page — one
+                                row either way, so the two cannot disagree. */}
+                            <span data-edit-field="name">{s.name}</span>
                             {/* Per-service, not just per-category: a Brazilian
                                 sits inside the general Waxing menu but still
                                 needs its own 18+ mark. */}
@@ -84,7 +86,10 @@ export default async function ServicesPage() {
                             )}
                           </h3>
                           {s.description && (
-                            <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-[var(--color-muted)]">
+                            <p
+                              data-edit-field="description"
+                              className="mt-1.5 max-w-2xl text-sm leading-relaxed text-[var(--color-muted)]"
+                            >
                               {s.description}
                             </p>
                           )}

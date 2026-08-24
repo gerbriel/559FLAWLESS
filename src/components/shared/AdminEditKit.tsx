@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { Check, PencilLine, RotateCcw, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
+import type { Product, Service } from '@/types/database'
 
 /**
  * Editing the storefront where it stands.
@@ -27,21 +28,61 @@ import { cn } from '@/lib/utils'
  * what this component was talked into showing.
  *
  * WHAT IS EDITABLE. Server components mark their editable text with two plain
- * attributes — `data-edit-key` on a block naming its `site_content` row, and
- * `data-edit-field` on each text node naming the field inside that row's
- * jsonb. Attributes cost the server pages nothing: no client boundary, no
- * props, no hydration. This kit finds them at the moment editing turns on,
- * which is also what makes the feature additive — a block nobody marked is
- * simply not editable.
+ * attributes — `data-edit-key` on a block naming what it came from, and
+ * `data-edit-field` on each text node naming the field inside it. Attributes
+ * cost the server pages nothing: no client boundary, no props, no hydration.
+ * This kit finds them at the moment editing turns on, which is also what makes
+ * the feature additive — a block nobody marked is simply not editable.
+ *
+ * The key reads two ways, and `EDITABLE_COLUMNS` below is the whole contract:
+ * page copy out of `site_content`, or one row of `services` / `products`. A
+ * service is the same row whether it is typed on the menu or on its own page,
+ * so both offer the edit and neither can end up disagreeing with the other.
  *
  * WHAT IS NOT. Text that lives in JSX rather than the database (section
  * labels, button copy that never changes, legal text with its own versioned
- * editor) has no row to save into, so the kit does not pretend to edit it.
- * Blocks with their own richer editors — announcements, services, products,
- * reviews — keep them; the bar is for the copy that had no screen at all.
+ * editor) has no row to save into. Neither do prices, durations, booking gates
+ * or stock — those keep the editors that know what a number means.
  */
 
 type Role = 'unknown' | 'not_admin' | 'admin'
+
+/**
+ * WHAT A BLOCK MAY WRITE.
+ *
+ * `data-edit-key` reads one of two ways:
+ *
+ *   "hero"          a `site_content` row, keyed by that string
+ *   "services:12"   row 12 of a real table, written column by column
+ *
+ * The columns are listed here rather than trusted from the attribute, and the
+ * reason is that these attributes are sitting in the DOM where anybody with
+ * devtools can add one. RLS stops a stranger writing anything at all — but a
+ * manager IS allowed to update `services.price_cents`, so without this list a
+ * typed heading could be pointed at a price. Money is integer cents in this
+ * codebase (AGENTS.md rule 7) and is never parsed out of prose; durations,
+ * booking gates and stock are the same kind of decision. They keep their real
+ * editors, which show the units and validate them.
+ *
+ * So: names and prose here. Numbers, gates and money somewhere that knows what
+ * they are.
+ */
+const EDITABLE_COLUMNS: Record<string, readonly string[]> = {
+  services: ['name', 'description', 'details', 'aftercare'],
+  products: ['name', 'description', 'ingredients', 'how_to_use'],
+}
+
+/** Which cached routes a saved block invalidates. */
+function pathsFor(keys: string[]): string[] {
+  const paths = new Set<string>(['/'])
+  for (const key of keys) {
+    const table = key.includes(':') ? key.split(':')[0] : null
+    if (table === 'services') paths.add('/services')
+    else if (table === 'products') paths.add('/shop')
+    else if (key === 'shop') paths.add('/shop')
+  }
+  return [...paths]
+}
 
 export function AdminEditKit() {
   const router = useRouter()
@@ -186,6 +227,54 @@ export function AdminEditKit() {
 
     try {
       for (const [key, fields] of Object.entries(drafts)) {
+        const [table, id] = key.includes(':') ? key.split(':') : [null, null]
+
+        if (table && id) {
+          /* ── A row in a real table: a service, a product ──────
+           *
+           * One update per row, columns filtered against the list above. A
+           * service's name and copy live in exactly one place, so editing them
+           * on the menu and editing them on the service's own page are the
+           * same write — which is why both pages can offer it and neither can
+           * disagree with the other afterwards.
+           */
+          const allowed = EDITABLE_COLUMNS[table]
+          if (!allowed) throw new Error(`${table} is not editable from the page.`)
+
+          const patch: Record<string, string | null> = {}
+          for (const [column, text] of Object.entries(fields)) {
+            if (!allowed.includes(column)) {
+              throw new Error(`${table}.${column} is not editable here — use its own editor.`)
+            }
+            // A name is required; prose is not. Emptying a description clears
+            // it, emptying a name would leave a row nothing can render.
+            const value = text.trim()
+            if (column === 'name' && value === '') {
+              throw new Error('A name cannot be empty.')
+            }
+            patch[column] = value === '' ? null : text
+          }
+
+          // Branched rather than `.from(table as …)`: the typed client cannot
+          // express "one of two tables", and casting the patch to fit would
+          // throw away the only compile-time check on the columns. Two literal
+          // calls keep both halves honest — and the runtime whitelist above is
+          // what stops a hand-added attribute reaching a third table.
+          const { error } =
+            table === 'services'
+              ? await supabase
+                  .from('services')
+                  .update(patch as Partial<Service>)
+                  .eq('id', Number(id))
+              : await supabase
+                  .from('products')
+                  .update(patch as Partial<Product>)
+                  .eq('id', Number(id))
+          if (error) throw new Error(error.message)
+          continue
+        }
+
+        /* ── A site_content row: page copy in jsonb ─────────── */
         // Read-merge-write, so the two fields edited here do not wipe the five
         // that were not. The read is the public one; the write is what RLS
         // actually guards.
@@ -213,10 +302,26 @@ export function AdminEditKit() {
       toast.success(
         dirtyCount === 1 ? 'Saved. It is live now.' : `All ${dirtyCount} changes saved. They are live now.`
       )
+
+      // Every OTHER page that renders what was just edited is a separately
+      // cached route — a service's own page, the menu it sits on, the
+      // homepage. Without this the menu could show a new name for up to five
+      // minutes while the service's page still showed the old one, which is
+      // the one failure mode that would make the studio distrust the whole
+      // feature. router.refresh() only re-renders the route underfoot.
+      const paths = pathsFor(Object.keys(drafts))
+      await fetch('/api/admin/revalidate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths }),
+      }).catch(() => {
+        // Best effort. The pages revalidate on their own within minutes, so a
+        // failure here is a delay rather than a lost edit — and the edit
+        // itself already succeeded.
+      })
+
       setDrafts({})
       setEditing(false)
-      // The page under us is statically cached for five minutes; the refresh
-      // re-renders it with what was just written rather than waiting them out.
       router.refresh()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not save. Nothing was lost — try again.')

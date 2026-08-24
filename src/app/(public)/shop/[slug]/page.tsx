@@ -87,7 +87,7 @@ export default async function ProductPage({ params }: Props) {
           </div>
         </div>
 
-        <div>
+        <div data-edit-key={`products:${product.id}`}>
           <Link href="/shop" className="label-caps -my-2 inline-flex min-h-11 items-center py-2 text-[var(--color-muted)]">
             ← Shop
           </Link>
@@ -95,7 +95,11 @@ export default async function ProductPage({ params }: Props) {
           {brand && (
             <p className="label-caps mt-8 text-[var(--color-accent)]">{brand.name}</p>
           )}
-          <h1 className="display mt-3 text-4xl">{product.name}</h1>
+          {/* The same row the shop grid edits — either page writes it, and
+              the save revalidates both. */}
+          <h1 data-edit-field="name" className="display mt-3 text-4xl">
+            {product.name}
+          </h1>
 
           {/* Only the studio's own price is quoted. Once she is out and the
               client is sent to the marketplace, the price is theirs and may
@@ -123,7 +127,10 @@ export default async function ProductPage({ params }: Props) {
           )}
 
           {product.description && (
-            <p className="mt-8 leading-relaxed text-[var(--color-muted)]">
+            <p
+              data-edit-field="description"
+              className="mt-8 leading-relaxed text-[var(--color-muted)]"
+            >
               {product.description}
             </p>
           )}
@@ -160,7 +167,10 @@ export default async function ProductPage({ params }: Props) {
           {product.how_to_use && (
             <div className="mt-12 border-t border-[var(--color-border)] pt-8">
               <h2 className="label-caps mb-4 text-[var(--color-accent)]">How to use</h2>
-              <p className="whitespace-pre-line leading-relaxed text-[var(--color-muted)]">
+              <p
+                data-edit-field="how_to_use"
+                className="whitespace-pre-line leading-relaxed text-[var(--color-muted)]"
+              >
                 {product.how_to_use}
               </p>
             </div>
@@ -169,7 +179,10 @@ export default async function ProductPage({ params }: Props) {
           {product.ingredients && (
             <div className="mt-10 border-t border-[var(--color-border)] pt-8">
               <h2 className="label-caps mb-4 text-[var(--color-accent)]">Ingredients</h2>
-              <p className="text-sm leading-relaxed text-[var(--color-muted)]">
+              <p
+                data-edit-field="ingredients"
+                className="text-sm leading-relaxed text-[var(--color-muted)]"
+              >
                 {product.ingredients}
               </p>
             </div>
