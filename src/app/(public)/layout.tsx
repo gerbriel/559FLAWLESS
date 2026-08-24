@@ -6,6 +6,7 @@ import { Announcements } from '@/components/layout/Announcements'
 import type { LiveAnnouncement } from '@/lib/announcements'
 import { ClientAnalytics } from '@/components/shared/ClientAnalytics'
 import { CartSnapshotSync } from '@/components/shared/CartSnapshotSync'
+import { AdminEditKit } from '@/components/shared/AdminEditKit'
 
 /**
  * Everything this layout reads is public, so the whole marketing site can be
@@ -69,6 +70,11 @@ export default async function PublicLayout({
       <SiteHeader categories={nav} />
 
       <main className="flex-1">{children}</main>
+
+      {/* The in-context editor for admins. Client-side like <Announcements>
+          and for the same reason: an auth read here would opt every public
+          page out of static caching. Renders nothing for anyone else. */}
+      <AdminEditKit />
 
       <SiteFooter
         contact={contact}

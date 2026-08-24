@@ -102,6 +102,8 @@ export default async function ShopPage({ searchParams }: Props) {
           eyebrow="Shop"
           title={shop.heading ?? 'The products I actually use on you.'}
           lede={shop.body}
+          editKey="shop"
+          editFields={{ title: 'heading', lede: 'body' }}
         />
 
         {/* ── The external storefront ─────────────────── */}

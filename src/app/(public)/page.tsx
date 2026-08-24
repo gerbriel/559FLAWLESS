@@ -50,18 +50,29 @@ export default async function HomePage() {
       {/* ── Hero ─────────────────────────────────────────── */}
       <section className="relative overflow-hidden border-b border-[var(--color-border)]">
         <Container className="grid items-center gap-10 py-12 sm:gap-14 sm:py-20 lg:grid-cols-[1.1fr_1fr] lg:py-32">
-          <div>
+          {/* data-edit-* is AdminEditKit's contract: the key names the
+              site_content row, each field a property in its jsonb. Attributes
+              only — no client boundary, and meaningless outside edit mode. */}
+          <div data-edit-key="hero">
             {hero.eyebrow && (
-              <p className="label-caps mb-6 text-[var(--color-accent)]">{hero.eyebrow}</p>
+              <p data-edit-field="eyebrow" className="label-caps mb-6 text-[var(--color-accent)]">
+                {hero.eyebrow}
+              </p>
             )}
-            <h1 className="display text-[2.75rem] leading-[1.02] sm:text-6xl lg:text-7xl">
+            <h1
+              data-edit-field="heading"
+              className="display text-[2.75rem] leading-[1.02] sm:text-6xl lg:text-7xl"
+            >
               {hero.heading ?? 'Skin that looks like itself, only better.'}
             </h1>
-            <p className="mt-7 max-w-xl text-lg leading-relaxed text-[var(--color-muted)]">
+            <p
+              data-edit-field="sub"
+              className="mt-7 max-w-xl text-lg leading-relaxed text-[var(--color-muted)]"
+            >
               {hero.sub}
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:mt-10 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
-              <ButtonLink href="/book" size="lg" className="w-full sm:w-auto">
+              <ButtonLink href="/book" size="lg" data-edit-field="cta" className="w-full sm:w-auto">
                 {hero.cta ?? 'Book an appointment'}
               </ButtonLink>
               <ButtonLink href="/services" variant="outline" size="lg" className="w-full sm:w-auto">
@@ -203,6 +214,8 @@ export default async function HomePage() {
               eyebrow="The studio"
               title={about.heading ?? 'About the studio'}
               lede={about.body}
+              editKey="about"
+              editFields={{ title: 'heading', lede: 'body' }}
             />
             <ButtonLink href="/about" variant="outline" className="mt-10">
               More about us

@@ -185,6 +185,28 @@
   }
 }
 
+/* ── In-context editing ──────────────────────────────────────
+   Set on <html> by AdminEditKit while an admin has "Edit page" on. The
+   outlines are what says "this text is a field now"; everything else about
+   the page stays exactly as a visitor sees it, because that is the point. */
+[data-edit-live] [data-edit-key] [data-edit-field] {
+  outline: 1px dashed var(--color-accent);
+  outline-offset: 6px;
+  cursor: text;
+  /* An emptied field must keep a place to click back into. */
+  min-height: 1em;
+  min-width: 2ch;
+}
+
+[data-edit-live] [data-edit-key] [data-edit-field]:hover {
+  outline-style: solid;
+}
+
+[data-edit-live] [data-edit-key] [data-edit-field]:focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 6px;
+}
+
 @keyframes pos-flash {
   from {
     opacity: 1;

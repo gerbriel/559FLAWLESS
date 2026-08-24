@@ -25,15 +25,27 @@ export function SectionHeading({
   lede,
   align = 'left',
   className,
+  editKey,
+  editFields,
 }: {
   eyebrow?: string
   title: string
   lede?: string
   align?: 'left' | 'center'
   className?: string
+  /**
+   * Which `site_content` row this heading's copy comes from, and which fields
+   * inside it the title and lede are. Plain data attributes for AdminEditKit —
+   * they cost a page nothing and mean nothing unless an admin turns editing
+   * on. Only heading copy that genuinely lives in that row should name itself
+   * here; a title hardcoded in JSX has no row to save into.
+   */
+  editKey?: string
+  editFields?: { title?: string; lede?: string }
 }) {
   return (
     <div
+      data-edit-key={editKey}
       className={cn(
         'max-w-2xl',
         align === 'center' && 'mx-auto text-center',
@@ -43,9 +55,19 @@ export function SectionHeading({
       {eyebrow && (
         <p className="label-caps mb-4 text-[var(--color-accent)]">{eyebrow}</p>
       )}
-      <h2 className="display text-3xl sm:text-4xl lg:text-[2.75rem]">{title}</h2>
+      <h2
+        data-edit-field={editKey ? editFields?.title : undefined}
+        className="display text-3xl sm:text-4xl lg:text-[2.75rem]"
+      >
+        {title}
+      </h2>
       {lede && (
-        <p className="mt-5 text-base leading-relaxed text-[var(--color-muted)]">{lede}</p>
+        <p
+          data-edit-field={editKey ? editFields?.lede : undefined}
+          className="mt-5 text-base leading-relaxed text-[var(--color-muted)]"
+        >
+          {lede}
+        </p>
       )}
     </div>
   )
