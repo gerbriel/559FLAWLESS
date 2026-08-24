@@ -42,15 +42,24 @@ export default async function AboutPage() {
     .eq('key', 'about')
     .maybeSingle()
 
-  const about = (aboutRow?.value ?? {}) as { heading?: string; body?: string }
+  const about = (aboutRow?.value ?? {}) as {
+    eyebrow?: string
+    heading?: string
+    body?: string
+  }
 
   return (
     <>
       <Section>
         <Container className="grid gap-16 lg:grid-cols-2 lg:items-center">
-          <div className="relative aspect-[4/5] w-full overflow-hidden bg-[var(--color-linen)] dark:bg-[var(--color-surface)]">
+          <div
+            data-edit-key="page_about"
+            data-edit-image="hero_image"
+            className="relative aspect-[4/5] w-full overflow-hidden bg-[var(--color-linen)] dark:bg-[var(--color-surface)]"
+          >
             <Image
-              src="/images/about.jpg"
+              src={copy.hero_image ?? '/images/about.jpg'}
+              unoptimized={Boolean(copy.hero_image)}
               alt="A facial treatment in progress at the studio"
               fill
               priority
@@ -60,10 +69,17 @@ export default async function AboutPage() {
           </div>
 
           <div>
+            {/* One row for the whole block. The eyebrow used to read from
+                page_about while the title and body came from `about`, which is
+                two rows for one heading and more than SectionHeading can name —
+                so it lost its editKey entirely and none of the three were
+                editable. The homepage renders the same `about` row. */}
             <SectionHeading
-              eyebrow={copy.eyebrow ?? 'The studio'}
+              eyebrow={about.eyebrow ?? 'The studio'}
               title={about.heading ?? 'About the studio'}
               lede={about.body}
+              editKey="about"
+              editFields={{ eyebrow: 'eyebrow', title: 'heading', lede: 'body' }}
             />
             <p
               data-edit-key="page_about"
@@ -73,8 +89,14 @@ export default async function AboutPage() {
               {copy.intro ??
                 'Skin changes. What worked last spring may not work now, and a routine that suits your friend may be actively making your barrier worse. Every visit starts with a look at where your skin actually is — not where it was at your last appointment, and not where a package deal says it should be.'}
             </p>
-            <ButtonLink href="/book" className="mt-10" size="lg">
-              Book an appointment
+            <ButtonLink
+              href="/book"
+              data-edit-key="page_about"
+              data-edit-field="cta"
+              className="mt-10"
+              size="lg"
+            >
+              {copy.cta ?? 'Book an appointment'}
             </ButtonLink>
           </div>
         </Container>

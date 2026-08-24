@@ -48,7 +48,11 @@ export default async function HomePage() {
   // page reads exactly as it always did.
   const copy = await pageCopy('page_home')
   const hero = (heroRow?.value ?? {}) as HeroCopy
-  const about = (aboutRow?.value ?? {}) as { heading?: string; body?: string }
+  const about = (aboutRow?.value ?? {}) as {
+    eyebrow?: string
+    heading?: string
+    body?: string
+  }
 
   return (
     <>
@@ -255,11 +259,11 @@ export default async function HomePage() {
           </div>
           <div>
             <SectionHeading
-              eyebrow="The studio"
+              eyebrow={about.eyebrow ?? 'The studio'}
               title={about.heading ?? 'About the studio'}
               lede={about.body}
               editKey="about"
-              editFields={{ title: 'heading', lede: 'body' }}
+              editFields={{ eyebrow: 'eyebrow', title: 'heading', lede: 'body' }}
             />
             <ButtonLink href="/about" variant="outline" className="mt-10">
               More about us
@@ -272,7 +276,13 @@ export default async function HomePage() {
       {(reviews?.length ?? 0) > 0 && (
         <Section className="border-t border-[var(--color-border)]">
           <Container>
-            <SectionHeading eyebrow="Reviews" title="In their words" align="center" />
+            <SectionHeading
+              eyebrow={copy.reviews_eyebrow ?? 'Reviews'}
+              title={copy.reviews_title ?? 'In their words'}
+              align="center"
+              editKey="page_home"
+              editFields={{ eyebrow: 'reviews_eyebrow', title: 'reviews_title' }}
+            />
             <div className="mt-16 grid gap-10 md:grid-cols-3">
               {(reviews ?? []).map((r) => (
                 <figure key={r.id} className="text-center">

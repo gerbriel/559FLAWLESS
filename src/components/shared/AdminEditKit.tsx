@@ -228,7 +228,8 @@ function pathsFor(keys: string[]): string[] {
   const paths = new Set<string>(['/'])
   for (const key of keys) {
     const table = key.includes(':') ? key.split(':')[0] : null
-    if (table === 'faqs') paths.add('/faq')
+    if (key === 'about') paths.add('/about')
+    else if (table === 'faqs') paths.add('/faq')
     else if (table === 'services' || table === 'service_categories') paths.add('/services')
     else if (table === 'products') paths.add('/shop')
     else if (key === 'shop' || key === 'page_shop') paths.add('/shop')
