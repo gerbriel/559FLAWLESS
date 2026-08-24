@@ -118,6 +118,7 @@ export default async function HomePage() {
               <Link
                 key={cat.slug}
                 href={`/services/${cat.slug}`}
+                data-edit-key={`service_categories:${cat.id}`}
                 className="group flex flex-col bg-[var(--color-background)] transition-colors hover:bg-[var(--color-linen)] dark:hover:bg-[var(--color-surface)]"
               >
                 {cat.image_url && (
@@ -133,8 +134,13 @@ export default async function HomePage() {
                 )}
                 <div className="flex flex-1 flex-col justify-between p-8">
                   <div>
-                    <h3 className="display text-2xl">{cat.name}</h3>
-                    <p className="mt-3 text-sm leading-relaxed text-[var(--color-muted)]">
+                    <h3 data-edit-field="name" className="display text-2xl">
+                      {cat.name}
+                    </h3>
+                    <p
+                      data-edit-field="description"
+                      className="mt-3 text-sm leading-relaxed text-[var(--color-muted)]"
+                    >
                       {cat.description}
                     </p>
                   </div>

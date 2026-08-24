@@ -85,7 +85,12 @@ export default async function CategoryPage({ params }: Props) {
         </Link>
 
         <div className="mt-8 flex flex-wrap items-baseline gap-4">
-          <SectionHeading title={cat.name} lede={cat.description ?? undefined} />
+          <SectionHeading
+            title={cat.name}
+            lede={cat.description ?? undefined}
+            editKey={`service_categories:${cat.id}`}
+            editFields={{ title: 'name', lede: 'description' }}
+          />
         </div>
 
         {cat.image_url && (
@@ -117,14 +122,14 @@ export default async function CategoryPage({ params }: Props) {
 
         <ul className="mt-14 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
           {services.map((s) => (
-            <li key={s.id}>
+            <li key={s.id} data-edit-key={`services:${s.id}`}>
               <Link
                 href={`/services/${cat.slug}/${s.slug}`}
                 className="group flex flex-wrap items-baseline justify-between gap-x-8 gap-y-2 py-5 transition-colors sm:py-7 hover:text-[var(--color-accent)]"
               >
                 <div className="min-w-0 flex-1">
                   <h3 className="flex flex-wrap items-center gap-3 text-lg">
-                    {s.name}
+                    <span data-edit-field="name">{s.name}</span>
                     {/* Redundant inside an intimate category, so only shown
                         when the service is the exception in its menu. */}
                     {s.is_intimate && !cat.is_intimate && <Badge tone="accent">18+</Badge>}
@@ -132,7 +137,10 @@ export default async function CategoryPage({ params }: Props) {
                     {s.patch_test_hours > 0 && <Badge tone="warning">Patch test</Badge>}
                   </h3>
                   {s.description && (
-                    <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-[var(--color-muted)]">
+                    <p
+                      data-edit-field="description"
+                      className="mt-1.5 max-w-2xl text-sm leading-relaxed text-[var(--color-muted)]"
+                    >
                       {s.description}
                     </p>
                   )}

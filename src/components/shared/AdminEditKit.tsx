@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { Check, PencilLine, RotateCcw, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
-import type { Product, Service } from '@/types/database'
+import type { Product, Service, ServiceCategory } from '@/types/database'
 
 /**
  * Editing the storefront where it stands.
@@ -70,6 +70,11 @@ type Role = 'unknown' | 'not_admin' | 'admin'
 const EDITABLE_COLUMNS: Record<string, readonly string[]> = {
   services: ['name', 'description', 'details', 'aftercare'],
   products: ['name', 'description', 'ingredients', 'how_to_use'],
+  // Not `slug`. A category's slug is its public address — /services/nails and
+  // every link the studio has ever handed out — so renaming "Nails" to "Nail
+  // Care" changes the heading and leaves the URL alone, which is what anybody
+  // typing in a heading means. Changing an address is a redirect, not an edit.
+  service_categories: ['name', 'description'],
 }
 
 /** Which cached routes a saved block invalidates. */
@@ -77,7 +82,7 @@ function pathsFor(keys: string[]): string[] {
   const paths = new Set<string>(['/'])
   for (const key of keys) {
     const table = key.includes(':') ? key.split(':')[0] : null
-    if (table === 'services') paths.add('/services')
+    if (table === 'services' || table === 'service_categories') paths.add('/services')
     else if (table === 'products') paths.add('/shop')
     else if (key === 'shop') paths.add('/shop')
   }
@@ -266,10 +271,15 @@ export function AdminEditKit() {
                   .from('services')
                   .update(patch as Partial<Service>)
                   .eq('id', Number(id))
-              : await supabase
-                  .from('products')
-                  .update(patch as Partial<Product>)
-                  .eq('id', Number(id))
+              : table === 'service_categories'
+                ? await supabase
+                    .from('service_categories')
+                    .update(patch as Partial<ServiceCategory>)
+                    .eq('id', Number(id))
+                : await supabase
+                    .from('products')
+                    .update(patch as Partial<Product>)
+                    .eq('id', Number(id))
           if (error) throw new Error(error.message)
           continue
         }

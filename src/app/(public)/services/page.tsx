@@ -54,13 +54,25 @@ export default async function ServicesPage() {
             if (services.length === 0) return null
 
             return (
-              <div key={cat.slug} id={cat.slug} className="scroll-mt-28">
+              <div
+                key={cat.slug}
+                id={cat.slug}
+                data-edit-key={`service_categories:${cat.id}`}
+                className="scroll-mt-28"
+              >
                 <div className="flex flex-wrap items-baseline gap-4">
-                  <h2 className="display text-3xl sm:text-4xl">{cat.name}</h2>
+                  <h2 data-edit-field="name" className="display text-3xl sm:text-4xl">
+                    {cat.name}
+                  </h2>
                   {cat.is_intimate && <Badge tone="accent">18+</Badge>}
                 </div>
                 {cat.description && (
-                  <p className="mt-4 max-w-2xl text-[var(--color-muted)]">{cat.description}</p>
+                  <p
+                    data-edit-field="description"
+                    className="mt-4 max-w-2xl text-[var(--color-muted)]"
+                  >
+                    {cat.description}
+                  </p>
                 )}
 
                 <ul className="mt-10 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
