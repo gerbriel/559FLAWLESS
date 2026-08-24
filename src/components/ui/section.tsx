@@ -41,7 +41,7 @@ export function SectionHeading({
    * here; a title hardcoded in JSX has no row to save into.
    */
   editKey?: string
-  editFields?: { title?: string; lede?: string }
+  editFields?: { eyebrow?: string; title?: string; lede?: string }
 }) {
   return (
     <div
@@ -53,7 +53,12 @@ export function SectionHeading({
       )}
     >
       {eyebrow && (
-        <p className="label-caps mb-4 text-[var(--color-accent)]">{eyebrow}</p>
+        <p
+          data-edit-field={editKey ? editFields?.eyebrow : undefined}
+          className="label-caps mb-4 text-[var(--color-accent)]"
+        >
+          {eyebrow}
+        </p>
       )}
       <h2
         data-edit-field={editKey ? editFields?.title : undefined}

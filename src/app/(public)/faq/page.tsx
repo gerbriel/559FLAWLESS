@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { createPublicClient } from '@/lib/supabase/public'
 import { Container, Section, SectionHeading } from '@/components/ui/section'
+import { pageCopy } from '@/lib/page-copy'
 import { ButtonLink } from '@/components/ui/button'
 
 export const revalidate = 600
@@ -11,6 +12,8 @@ export const metadata: Metadata = {
 }
 
 export default async function FaqPage() {
+  const copy = await pageCopy('page_faq')
+
   const supabase = createPublicClient()
   const { data: faqs } = await supabase
     .from('faqs')
@@ -29,9 +32,14 @@ export default async function FaqPage() {
     <Section>
       <Container>
         <SectionHeading
-          eyebrow="Questions"
-          title="Everything people ask."
-          lede="If your question is not here, message us — nothing is too basic and nothing is too awkward."
+          eyebrow={copy.eyebrow ?? 'Questions'}
+          title={copy.title ?? 'Everything people ask.'}
+          lede={
+            copy.lede ??
+            'If your question is not here, message us — nothing is too basic and nothing is too awkward.'
+          }
+          editKey="page_faq"
+          editFields={{ eyebrow: 'eyebrow', title: 'title', lede: 'lede' }}
         />
 
         <div className="mt-20 space-y-16">

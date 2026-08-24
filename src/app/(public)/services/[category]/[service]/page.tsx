@@ -161,7 +161,17 @@ export default async function ServiceDetailPage({ params }: Props) {
             <div className="flex items-baseline justify-between">
               {/* Never formatMoney() directly here — a consultation-priced
                   service has price_cents = 0 and would render "$0". */}
-              <span className="display text-4xl">{formatServicePrice(service)}</span>
+              {/* Parsed back to integer cents on save, and refused outright if
+                  it does not read as a price. "from" is the price_is_starting
+                  column, so typing it in or out sets that too. */}
+              <span
+                data-edit-key={`services:${service.id}`}
+                data-edit-field="price_cents"
+                data-edit-type="money"
+                className="display text-4xl"
+              >
+                {formatServicePrice(service)}
+              </span>
             </div>
 
             <dl className="mt-8 space-y-4 text-sm">
@@ -169,7 +179,9 @@ export default async function ServiceDetailPage({ params }: Props) {
                 <Clock className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-accent)]" strokeWidth={1.5} />
                 <div>
                   <dt className="sr-only">Duration</dt>
-                  <dd>{formatDuration(service.duration_minutes)}</dd>
+                  <dd data-edit-key={`services:${service.id}`} data-edit-field="duration_minutes" data-edit-type="minutes">
+                    {formatDuration(service.duration_minutes)}
+                  </dd>
                 </div>
               </div>
 

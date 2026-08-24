@@ -94,7 +94,11 @@ export default async function CategoryPage({ params }: Props) {
         </div>
 
         {cat.image_url && (
-          <div className="relative mt-10 aspect-[21/9] w-full overflow-hidden">
+          <div
+            data-edit-key={`service_categories:${cat.id}`}
+            data-edit-image="image_url"
+            className="relative mt-10 aspect-[21/9] w-full overflow-hidden"
+          >
             <Image
               src={cat.image_url}
               alt=""
@@ -147,10 +151,14 @@ export default async function CategoryPage({ params }: Props) {
                 </div>
                 <div className="flex shrink-0 items-baseline gap-6 tabular-nums">
                   <span className="text-sm text-[var(--color-muted)]">
-                    {formatDuration(s.duration_minutes)}
+                    <span data-edit-field="duration_minutes" data-edit-type="minutes">
+                      {formatDuration(s.duration_minutes)}
+                    </span>
                   </span>
                   <span className="text-lg">
-                    {formatServicePrice(s)}
+                    <span data-edit-field="price_cents" data-edit-type="money">
+                      {formatServicePrice(s)}
+                    </span>
                   </span>
                 </div>
               </Link>

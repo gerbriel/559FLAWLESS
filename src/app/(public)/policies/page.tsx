@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { createPublicClient } from '@/lib/supabase/public'
 import { Container, Section, SectionHeading } from '@/components/ui/section'
+import { pageCopy } from '@/lib/page-copy'
 
 export const revalidate = 600
 
@@ -17,6 +18,8 @@ interface Policies {
 }
 
 export default async function PoliciesPage() {
+  const copy = await pageCopy('page_policies')
+
   const supabase = createPublicClient()
 
   const [{ data: row }, { data: settings }] = await Promise.all([
@@ -44,9 +47,14 @@ export default async function PoliciesPage() {
     <Section>
       <Container>
         <SectionHeading
-          eyebrow="Policies"
-          title="The house rules."
-          lede="Short, and all of them exist so the studio can run on time and everyone gets the appointment they booked."
+          eyebrow={copy.eyebrow ?? 'Policies'}
+          title={copy.title ?? 'The house rules.'}
+          lede={
+            copy.lede ??
+            'Short, and all of them exist so the studio can run on time and everyone gets the appointment they booked.'
+          }
+          editKey="page_policies"
+          editFields={{ eyebrow: 'eyebrow', title: 'title', lede: 'lede' }}
         />
 
         <div className="mt-16 max-w-3xl space-y-12">

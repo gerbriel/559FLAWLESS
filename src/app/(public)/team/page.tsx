@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { createPublicClient } from '@/lib/supabase/public'
 import { Container, Section, SectionHeading } from '@/components/ui/section'
+import { pageCopy } from '@/lib/page-copy'
 import { TeamMemberCard } from '@/components/shared/TeamMemberCard'
 import { loadStaffLocations, type StaffProfile } from '@/types/team'
 
@@ -22,6 +23,8 @@ export const metadata: Metadata = {
 }
 
 export default async function TeamPage() {
+  const copy = await pageCopy('page_team')
+
   const supabase = createPublicClient()
 
   // One string literal. Concatenation widens the select to `string` and
@@ -72,9 +75,14 @@ export default async function TeamPage() {
     <Section>
       <Container>
         <SectionHeading
-          eyebrow="The team"
-          title="Who you will be seeing."
-          lede="One room, one client, and a Licensed Cosmetologist who has time to actually look at your skin. You can book with whoever you like — or ask for the same person every visit."
+          eyebrow={copy.eyebrow ?? 'The team'}
+          title={copy.title ?? 'Who you will be seeing.'}
+          lede={
+            copy.lede ??
+            'One room, one client, and a Licensed Cosmetologist who has time to actually look at your skin. You can book with whoever you like — or ask for the same person every visit.'
+          }
+          editKey="page_team"
+          editFields={{ eyebrow: 'eyebrow', title: 'title', lede: 'lede' }}
         />
 
         {team.length === 0 ? (

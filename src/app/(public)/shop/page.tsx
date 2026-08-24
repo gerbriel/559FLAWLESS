@@ -229,7 +229,10 @@ export default async function ShopPage({ searchParams }: Props) {
 
               const body = (
                 <>
-                  <div className="relative mb-6 aspect-square w-full overflow-hidden bg-[var(--color-linen)] dark:bg-[var(--color-surface)]">
+                  <div
+                    data-edit-image="image_url"
+                    className="relative mb-6 aspect-square w-full overflow-hidden bg-[var(--color-linen)] dark:bg-[var(--color-surface)]"
+                  >
                     {p.image_url && (
                       <Image
                         src={p.image_url}

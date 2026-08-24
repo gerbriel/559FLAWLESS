@@ -6,6 +6,7 @@ import { Container, Section, SectionHeading } from '@/components/ui/section'
 import { ButtonLink } from '@/components/ui/button'
 import { formatServicePrice, formatDuration } from '@/lib/utils'
 import { ConsideredService } from '@/components/shared/ConsideredService'
+import { pageCopy } from '@/lib/page-copy'
 
 export const revalidate = 300
 
@@ -42,6 +43,10 @@ export default async function HomePage() {
         .limit(3),
     ])
 
+  // Section copy that used to be literals in this file. Until somebody edits
+  // a line there is no row for it and the `??` fallback below renders, so the
+  // page reads exactly as it always did.
+  const copy = await pageCopy('page_home')
   const hero = (heroRow?.value ?? {}) as HeroCopy
   const about = (aboutRow?.value ?? {}) as { heading?: string; body?: string }
 
@@ -83,9 +88,14 @@ export default async function HomePage() {
 
           {/* Stock stand-in — see public/images/ATTRIBUTION.md. Swap for studio
               photography by replacing the file or pointing at the `site` bucket. */}
-          <div className="relative aspect-[4/5] w-full overflow-hidden bg-[var(--color-linen)] dark:bg-[var(--color-surface)]">
+          <div
+            data-edit-key="page_home"
+            data-edit-image="hero_image"
+            className="relative aspect-[4/5] w-full overflow-hidden bg-[var(--color-linen)] dark:bg-[var(--color-surface)]"
+          >
             <Image
-              src="/images/hero.jpg"
+              src={copy.hero_image ?? '/images/hero.jpg'}
+              unoptimized={Boolean(copy.hero_image)}
               alt="A fan brush applying a treatment enzyme during a facial"
               fill
               priority
@@ -108,9 +118,18 @@ export default async function HomePage() {
       <Section>
         <Container>
           <SectionHeading
-            eyebrow="What we do"
-            title="Treatments, not packages."
-            lede="Every service starts with a look at your skin that day. You will not be sold something you did not come in for."
+            eyebrow={copy.categories_eyebrow ?? 'What we do'}
+            title={copy.categories_title ?? 'Treatments, not packages.'}
+            lede={
+              copy.categories_lede ??
+              'Every service starts with a look at your skin that day. You will not be sold something you did not come in for.'
+            }
+            editKey="page_home"
+            editFields={{
+              eyebrow: 'categories_eyebrow',
+              title: 'categories_title',
+              lede: 'categories_lede',
+            }}
           />
 
           <div className="mt-16 grid gap-px border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-2 lg:grid-cols-3">
@@ -122,7 +141,7 @@ export default async function HomePage() {
                 className="group flex flex-col bg-[var(--color-background)] transition-colors hover:bg-[var(--color-linen)] dark:hover:bg-[var(--color-surface)]"
               >
                 {cat.image_url && (
-                  <div className="relative aspect-[3/2] w-full overflow-hidden">
+                  <div data-edit-image="image_url" className="relative aspect-[3/2] w-full overflow-hidden">
                     <Image
                       src={cat.image_url}
                       alt=""
@@ -162,7 +181,12 @@ export default async function HomePage() {
       <Section className="border-y border-[var(--color-border)] bg-[var(--color-linen)] dark:bg-[var(--color-surface)]">
         <Container>
           <div className="flex flex-wrap items-end justify-between gap-6">
-            <SectionHeading eyebrow="Popular" title="Where most people start" />
+            <SectionHeading
+              eyebrow={copy.featured_eyebrow ?? 'Popular'}
+              title={copy.featured_title ?? 'Where most people start'}
+              editKey="page_home"
+              editFields={{ eyebrow: 'featured_eyebrow', title: 'featured_title' }}
+            />
             <Link
               href="/services"
               className="label-caps -my-2 inline-flex min-h-11 items-center border-b border-[var(--color-foreground)] py-2"
@@ -205,9 +229,14 @@ export default async function HomePage() {
       {/* ── About ────────────────────────────────────────── */}
       <Section>
         <Container className="grid gap-14 lg:grid-cols-2 lg:items-center">
-          <div className="relative aspect-square w-full overflow-hidden bg-[var(--color-clay-soft)] dark:bg-[var(--color-surface)]">
+          <div
+            data-edit-key="page_home"
+            data-edit-image="about_image"
+            className="relative aspect-square w-full overflow-hidden bg-[var(--color-clay-soft)] dark:bg-[var(--color-surface)]"
+          >
             <Image
-              src="/images/about.jpg"
+              src={copy.about_image ?? '/images/about.jpg'}
+              unoptimized={Boolean(copy.about_image)}
               alt="A facial treatment in progress at the studio"
               fill
               sizes="(max-width: 1024px) 100vw, 45vw"

@@ -2,6 +2,7 @@ import Link from 'next/link'
 import type { Metadata } from 'next'
 import { createPublicClient } from '@/lib/supabase/public'
 import { Container, Section, SectionHeading } from '@/components/ui/section'
+import { pageCopy } from '@/lib/page-copy'
 import { Badge } from '@/components/ui/badge'
 import { formatServicePrice, formatDuration } from '@/lib/utils'
 
@@ -16,6 +17,8 @@ export const metadata: Metadata = {
 export default async function ServicesPage() {
   const supabase = createPublicClient()
 
+  const copy = await pageCopy('page_services')
+
   const { data: categories } = await supabase
     .from('service_categories')
     .select(
@@ -28,9 +31,14 @@ export default async function ServicesPage() {
     <Section>
       <Container>
         <SectionHeading
-          eyebrow="Service menu"
-          title="Everything we offer."
-          lede="Prices are a starting point — the final quote depends on what your skin needs on the day, and you will always be told before anything begins."
+          eyebrow={copy.eyebrow ?? 'Service menu'}
+          title={copy.title ?? 'Everything we offer.'}
+          lede={
+            copy.lede ??
+            'Prices are a starting point — the final quote depends on what your skin needs on the day, and you will always be told before anything begins.'
+          }
+          editKey="page_services"
+          editFields={{ eyebrow: 'eyebrow', title: 'title', lede: 'lede' }}
         />
 
         <div className="mt-20 space-y-24">
@@ -108,10 +116,14 @@ export default async function ServicesPage() {
                         </div>
                         <div className="flex shrink-0 items-baseline gap-6 tabular-nums">
                           <span className="text-sm text-[var(--color-muted)]">
-                            {formatDuration(s.duration_minutes)}
+                            <span data-edit-field="duration_minutes" data-edit-type="minutes">
+                              {formatDuration(s.duration_minutes)}
+                            </span>
                           </span>
                           <span className="text-lg">
-                            {formatServicePrice(s)}
+                            <span data-edit-field="price_cents" data-edit-type="money">
+                              {formatServicePrice(s)}
+                            </span>
                           </span>
                         </div>
                       </Link>

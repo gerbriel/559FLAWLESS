@@ -28,7 +28,17 @@ export const dynamic = 'force-dynamic'
  */
 
 /** Only routes this app actually serves; never a path from the caller verbatim. */
-const ALLOWED = new Set(['/', '/services', '/shop', '/about', '/policies', '/faq', '/team'])
+const ALLOWED = new Set([
+  '/',
+  '/services',
+  '/shop',
+  '/about',
+  '/policies',
+  '/faq',
+  '/team',
+  '/gift-cards',
+  '/contact',
+])
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient()

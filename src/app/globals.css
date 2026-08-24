@@ -202,6 +202,11 @@
   outline-style: solid;
 }
 
+[data-edit-live] [data-edit-key] [data-edit-image] {
+  outline: 1px dashed var(--color-accent);
+  outline-offset: 4px;
+}
+
 [data-edit-live] [data-edit-key] [data-edit-field]:focus {
   outline: 2px solid var(--color-accent);
   outline-offset: 6px;

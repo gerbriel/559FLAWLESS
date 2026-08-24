@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { createPublicClient } from '@/lib/supabase/public'
 import { Container, Section, SectionHeading } from '@/components/ui/section'
+import { pageCopy } from '@/lib/page-copy'
 import { ButtonLink } from '@/components/ui/button'
 import { formatMoney } from '@/lib/utils'
 
@@ -12,6 +13,8 @@ export const metadata: Metadata = {
 }
 
 export default async function GiftCardsPage() {
+  const copy = await pageCopy('page_gift_cards')
+
   const supabase = createPublicClient()
 
   const { data: packages } = await supabase
@@ -24,9 +27,14 @@ export default async function GiftCardsPage() {
     <Section>
       <Container>
         <SectionHeading
-          eyebrow="Gift cards"
-          title="Give someone their skin back."
-          lede="Gift cards never expire and can be used against any service or product. Prepaid series are for treatments that genuinely need more than one session."
+          eyebrow={copy.eyebrow ?? 'Gift cards'}
+          title={copy.title ?? 'Give someone their skin back.'}
+          lede={
+            copy.lede ??
+            'Gift cards never expire and can be used against any service or product. Prepaid series are for treatments that genuinely need more than one session.'
+          }
+          editKey="page_gift_cards"
+          editFields={{ eyebrow: 'eyebrow', title: 'title', lede: 'lede' }}
         />
 
         <div className="mt-14 border border-[var(--color-border)] bg-[var(--color-surface)] p-10 text-center">

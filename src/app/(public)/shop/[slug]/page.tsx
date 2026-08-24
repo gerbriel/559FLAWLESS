@@ -72,8 +72,11 @@ export default async function ProductPage({ params }: Props) {
   return (
     <Section>
       <Container className="grid gap-16 lg:grid-cols-2">
-        <div>
-          <div className="relative aspect-square w-full overflow-hidden bg-[var(--color-linen)] dark:bg-[var(--color-surface)]">
+        <div data-edit-key={`products:${product.id}`}>
+          <div
+            data-edit-image="image_url"
+            className="relative aspect-square w-full overflow-hidden bg-[var(--color-linen)] dark:bg-[var(--color-surface)]"
+          >
             {product.image_url && (
               <Image
                 src={product.image_url}
@@ -106,7 +109,13 @@ export default async function ProductPage({ params }: Props) {
               differ, so we do not put a figure we cannot honour on it. */}
           {inStock ? (
             <>
-              <p className="mt-6 text-2xl tabular-nums">{formatMoney(product.price_cents)}</p>
+              <p
+                data-edit-field="price_cents"
+                data-edit-type="money"
+                className="mt-6 text-2xl tabular-nums"
+              >
+                {formatMoney(product.price_cents)}
+              </p>
               {canShip && (
                 <div className="mt-4">
                   <Badge tone="success">In the studio now</Badge>
@@ -119,7 +128,13 @@ export default async function ProductPage({ params }: Props) {
             </div>
           ) : (
             <>
-              <p className="mt-6 text-2xl tabular-nums">{formatMoney(product.price_cents)}</p>
+              <p
+                data-edit-field="price_cents"
+                data-edit-type="money"
+                className="mt-6 text-2xl tabular-nums"
+              >
+                {formatMoney(product.price_cents)}
+              </p>
               <div className="mt-4">
                 <Badge tone="neutral">Out of stock</Badge>
               </div>

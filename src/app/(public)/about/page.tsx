@@ -2,6 +2,7 @@ import Image from 'next/image'
 import type { Metadata } from 'next'
 import { createPublicClient } from '@/lib/supabase/public'
 import { Container, Section, SectionHeading } from '@/components/ui/section'
+import { pageCopy } from '@/lib/page-copy'
 import { ButtonLink } from '@/components/ui/button'
 
 export const revalidate = 600
@@ -32,6 +33,8 @@ const PRINCIPLES = [
 ]
 
 export default async function AboutPage() {
+  const copy = await pageCopy('page_about')
+
   const supabase = createPublicClient()
   const { data: aboutRow } = await supabase
     .from('site_content')
@@ -58,7 +61,7 @@ export default async function AboutPage() {
 
           <div>
             <SectionHeading
-              eyebrow="The studio"
+              eyebrow={copy.eyebrow ?? 'The studio'}
               title={about.heading ?? 'About the studio'}
               lede={about.body}
             />
@@ -77,7 +80,12 @@ export default async function AboutPage() {
 
       <Section className="border-t border-[var(--color-border)] bg-[var(--color-linen)] dark:bg-[var(--color-surface)]">
         <Container>
-          <SectionHeading eyebrow="How we work" title="What you can count on." />
+          <SectionHeading
+            eyebrow={copy.how_eyebrow ?? 'How we work'}
+            title={copy.how_title ?? 'What you can count on.'}
+            editKey="page_about"
+            editFields={{ eyebrow: 'how_eyebrow', title: 'how_title' }}
+          />
           <div className="mt-16 grid gap-12 sm:grid-cols-2">
             {PRINCIPLES.map((p) => (
               <div key={p.title}>
