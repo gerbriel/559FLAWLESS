@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { SectionTabs } from '@/components/layout/SectionTabs'
-import { isManager } from '@/types/database'
+import { isAdmin, isManager } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
 
@@ -67,6 +67,16 @@ export default async function MarketingLayout({
           { href: '/dashboard/marketing', label: 'Overview' },
           { href: '/dashboard/marketing/analytics', label: 'Analytics' },
           { href: '/dashboard/marketing/broadcast', label: 'Send newsletter' },
+          // The one tab in this section that is not manager-visible. Tracking
+          // writes to site_content, whose only write policy is admin, and its
+          // fields put script tags on every public page — so a manager seeing
+          // this tab would be an offer the database refuses. The page repeats
+          // the check; per the note above, this one only spares them the trip.
+          {
+            href: '/dashboard/marketing/tracking',
+            label: 'Tracking',
+            visible: isAdmin(profile.role),
+          },
         ]}
       />
 

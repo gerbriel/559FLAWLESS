@@ -1,7 +1,6 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { AdminContentSettings } from '@/components/shared/AdminContentSettings'
-import { AdminScriptSettings } from '@/components/shared/AdminScriptSettings'
 import { AdminAnnouncementSettings } from '@/components/shared/AdminAnnouncementSettings'
 import { isAdmin } from '@/types/database'
 
@@ -34,12 +33,6 @@ export default async function AdminSettingsPage() {
     .in('key', [
       'privacy_policy',
       'terms_of_service',
-      'google_analytics_id',
-      'google_tag_manager_id',
-      'facebook_pixel_id',
-      'tiktok_pixel_id',
-      'custom_head_scripts',
-      'custom_body_scripts',
     ])
 
   const contentMap = new Map(
@@ -57,7 +50,7 @@ export default async function AdminSettingsPage() {
     <div>
       <h1 className="display text-3xl">Admin Settings</h1>
       <p className="mt-2 text-sm text-[var(--color-muted)]">
-        Manage site content, tracking scripts, and announcements
+        Legal content and site-wide announcements. Tracking now lives under Marketing.
       </p>
 
       <div className="mt-12 space-y-12">
@@ -73,21 +66,8 @@ export default async function AdminSettingsPage() {
           />
         </section>
 
-        {/* Script Injection */}
-        <section>
-          <h2 className="display mb-6 text-2xl">Tracking & Scripts</h2>
-          <p className="mb-6 text-sm text-[var(--color-muted)]">
-            Add Google Analytics, Tag Manager, and custom tracking scripts. Be careful with custom scripts.
-          </p>
-          <AdminScriptSettings
-            googleAnalyticsId={(contentMap.get('google_analytics_id') as any)?.id ?? ''}
-            googleTagManagerId={(contentMap.get('google_tag_manager_id') as any)?.id ?? ''}
-            facebookPixelId={(contentMap.get('facebook_pixel_id') as any)?.id ?? ''}
-            tiktokPixelId={(contentMap.get('tiktok_pixel_id') as any)?.id ?? ''}
-            customHeadScripts={(contentMap.get('custom_head_scripts') as any)?.scripts ?? ''}
-            customBodyScripts={(contentMap.get('custom_body_scripts') as any)?.scripts ?? ''}
-          />
-        </section>
+        {/* Tracking moved to Marketing → Tracking, where the person who wants a
+            pixel is already working. It stays admin-only there. */}
 
         {/* Announcements */}
         <section>

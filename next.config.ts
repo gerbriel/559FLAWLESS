@@ -46,22 +46,38 @@ const nextConfig: NextConfig = {
     //     inline gtag snippet need without a nonce pipeline. Removing it means
     //     building nonces — the next tightening step, not a blocker.
     //
-    // ENFORCED since the live HTML was audited: the only external origins the
-    // served pages reference are an instagram.com link (links are not governed
-    // by resource directives) and ramarketplace.com (already in img-src). No
-    // external script exists outside the allowed googletagmanager. If a
-    // legitimate resource is ever blocked, the rollback is renaming this
-    // header back to Content-Security-Policy-Report-Only — one word, one
-    // deploy — and the console names exactly what was refused.
+    // ENFORCED since the live HTML was audited. If a legitimate resource is
+    // ever blocked, the rollback is renaming this header back to
+    // Content-Security-Policy-Report-Only — one word, one deploy — and the
+    // console names exactly what was refused.
+    //
+    // The marketing tags are the only third-party scripts here, and each one is
+    // present because an admin pasted an id into Marketing → Tracking. They are
+    // listed by exact host rather than a wildcard: a pixel needs one origin to
+    // load from and one to report to, and naming both is what keeps this a
+    // list of decisions instead of a hole.
+    //
+    //   googletagmanager.com   GA4 and GTM, script + frame (the GTM <noscript>
+    //                          iframe was blocked before frame-src was added)
+    //   google-analytics.com   where GA4 sends its beacons
+    //   connect.facebook.net   the Meta pixel library
+    //   facebook.com           Meta's beacon, and the <noscript> 1×1 in img-src
+    //   analytics.tiktok.com   the TikTok pixel — library and beacon, one host
+    //
+    // A tag whose host is not on this list will be refused, and that includes
+    // anything an admin pastes into the custom-scripts boxes. That is the
+    // intended behaviour, not an oversight: widening this list is a deliberate
+    // edit, made once, in the open — not a side effect of pasting a snippet.
     const csp = [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' https://www.googletagmanager.com",
+      "script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://connect.facebook.net https://analytics.tiktok.com",
       "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: blob: https://*.supabase.co https://cdn.shopify.com https://ramarketplace.com https://www.googletagmanager.com https://*.google-analytics.com",
+      "img-src 'self' data: blob: https://*.supabase.co https://cdn.shopify.com https://ramarketplace.com https://www.googletagmanager.com https://*.google-analytics.com https://www.facebook.com",
       "font-src 'self' data:",
-      "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.google-analytics.com https://www.googletagmanager.com",
+      "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.google-analytics.com https://www.googletagmanager.com https://www.facebook.com https://analytics.tiktok.com",
       "media-src 'self' blob:",
       "worker-src 'self' blob:",
+      "frame-src https://www.googletagmanager.com",
       "frame-ancestors 'none'",
       "form-action 'self'",
       "base-uri 'self'",

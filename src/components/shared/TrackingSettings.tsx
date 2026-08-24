@@ -19,7 +19,7 @@ interface Props {
   customBodyScripts: string
 }
 
-export function AdminScriptSettings(props: Props) {
+export function TrackingSettings(props: Props) {
   const router = useRouter()
   const [gaId, setGaId] = useState(props.googleAnalyticsId)
   const [gtmId, setGtmId] = useState(props.googleTagManagerId)
@@ -164,17 +164,26 @@ export function AdminScriptSettings(props: Props) {
           <div className="flex items-start gap-2 border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
             <div>
-              <p className="font-medium">Use with caution</p>
+              <p className="font-medium">Two things to know before pasting</p>
               <p className="mt-1 text-[var(--color-muted)]">
-                Custom scripts are injected directly into the page. Only add scripts from trusted sources.
-                Malicious scripts can compromise security and user data.
+                This code runs on every page of the public site, with the same access
+                to it that the site itself has. Only paste something you understand
+                and got from a source you trust.
+              </p>
+              <p className="mt-2 text-[var(--color-muted)]">
+                A content security policy also restricts which outside hosts may load
+                code here. Google, Meta and TikTok are allowed because the fields
+                above need them; a snippet from anywhere else will be refused by the
+                browser and simply not run, with the reason named in the developer
+                console. Allowing a new one is a code change, not a setting — ask for
+                it and it takes a deploy.
               </p>
             </div>
           </div>
 
           <Field
-            label="Custom Head Scripts"
-            hint="Scripts to inject in <head>. Include <script> tags."
+            label="Custom head JavaScript"
+            hint="Runs in the page head. JavaScript only — the <script> tag is added for you, so pasting one produces a broken tag inside a tag."
             htmlFor="head-scripts"
           >
             <Textarea
@@ -182,13 +191,13 @@ export function AdminScriptSettings(props: Props) {
               value={headScripts}
               onChange={(e) => setHeadScripts(e.target.value)}
               rows={6}
-              placeholder="<script>/* your script here */</script>"
+              placeholder="/* your JavaScript here — no <script> tag */"
             />
           </Field>
 
           <Field
-            label="Custom Body Scripts"
-            hint="Scripts to inject at end of <body>. Include <script> tags."
+            label="Custom body JavaScript"
+            hint="Runs at the end of the body, after the page has rendered. JavaScript only, same as above."
             htmlFor="body-scripts"
           >
             <Textarea
@@ -196,7 +205,7 @@ export function AdminScriptSettings(props: Props) {
               value={bodyScripts}
               onChange={(e) => setBodyScripts(e.target.value)}
               rows={6}
-              placeholder="<script>/* your script here */</script>"
+              placeholder="/* your JavaScript here — no <script> tag */"
             />
           </Field>
         </CardContent>

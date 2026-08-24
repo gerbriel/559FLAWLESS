@@ -320,6 +320,14 @@ const TREE: NavEntry[] = [
         label: 'Send newsletter',
         visible: (r) => isManager(r),
       },
+      {
+        href: '/dashboard/marketing/tracking',
+        label: 'Tracking',
+        // Admin, not manager, unlike the rest of this section: the fields put
+        // script tags on every public page, and site_content only has an admin
+        // write policy behind them.
+        visible: (r) => isAdmin(r),
+      },
     ],
   },
 ]
