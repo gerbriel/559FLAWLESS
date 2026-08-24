@@ -423,6 +423,28 @@ export function AdminEditKit() {
     }
     document.addEventListener('click', onClick, true)
 
+    /* ── Selecting text inside a link ──────────────────────
+     * Every service row and product card is a <Link>, so the editable text
+     * lives inside an anchor. Dragging across it does not select — it starts
+     * dragging the LINK, and letting go inside the same contenteditable drops
+     * the href in as text. That is where
+     * "…protocols.https://www.559flawless.com/services/…" came from.
+     *
+     * Killing dragstart at the capture phase stops the drag before the browser
+     * commits to it, which leaves an ordinary text selection behind. `drop` is
+     * refused as well, so nothing dragged from anywhere else — another tab, the
+     * desktop — can be dropped into the copy either.
+     */
+    const onDragStart = (e: DragEvent) => {
+      if ((e.target as HTMLElement | null)?.closest?.('[data-edit-key]')) e.preventDefault()
+    }
+    const onDrop = (e: DragEvent) => {
+      if ((e.target as HTMLElement | null)?.closest?.('[data-edit-field]')) e.preventDefault()
+    }
+    document.addEventListener('dragstart', onDragStart, true)
+    document.addEventListener('drop', onDrop, true)
+    document.addEventListener('dragover', onDrop, true)
+
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       if (dirtyRef.current > 0) e.preventDefault()
     }
@@ -430,6 +452,9 @@ export function AdminEditKit() {
 
     return () => {
       document.removeEventListener('click', onClick, true)
+      document.removeEventListener('dragstart', onDragStart, true)
+      document.removeEventListener('drop', onDrop, true)
+      document.removeEventListener('dragover', onDrop, true)
       window.removeEventListener('beforeunload', onBeforeUnload)
       document.documentElement.removeAttribute('data-edit-live')
       for (const el of fields) {
