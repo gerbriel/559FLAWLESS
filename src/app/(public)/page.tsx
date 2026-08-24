@@ -31,7 +31,7 @@ export default async function HomePage() {
         .order('sort_order'),
       supabase
         .from('services')
-        .select('name, slug, description, price_cents, duration_minutes, price_is_starting, service_categories(slug)')
+        .select('id, name, slug, description, price_cents, duration_minutes, price_is_starting, service_categories(slug)')
         .eq('is_active', true)
         .order('sort_order')
         .limit(6),
@@ -199,22 +199,31 @@ export default async function HomePage() {
             {(featured ?? []).map((s) => {
               const catSlug = (s.service_categories as { slug: string } | null)?.slug
               return (
-                <li key={s.slug}>
+                <li key={s.slug} data-edit-key={`services:${s.id}`}>
                   <Link
                     href={catSlug ? `/services/${catSlug}/${s.slug}` : '/services'}
                     className="group flex flex-wrap items-baseline justify-between gap-x-8 gap-y-2 py-6 transition-colors hover:text-[var(--color-accent)]"
                   >
                     <div className="min-w-0 flex-1">
-                      <h3 className="display text-xl sm:text-2xl">{s.name}</h3>
-                      <p className="mt-1.5 max-w-2xl text-sm text-[var(--color-muted)]">
+                      <h3 data-edit-field="name" className="display text-xl sm:text-2xl">
+                        {s.name}
+                      </h3>
+                      <p
+                        data-edit-field="description"
+                        className="mt-1.5 max-w-2xl text-sm text-[var(--color-muted)]"
+                      >
                         {s.description}
                       </p>
                     </div>
                     <div className="flex shrink-0 items-baseline gap-6 tabular-nums">
-                      <span className="text-sm text-[var(--color-muted)]">
+                      <span
+                        data-edit-field="duration_minutes"
+                        data-edit-type="minutes"
+                        className="text-sm text-[var(--color-muted)]"
+                      >
                         {formatDuration(s.duration_minutes)}
                       </span>
-                      <span className="text-lg">
+                      <span data-edit-field="price_cents" data-edit-type="money" className="text-lg">
                         {formatServicePrice(s)}
                       </span>
                     </div>

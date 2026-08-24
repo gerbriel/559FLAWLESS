@@ -284,7 +284,13 @@ export default async function ShopPage({ searchParams }: Props) {
                       the client is sent to the marketplace, that price is
                       theirs and may differ, so we do not put a figure on it. */}
                   {inStock ? (
-                    <p className="mt-4 tabular-nums">{formatMoney(p.price_cents)}</p>
+                    <p
+                      data-edit-field="price_cents"
+                      data-edit-type="money"
+                      className="mt-4 tabular-nums"
+                    >
+                      {formatMoney(p.price_cents)}
+                    </p>
                   ) : external ? (
                     <p className="label-caps mt-4 text-[var(--color-muted)]">
                       Order direct
