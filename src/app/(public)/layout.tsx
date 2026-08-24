@@ -32,7 +32,13 @@ export default async function PublicLayout({
   // which opts every public page out of static rendering — for the sake of one
   // targeting decision the browser can make itself. <Announcements> resolves
   // the viewer client-side instead.
-  const [{ data: categories }, { data: hours }, { data: contactRow }, { data: announcements }] =
+  const [
+    { data: categories },
+    { data: hours },
+    { data: contactRow },
+    { data: footerRow },
+    { data: announcements },
+  ] =
     await Promise.all([
     supabase
       .from('service_categories')
@@ -41,6 +47,7 @@ export default async function PublicLayout({
       .order('sort_order'),
     supabase.from('business_hours').select('*'),
     supabase.from('site_content').select('value').eq('key', 'contact').maybeSingle(),
+    supabase.from('site_content').select('value').eq('key', 'page_footer').maybeSingle(),
     // Every live row. Which ones a given visitor sees depends on the page and
     // who they are, and the client decides that.
     supabase
@@ -62,6 +69,7 @@ export default async function PublicLayout({
   }))
 
   const contact = (contactRow?.value ?? {}) as FooterContact
+  const footerCopy = (footerRow?.value ?? {}) as Record<string, string>
 
   return (
     <>
@@ -77,6 +85,7 @@ export default async function PublicLayout({
       <AdminEditKit />
 
       <SiteFooter
+        copy={footerCopy}
         contact={contact}
         hours={hours ?? []}
         categories={nav.map((c) => ({ name: c.name, slug: c.slug }))}

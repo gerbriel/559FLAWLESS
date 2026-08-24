@@ -228,7 +228,13 @@ function pathsFor(keys: string[]): string[] {
   const paths = new Set<string>(['/'])
   for (const key of keys) {
     const table = key.includes(':') ? key.split(':')[0] : null
-    if (key === 'about') paths.add('/about')
+    // The footer and the contact details render inside the layout, so they
+    // appear on every page — every cached route has to go.
+    if (key === 'page_footer' || key === 'contact') {
+      for (const p of ['/', '/services', '/shop', '/about', '/faq', '/team', '/policies']) {
+        paths.add(p)
+      }
+    } else if (key === 'about') paths.add('/about')
     else if (table === 'faqs') paths.add('/faq')
     else if (table === 'services' || table === 'service_categories') paths.add('/services')
     else if (table === 'products') paths.add('/shop')
@@ -416,10 +422,15 @@ export function AdminEditKit() {
       if (!anchor) return
       e.preventDefault()
       e.stopPropagation()
+      // One id for both, so clicking around a page of cards replaces the
+      // message rather than stacking a tower of identical ones over the bar
+      // the message is telling you to press.
       if (dirtyRef.current > 0) {
-        toast.error('Save or discard your edits first — then the page navigates normally.')
+        toast.error('Save or discard your edits first — then the page navigates normally.', {
+          id: 'edit-nav-blocked',
+        })
       } else {
-        toast('Press Done to stop editing first.')
+        toast('Press Done to stop editing first.', { id: 'edit-nav-blocked' })
       }
     }
     document.addEventListener('click', onClick, true)

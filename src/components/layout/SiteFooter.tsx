@@ -45,10 +45,17 @@ export function SiteFooter({
   contact,
   hours,
   categories,
+  copy = {},
 }: {
   contact: FooterContact
   hours: { day_of_week: number; opens_at: string | null; closes_at: string | null; is_closed: boolean }[]
   categories: { name: string; slug: string }[]
+  /**
+   * The footer's own words, from the `page_footer` row. It renders on every
+   * page, so editing it anywhere edits it everywhere — which is the point, and
+   * why the layout passes the row down rather than each page fetching it.
+   */
+  copy?: Record<string, string>
 }) {
   const year = new Date().getFullYear()
 
@@ -56,11 +63,14 @@ export function SiteFooter({
     <footer className="mt-auto border-t border-[var(--color-border)] bg-[var(--color-linen)] dark:bg-[var(--color-surface)]">
       <Container className="py-16">
         <div className="grid gap-12 md:grid-cols-2 lg:grid-cols-4">
-          <div>
+          <div data-edit-key="page_footer">
             <Logo className="h-16 text-[var(--color-accent)]" />
-            <p className="mt-5 max-w-xs text-sm leading-relaxed text-[var(--color-muted)]">
-              A private skin studio. Facials, hard-wax hair removal, and corrective
-              treatments by a Licensed Cosmetologist.
+            <p
+              data-edit-field="tagline"
+              className="mt-5 max-w-xs text-sm leading-relaxed text-[var(--color-muted)]"
+            >
+              {copy.tagline ??
+                'A private skin studio. Facials, hard-wax hair removal, and corrective treatments by a Licensed Cosmetologist.'}
             </p>
             {contact.instagram && (
               <a
@@ -76,7 +86,9 @@ export function SiteFooter({
           </div>
 
           <div>
-            <p className="label-caps mb-5 text-[var(--color-accent)]">Services</p>
+            <p data-edit-key="page_footer" data-edit-field="col_services" className="label-caps mb-5 text-[var(--color-accent)]">
+              {copy.col_services ?? 'Services'}
+            </p>
             <ul className="space-y-2.5">
               {categories.map((c) => (
                 <li key={c.slug}>
@@ -108,7 +120,9 @@ export function SiteFooter({
           </div>
 
           <div>
-            <p className="label-caps mb-5 text-[var(--color-accent)]">Hours</p>
+            <p data-edit-key="page_footer" data-edit-field="col_hours" className="label-caps mb-5 text-[var(--color-accent)]">
+              {copy.col_hours ?? 'Hours'}
+            </p>
             <ul className="space-y-2 text-sm text-[var(--color-muted)]">
               {hours
                 .slice()
@@ -127,7 +141,9 @@ export function SiteFooter({
           </div>
 
           <div>
-            <p className="label-caps mb-5 text-[var(--color-accent)]">Visit</p>
+            <p data-edit-key="page_footer" data-edit-field="col_visit" className="label-caps mb-5 text-[var(--color-accent)]">
+              {copy.col_visit ?? 'Visit'}
+            </p>
             <ul className="space-y-3 text-sm text-[var(--color-muted)]">
               {(contact.address || contact.city) && (
                 <li>
@@ -137,7 +153,12 @@ export function SiteFooter({
               {contact.phone && (
                 <li className="flex min-h-11 items-center gap-2.5 sm:min-h-0">
                   <Phone className="h-4 w-4 shrink-0" strokeWidth={1.5} />
-                  <a href={`tel:${contact.phone.replace(/\D/g, '')}`} className="flex min-h-11 items-center hover:text-[var(--color-foreground)] sm:min-h-0">
+                  <a
+                    href={`tel:${contact.phone.replace(/\D/g, '')}`}
+                    data-edit-key="contact"
+                    data-edit-field="phone"
+                    className="flex min-h-11 items-center hover:text-[var(--color-foreground)] sm:min-h-0"
+                  >
                     {contact.phone}
                   </a>
                 </li>
@@ -145,7 +166,12 @@ export function SiteFooter({
               {contact.email && (
                 <li className="flex min-h-11 items-center gap-2.5 sm:min-h-0">
                   <Mail className="h-4 w-4 shrink-0" strokeWidth={1.5} />
-                  <a href={`mailto:${contact.email}`} className="flex min-h-11 items-center hover:text-[var(--color-foreground)] sm:min-h-0">
+                  <a
+                    href={`mailto:${contact.email}`}
+                    data-edit-key="contact"
+                    data-edit-field="email"
+                    className="flex min-h-11 items-center hover:text-[var(--color-foreground)] sm:min-h-0"
+                  >
                     {contact.email}
                   </a>
                 </li>
@@ -160,7 +186,14 @@ export function SiteFooter({
         </div>
 
         <div className="mt-14 flex flex-col gap-4 border-t border-[var(--color-border)] pt-8 text-xs text-[var(--color-muted)] sm:flex-row sm:items-center sm:justify-between">
-          <p>© {year} 559 Flawless. All rights reserved.</p>
+          {/* The year stays computed — it is not copy and nobody should have
+              to remember to change it in January. */}
+          <p>
+            © {year}{' '}
+            <span data-edit-key="page_footer" data-edit-field="legal">
+              {copy.legal ?? '559 Flawless. All rights reserved.'}
+            </span>
+          </p>
           <div className="flex flex-wrap gap-x-6">
             <Link href="/policies" className="flex min-h-11 items-center hover:text-[var(--color-foreground)] sm:min-h-0">
               Policies
