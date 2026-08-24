@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { Check, PencilLine, RotateCcw, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
-import type { Product, Service, ServiceCategory } from '@/types/database'
+import type { Faq, Product, Service, ServiceCategory } from '@/types/database'
 
 /**
  * Editing the storefront where it stands.
@@ -103,6 +103,9 @@ const EDITABLE_COLUMNS: Record<string, readonly string[]> = {
   // Care" changes the heading and leaves the URL alone, which is what anybody
   // typing in a heading means. Changing an address is a redirect, not an edit.
   service_categories: ['name', 'description', 'image_url'],
+  // 009 gave `faqs` a manager write policy and never a screen. The questions
+  // and answers are rows, so they are edited where they are read.
+  faqs: ['question', 'answer'],
 }
 
 
@@ -225,7 +228,8 @@ function pathsFor(keys: string[]): string[] {
   const paths = new Set<string>(['/'])
   for (const key of keys) {
     const table = key.includes(':') ? key.split(':')[0] : null
-    if (table === 'services' || table === 'service_categories') paths.add('/services')
+    if (table === 'faqs') paths.add('/faq')
+    else if (table === 'services' || table === 'service_categories') paths.add('/services')
     else if (table === 'products') paths.add('/shop')
     else if (key === 'shop' || key === 'page_shop') paths.add('/shop')
     // page_faq → /faq, page_gift_cards → /gift-cards, and so on. The route
@@ -502,6 +506,11 @@ export function AdminEditKit() {
                     .from('service_categories')
                     .update(patch as Partial<ServiceCategory>)
                     .eq('id', Number(id))
+                : table === 'faqs'
+                  ? await supabase
+                      .from('faqs')
+                      .update(patch as Partial<Faq>)
+                      .eq('id', Number(id))
                 : await supabase
                     .from('products')
                     .update(patch as Partial<Product>)

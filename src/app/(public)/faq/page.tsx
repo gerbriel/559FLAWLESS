@@ -50,9 +50,19 @@ export default async function FaqPage() {
                 {(items ?? []).map((f) => (
                   // Search links here by id. scroll-mt clears the sticky header,
                   // which would otherwise land the question underneath it.
-                  <div key={f.id} id={`faq-${f.id}`} className="scroll-mt-28 py-7">
-                    <dt className="display text-xl">{f.question}</dt>
-                    <dd className="mt-3 max-w-3xl leading-relaxed text-[var(--color-muted)]">
+                  <div
+                    key={f.id}
+                    id={`faq-${f.id}`}
+                    data-edit-key={`faqs:${f.id}`}
+                    className="scroll-mt-28 py-7"
+                  >
+                    <dt data-edit-field="question" className="display text-xl">
+                      {f.question}
+                    </dt>
+                    <dd
+                      data-edit-field="answer"
+                      className="mt-3 max-w-3xl leading-relaxed text-[var(--color-muted)]"
+                    >
                       {f.answer}
                     </dd>
                   </div>

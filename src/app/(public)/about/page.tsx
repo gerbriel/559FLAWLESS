@@ -65,11 +65,13 @@ export default async function AboutPage() {
               title={about.heading ?? 'About the studio'}
               lede={about.body}
             />
-            <p className="mt-6 leading-relaxed text-[var(--color-muted)]">
-              Skin changes. What worked last spring may not work now, and a routine that
-              suits your friend may be actively making your barrier worse. Every visit
-              starts with a look at where your skin actually is — not where it was at
-              your last appointment, and not where a package deal says it should be.
+            <p
+              data-edit-key="page_about"
+              data-edit-field="intro"
+              className="mt-6 leading-relaxed text-[var(--color-muted)]"
+            >
+              {copy.intro ??
+                'Skin changes. What worked last spring may not work now, and a routine that suits your friend may be actively making your barrier worse. Every visit starts with a look at where your skin actually is — not where it was at your last appointment, and not where a package deal says it should be.'}
             </p>
             <ButtonLink href="/book" className="mt-10" size="lg">
               Book an appointment
@@ -87,10 +89,21 @@ export default async function AboutPage() {
             editFields={{ eyebrow: 'how_eyebrow', title: 'how_title' }}
           />
           <div className="mt-16 grid gap-12 sm:grid-cols-2">
-            {PRINCIPLES.map((p) => (
-              <div key={p.title}>
-                <h3 className="display text-2xl">{p.title}</h3>
-                <p className="mt-3 leading-relaxed text-[var(--color-muted)]">{p.body}</p>
+            {PRINCIPLES.map((p, i) => (
+              // Keyed by position rather than by title, because the title is
+              // the thing being edited — keying on it would remount the card
+              // mid-edit. The literals above stay the default; an edit writes
+              // `principle_0_title` and friends over the top of them.
+              <div key={i} data-edit-key="page_about">
+                <h3 data-edit-field={`principle_${i}_title`} className="display text-2xl">
+                  {copy[`principle_${i}_title`] ?? p.title}
+                </h3>
+                <p
+                  data-edit-field={`principle_${i}_body`}
+                  className="mt-3 leading-relaxed text-[var(--color-muted)]"
+                >
+                  {copy[`principle_${i}_body`] ?? p.body}
+                </p>
               </div>
             ))}
           </div>

@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { Mail, Phone } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { Container, Section } from '@/components/ui/section'
+import { pageCopy } from '@/lib/page-copy'
 import { ContactForm, type ContactIdentity } from '@/components/shared/ContactForm'
 import { DirectionsLink, type StudioLocation } from '@/components/shared/DirectionsLink'
 import { StudioMap } from '@/components/shared/StudioMap'
@@ -19,6 +20,7 @@ interface Props {
 
 export default async function ContactPage({ searchParams }: Props) {
   const { service } = await searchParams
+  const copy = await pageCopy('page_contact')
   const supabase = await createClient()
 
   // This page is already force-dynamic and already reads cookies, so the
@@ -74,12 +76,16 @@ export default async function ContactPage({ searchParams }: Props) {
   return (
     <Section>
       <Container className="grid gap-16 lg:grid-cols-[1.2fr_1fr]">
-        <div>
-          <p className="label-caps mb-4 text-[var(--color-accent)]">Contact</p>
-          <h1 className="display text-4xl sm:text-5xl">Get in touch.</h1>
-          <p className="mt-5 max-w-xl text-[var(--color-muted)]">
-            Questions about a treatment, unsure what to book, or want to arrange a
-            consultation — send a note and we will get back to you.
+        <div data-edit-key="page_contact">
+          <p data-edit-field="eyebrow" className="label-caps mb-4 text-[var(--color-accent)]">
+            {copy.eyebrow ?? 'Contact'}
+          </p>
+          <h1 data-edit-field="title" className="display text-4xl sm:text-5xl">
+            {copy.title ?? 'Get in touch.'}
+          </h1>
+          <p data-edit-field="lede" className="mt-5 max-w-xl text-[var(--color-muted)]">
+            {copy.lede ??
+              'Questions about a treatment, unsure what to book, or want to arrange a consultation — send a note and we will get back to you.'}
           </p>
 
           <div className="mt-12">
@@ -88,7 +94,10 @@ export default async function ContactPage({ searchParams }: Props) {
         </div>
 
         <aside className="lg:sticky lg:top-28 lg:self-start">
-          <div className="border border-[var(--color-border)] bg-[var(--color-surface)] p-8">
+          <div
+            data-edit-key="contact"
+            className="border border-[var(--color-border)] bg-[var(--color-surface)] p-8"
+          >
             <p className="label-caps mb-6 text-[var(--color-accent)]">Studio</p>
             <ul className="space-y-5 text-sm">
               {(contact.address || contact.city) && (
@@ -99,13 +108,17 @@ export default async function ContactPage({ searchParams }: Props) {
               {contact.phone && (
                 <li className="flex min-h-11 items-center gap-3">
                   <Phone className="h-4 w-4 shrink-0 text-[var(--color-accent)]" strokeWidth={1.5} />
-                  <a href={`tel:${contact.phone.replace(/\D/g, '')}`}>{contact.phone}</a>
+                  {/* The tel: href keeps the stored digits; only the printed
+                      number is typed over, and the save rewrites both. */}
+                  <a href={`tel:${contact.phone.replace(/\D/g, '')}`} data-edit-field="phone">
+                    {contact.phone}
+                  </a>
                 </li>
               )}
               {contact.email && (
                 <li className="flex min-h-11 items-center gap-3">
                   <Mail className="h-4 w-4 shrink-0 text-[var(--color-accent)]" strokeWidth={1.5} />
-                  <a href={`mailto:${contact.email}`} className="break-all">
+                  <a href={`mailto:${contact.email}`} data-edit-field="email" className="break-all">
                     {contact.email}
                   </a>
                 </li>
