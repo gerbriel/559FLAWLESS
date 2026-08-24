@@ -133,7 +133,17 @@ export async function POST(request: NextRequest) {
     ...(fulfillment === 'shipping'
       ? { shipping_address_collection: { allowed_countries: ['US' as const] } }
       : {}),
-    success_url: `${siteUrl()}/shop/confirmation?order=${order.id}`,
+    // `amount` rides along for the confirmation page's ad pixel, which needs a
+    // value and has no other honest way to get one: the page is public, the
+    // order may be a guest's, and letting it look totals up by guessable id
+    // would leak every order's value to anyone counting upward. This is
+    // marketing telemetry only — the webhook remains the record of payment,
+    // and a client editing their own URL edits nothing but their own ad
+    // attribution.
+    success_url: `${siteUrl()}/shop/confirmation?order=${order.id}&amount=${lines.reduce(
+      (sum, line) => sum + byId.get(line.productId)!.price_cents * line.qty,
+      0
+    )}`,
     cancel_url: `${siteUrl()}/cart?cancelled=1`,
     metadata: { kind: 'product_order', order_id: String(order.id) },
   })

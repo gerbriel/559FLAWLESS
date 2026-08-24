@@ -1,8 +1,8 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { Check } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Field, Input, Textarea, Select } from '@/components/ui/field'
@@ -47,8 +47,8 @@ export function ContactForm({
   presetSubject?: string
   identity?: ContactIdentity | null
 }) {
+  const router = useRouter()
   const [busy, setBusy] = useState(false)
-  const [sent, setSent] = useState(false)
   const [form, setForm] = useState({
     name: identity ? [identity.firstName, identity.lastName].filter(Boolean).join(' ').trim() : '',
     email: identity?.email ?? '',
@@ -120,22 +120,10 @@ export function ContactForm({
       await backfillProfile(identity.userId, { phone: form.phone })
     }
 
-    setBusy(false)
-    setSent(true)
-  }
-
-  if (sent) {
-    return (
-      <div className="border border-[var(--color-border)] bg-[var(--color-surface)] p-10 text-center">
-        <div className="mx-auto flex h-12 w-12 items-center justify-center border border-[var(--color-accent)]">
-          <Check className="h-5 w-5 text-[var(--color-accent)]" strokeWidth={1.5} />
-        </div>
-        <p className="display mt-6 text-2xl">Message sent.</p>
-        <p className="mt-3 text-sm text-[var(--color-muted)]">
-          We usually reply within one business day. If it is urgent, please call.
-        </p>
-      </div>
-    )
+    // The thanks page is where the ad pixel counts this, so the send has to
+    // finish with a navigation, not a panel swap. `busy` stays true on purpose:
+    // the form is left un-resubmittable for the moment the redirect takes.
+    router.push(`/contact/thanks?t=${thread.id}`)
   }
 
   return (

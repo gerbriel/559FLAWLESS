@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
 import { ButtonLink } from '@/components/ui/button'
 import { CancelAppointment } from '@/components/shared/CancelAppointment'
+import { MetaPixelEvent } from '@/components/shared/MetaPixelEvent'
 import { formatMoney, formatDuration } from '@/lib/utils'
 import { formatDateTimeInTimeZone , requestNow } from '@/lib/time'
 import {
@@ -83,6 +84,16 @@ export default async function AppointmentDetailPage({ params, searchParams }: Pr
         not say: that the money has landed (only the webhook knows that), and
         that the appointment is theirs (only the provider decides that).
       */}
+      {/* The booking conversion, for ads. The same id already fired on the
+          booking screen before this client left for Stripe, so this only
+          catches the tab where it did not get out — the two dedupe on id. */}
+      {deposit === 'paid' && (
+        <MetaPixelEvent
+          event="CompleteRegistration"
+          id={`booking-${appointment.id}`}
+          value={appointment.total_cents / 100}
+        />
+      )}
       {deposit === 'paid' && (
         <div
           className={

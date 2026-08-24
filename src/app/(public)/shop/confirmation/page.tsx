@@ -3,18 +3,39 @@ import type { Metadata } from 'next'
 import { Container, Section } from '@/components/ui/section'
 import { ButtonLink } from '@/components/ui/button'
 import { ClearCart } from '@/components/shared/ClearCart'
+import { MetaPixelEvent } from '@/components/shared/MetaPixelEvent'
 
 export const metadata: Metadata = {
   title: 'Order Confirmed',
   robots: { index: false, follow: false },
 }
 
-export default function OrderConfirmationPage() {
+export default async function OrderConfirmationPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ order?: string; amount?: string }>
+}) {
+  const { order, amount } = await searchParams
+
+  // Both ride in from the checkout route's success_url; neither is trusted for
+  // anything but the ad pixel. Digits-only or the event simply does not fire —
+  // a mangled URL should cost a marketing datapoint, not render a broken page.
+  const orderId = order && /^\d{1,12}$/.test(order) ? order : null
+  const amountCents = amount && /^\d{1,9}$/.test(amount) ? Number(amount) : null
+
   return (
     <Section>
       <Container>
         {/* Emptying the bag is client-side; the order itself is confirmed by the
-            Stripe webhook, not by anyone landing on this page. */}
+            Stripe webhook, not by anyone landing on this page. Same for the
+            pixel: it tells Meta an ad worked, not the studio that money moved. */}
+        {orderId && amountCents !== null && (
+          <MetaPixelEvent
+            event="Purchase"
+            id={`order-${orderId}`}
+            value={amountCents / 100}
+          />
+        )}
         <ClearCart />
 
         <div className="mx-auto max-w-lg py-16 text-center">

@@ -18,6 +18,7 @@ import { trackEvent } from '@/components/shared/AnalyticsTracker'
 import { clearConsidered, rememberConsidered } from '@/lib/interest'
 import { FormRequirementChecker } from '@/components/shared/FormRequirementChecker'
 import { DepositRedirect } from '@/components/shared/DepositRedirect'
+import { MetaPixelEvent } from '@/components/shared/MetaPixelEvent'
 import { WaitlistJoin } from '@/components/booking/WaitlistJoin'
 import { SignedInAs, backfillProfile } from '@/components/shared/SignedInIdentity'
 
@@ -391,6 +392,16 @@ export function BookingFlow({
 
     return (
       <div className="mx-auto max-w-lg py-16 text-center">
+        {/* The conversion, for ads. Fires here for bookings that stay on this
+            screen; a deposit booking that leaves for Stripe fires the same id
+            again on the appointment page it returns to, and the two dedupe.
+            A held-for-review booking still counts — the client completed the
+            form; approval is the studio's step, not theirs. */}
+        <MetaPixelEvent
+          event="CompleteRegistration"
+          id={`booking-${confirmation.id}`}
+          value={confirmation.totalCents / 100}
+        />
         <div className="mx-auto flex h-14 w-14 items-center justify-center border border-[var(--color-accent)]">
           {heldForReview ? (
             <Clock className="h-6 w-6 text-[var(--color-accent)]" strokeWidth={1.5} />
