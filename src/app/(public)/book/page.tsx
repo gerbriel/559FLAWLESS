@@ -43,6 +43,7 @@ export default async function BookPage({ searchParams }: Props) {
     { data: addonLinks },
     profileRes,
     { data: bookingSettings },
+    { data: pairRules },
   ] = await Promise.all([
       supabase
         .from('services')
@@ -77,6 +78,11 @@ export default async function BookPage({ searchParams }: Props) {
       // Whether website bookings are confirmed on the spot. Publicly readable
       // (003), and it is what the paragraph below is allowed to promise.
       supabase.from('booking_settings').select('auto_confirm').eq('id', 1).maybeSingle(),
+      // The pair deal (067). The flow previews it; priceService() decides it.
+      supabase
+        .from('service_pair_discounts')
+        .select('id, trigger_service_id, discounted_service_id, percent_off, label')
+        .eq('is_active', true),
     ])
 
   // Map add-ons to their services once, rather than per render.
@@ -283,6 +289,7 @@ export default async function BookPage({ searchParams }: Props) {
           <BookingFlow
             services={orderedServices}
             providers={scopedProviders}
+            pairDiscounts={pairRules ?? []}
             initialServiceSlug={serviceSlug}
             // Everything the profile already holds, so the details step can ask
             // for what is missing and nothing else — and write back whatever

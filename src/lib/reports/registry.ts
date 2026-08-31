@@ -44,6 +44,7 @@ const ENTRIES: Record<string, RegistryEntry> = {
   expenses: { group: 'money', load: () => import('./expenses').then((m) => m.expensesReport) },
   'retail-sales': { group: 'money', load: () => import('./retail-sales').then((m) => m.retailSalesReport) },
   commissions: { group: 'money', load: () => import('./commissions').then((m) => m.commissionsReport) },
+  'pair-deals': { group: 'money', load: () => import('./pair-deals').then((m) => m.pairDealsReport) },
 
   // ── Operations ─────────────────────────────────────────────
   appointments: { group: 'operations', load: () => import('./appointments').then((m) => m.appointmentsReport) },

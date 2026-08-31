@@ -37,7 +37,7 @@ export default async function AppointmentDetailPage({ params, searchParams }: Pr
   const { data: appointment } = await supabase
     .from('appointments')
     .select(
-      'id, starts_at, ends_at, status, total_cents, membership_covered_cents, membership_discount_cents, deposit_cents, deposit_status, client_notes, cancellation_reason, profiles!appointments_provider_id_fkey(display_name, first_name, bio), appointment_services(id, name_snapshot, price_cents, duration_minutes, sort_order)'
+      'id, starts_at, ends_at, status, total_cents, membership_covered_cents, membership_discount_cents, deposit_cents, deposit_status, client_notes, cancellation_reason, profiles!appointments_provider_id_fkey(display_name, first_name, bio), appointment_services(id, name_snapshot, price_cents, duration_minutes, full_price_cents, sort_order)'
     )
     .eq('id', id)
     .eq('client_id', user.id)
@@ -56,6 +56,7 @@ export default async function AppointmentDetailPage({ params, searchParams }: Pr
     name_snapshot: string
     price_cents: number
     duration_minutes: number
+    full_price_cents: number | null
     sort_order: number
   }[]).sort((a, b) => a.sort_order - b.sort_order)
 
@@ -211,8 +212,19 @@ export default async function AppointmentDetailPage({ params, searchParams }: Pr
         <ul className="divide-y divide-[var(--color-border)]">
           {lines.map((l) => (
             <li key={l.id} className="flex items-baseline justify-between gap-6 px-6 py-4">
-              <span>{l.name_snapshot}</span>
+              <span>
+                {l.name_snapshot}
+                {/* A pair-deal line (067) says what the deal was worth. */}
+                {l.full_price_cents !== null && l.full_price_cents !== l.price_cents && (
+                  <span className="ml-2 text-xs text-[var(--color-muted)]">pair deal</span>
+                )}
+              </span>
               <span className="tabular-nums text-[var(--color-muted)]">
+                {l.full_price_cents !== null && l.full_price_cents !== l.price_cents && (
+                  <>
+                    <s>{formatMoney(l.full_price_cents)}</s>{' '}
+                  </>
+                )}
                 {formatMoney(l.price_cents)}
               </span>
             </li>

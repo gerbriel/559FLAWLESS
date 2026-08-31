@@ -27,6 +27,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { syncAppointmentToCalendar } from '@/lib/calendar-push'
 import { applyMembershipBenefit } from '@/lib/memberships'
 import { generateSlots, type AvailabilityInput } from '@/lib/availability'
+import { bestPairDiscount, pairDiscountCents } from '@/lib/pair-discounts'
 import { dateKeyInTimeZone, isValidTimeZone, MINUTE_MS } from '@/lib/time'
 
 export const MAX_ADDONS = 6
@@ -264,6 +265,10 @@ export interface PricedLine {
   name: string
   price_cents: number
   duration_minutes: number
+  /** Set when a pair deal (067) cut this line — the list price before the cut. */
+  full_price_cents?: number
+  /** Which pair deal cut it. */
+  pair_discount_id?: number
 }
 
 export interface PricedService {
@@ -316,7 +321,7 @@ export async function priceService(
   const wanted = [...new Set(serviceIds)]
   if (wanted.length === 0) return { ok: false, error: 'unknown_service' }
 
-  const [{ data: services }, { data: links }] = await Promise.all([
+  const [{ data: services }, { data: links }, { data: pairRules }] = await Promise.all([
     supabase
       // One string literal: postgrest-js parses the select at the type level,
       // and `'a' + 'b'` widens to `string`, collapsing the result type.
@@ -330,6 +335,12 @@ export async function priceService(
       .select('service_id, price_cents, duration_minutes, is_active')
       .eq('provider_id', providerId)
       .in('service_id', wanted),
+    // The pair deal (067): a service booked alongside its trigger is cheaper.
+    supabase
+      .from('service_pair_discounts')
+      .select('id, trigger_service_id, discounted_service_id, percent_off, label')
+      .eq('is_active', true)
+      .in('discounted_service_id', wanted),
   ])
 
   const active = (services ?? []).filter((s) => s.is_active)
@@ -352,6 +363,20 @@ export async function priceService(
       duration_minutes: link.duration_minutes ?? svc.duration_minutes,
     }
   })
+
+  // The pair deal comes off here — the same place every other price is
+  // decided, after the per-provider override so half off means half of what
+  // this provider actually charges. The line keeps its list price in
+  // full_price_cents, so the receipt can say what the deal was worth.
+  for (const line of priced) {
+    const rule = bestPairDiscount(pairRules ?? [], wanted, line.id)
+    if (!rule) continue
+    const off = pairDiscountCents(line.price_cents, rule.percent_off)
+    if (off === 0) continue
+    line.full_price_cents = line.price_cents
+    line.price_cents -= off
+    line.pair_discount_id = rule.id
+  }
 
   let addons: PricedLine[] = []
 
@@ -532,6 +557,9 @@ export async function createBooking(req: BookingRequest): Promise<BookingOutcome
       name_snapshot: svc.name,
       price_cents: svc.price_cents,
       duration_minutes: svc.duration_minutes,
+      // The pair deal, frozen with the price it cut (067).
+      full_price_cents: svc.full_price_cents ?? null,
+      pair_discount_id: svc.pair_discount_id ?? null,
       sort_order: i,
     })),
     // Add-ons sort after every service, so the receipt reads services first.
@@ -794,6 +822,10 @@ export async function createStaffBooking(req: StaffBookingRequest): Promise<Book
       name_snapshot: svc.name,
       price_cents: svc.price_cents,
       duration_minutes: svc.duration_minutes,
+      // The pair deal applies at the desk too — the same priceService decided
+      // it, and the front desk should never have to take it off by hand.
+      full_price_cents: svc.full_price_cents ?? null,
+      pair_discount_id: svc.pair_discount_id ?? null,
       sort_order: i,
     })),
     // Add-ons sort after every service, so the receipt reads services first.

@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils'
 const LINKS = [
   { href: '/account', label: 'Overview', exact: true },
   { href: '/account/appointments', label: 'Appointments' },
+  { href: '/account/rewards', label: 'Rewards' },
   { href: '/account/forms', label: 'Forms & consent' },
   { href: '/account/messages', label: 'Messages', badge: true },
   { href: '/account/orders', label: 'Orders' },

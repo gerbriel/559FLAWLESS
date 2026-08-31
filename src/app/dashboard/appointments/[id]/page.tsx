@@ -8,8 +8,10 @@ import { ClientNoteForm } from '@/components/shared/ClientNoteForm'
 import { TakePayment, type PaymentRecord } from '@/components/shared/TakePayment'
 import { PackageVisitCredit } from '@/components/shared/PackageVisitCredit'
 import { PhotoReminderPrompt } from '@/components/shared/PhotoReminderPrompt'
+import { PairUpsell, type PairUpsellOption } from '@/components/shared/PairUpsell'
 import { formatMoney, formatDuration } from '@/lib/utils'
-import { formatDateTimeInTimeZone } from '@/lib/time'
+import { bestPairDiscount, pairDiscountCents, type PairDiscountRule } from '@/lib/pair-discounts'
+import { formatDateTimeInTimeZone, dateKeyInTimeZone, requestNow } from '@/lib/time'
 import type { AppointmentStatus } from '@/types/database'
 import type { AppointmentPhotoPrompt } from '@/types/clientprofile'
 
@@ -28,7 +30,7 @@ export default async function StaffAppointmentPage({ params }: Props) {
   const { data: appointment } = await supabase
     .from('appointments')
     .select(
-      'id, starts_at, ends_at, status, source, subtotal_cents, total_cents, membership_covered_cents, membership_discount_cents, deposit_cents, deposit_status, client_notes, staff_notes, client_id, guest_first_name, guest_last_name, guest_email, guest_phone, age_attested_at, profiles!appointments_client_id_fkey(first_name, last_name, email, phone), appointment_services(id, name_snapshot, price_cents, duration_minutes, sort_order)'
+      'id, starts_at, ends_at, status, source, provider_id, subtotal_cents, total_cents, membership_covered_cents, membership_discount_cents, deposit_cents, deposit_status, client_notes, staff_notes, client_id, guest_first_name, guest_last_name, guest_email, guest_phone, age_attested_at, profiles!appointments_client_id_fkey(first_name, last_name, email, phone), appointment_services(id, service_id, name_snapshot, price_cents, duration_minutes, full_price_cents, added_by, sort_order)'
     )
     .eq('id', id)
     .maybeSingle()
@@ -48,9 +50,12 @@ export default async function StaffAppointmentPage({ params }: Props) {
 
   const lines = ((appointment.appointment_services ?? []) as {
     id: number
+    service_id: number | null
     name_snapshot: string
     price_cents: number
     duration_minutes: number
+    full_price_cents: number | null
+    added_by: string | null
     sort_order: number
   }[]).sort((a, b) => a.sort_order - b.sort_order)
 
@@ -79,6 +84,74 @@ export default async function StaffAppointmentPage({ params }: Props) {
         .limit(1)
         .maybeSingle()
     : { data: null }
+
+  // The in-chair upsell (067): what could join TODAY's visit at the pair
+  // price. Offered only on the day, on a visit that is still billable — the
+  // same rules `addPairedService` enforces, said ahead of the click.
+  const visitServiceIds = lines
+    .map((l) => l.service_id)
+    .filter((id): id is number => id !== null)
+  const upsellDay =
+    ['confirmed', 'checked_in', 'completed'].includes(appointment.status) &&
+    dateKeyInTimeZone(new Date(appointment.starts_at), STUDIO_TZ) ===
+      dateKeyInTimeZone(new Date(requestNow()), STUDIO_TZ)
+
+  let upsellOptions: PairUpsellOption[] = []
+  if (upsellDay && visitServiceIds.length > 0) {
+    const { data: rules } = await supabase
+      .from('service_pair_discounts')
+      .select('id, trigger_service_id, discounted_service_id, percent_off, label')
+      .eq('is_active', true)
+      .in('trigger_service_id', visitServiceIds)
+
+    const candidateIds = [
+      ...new Set(
+        ((rules ?? []) as PairDiscountRule[])
+          .map((r) => r.discounted_service_id)
+          .filter((id) => !visitServiceIds.includes(id))
+      ),
+    ]
+
+    if (candidateIds.length > 0) {
+      const [{ data: candidateServices }, { data: providerLinks }] = await Promise.all([
+        supabase
+          .from('services')
+          .select(
+            'id, name, price_cents, duration_minutes, is_active, requires_age_verification, min_age'
+          )
+          .in('id', candidateIds)
+          .eq('is_active', true),
+        supabase
+          .from('provider_services')
+          .select('service_id, price_cents, is_active')
+          .eq('provider_id', appointment.provider_id)
+          .in('service_id', candidateIds),
+      ])
+
+      const linkFor = new Map(
+        (providerLinks ?? []).filter((l) => l.is_active).map((l) => [l.service_id, l])
+      )
+      upsellOptions = (candidateServices ?? []).flatMap((svc) => {
+        const link = linkFor.get(svc.id)
+        if (!link) return []
+        const rule = bestPairDiscount((rules ?? []) as PairDiscountRule[], visitServiceIds, svc.id)
+        if (!rule) return []
+        const fullCents = link.price_cents ?? svc.price_cents
+        const off = pairDiscountCents(fullCents, rule.percent_off)
+        if (off === 0) return []
+        return [
+          {
+            serviceId: svc.id,
+            name: svc.name,
+            fullCents,
+            priceCents: fullCents - off,
+            needsAge: svc.requires_age_verification && !appointment.age_attested_at,
+            minAge: svc.min_age,
+          },
+        ]
+      })
+    }
+  }
 
   // Is a before/after photograph due on this visit? `photo_due` is null unless
   // a documented service is booked AND the client's consent covers it — the
@@ -149,8 +222,22 @@ export default async function StaffAppointmentPage({ params }: Props) {
         <ul className="mt-6 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
           {lines.map((l) => (
             <li key={l.id} className="flex justify-between gap-6 py-3 text-sm">
-              <span>{l.name_snapshot}</span>
+              <span>
+                {l.name_snapshot}
+                {/* A pair-deal line says so, and whether it was added in the
+                    chair — the split the redemptions report counts. */}
+                {l.full_price_cents !== null && (
+                  <span className="ml-2 text-xs text-[var(--color-muted)]">
+                    pair deal{l.added_by ? ', added in the chair' : ''}
+                  </span>
+                )}
+              </span>
               <span className="tabular-nums text-[var(--color-muted)]">
+                {l.full_price_cents !== null && l.full_price_cents !== l.price_cents && (
+                  <>
+                    <s>{formatMoney(l.full_price_cents)}</s>{' '}
+                  </>
+                )}
                 {formatMoney(l.price_cents)}
               </span>
             </li>
@@ -197,6 +284,15 @@ export default async function StaffAppointmentPage({ params }: Props) {
           <span className="tabular-nums">{formatMoney(appointment.total_cents)}</span>
         </div>
       </div>
+
+      {/* The upsell sits above coverage and balance for the same reason those
+          two are ordered: adding a line raises the total that everything
+          below it reads. Renders nothing unless something pairs with today. */}
+      {upsellOptions.length > 0 && (
+        <div className="mt-8">
+          <PairUpsell appointmentId={appointment.id} options={upsellOptions} />
+        </div>
+      )}
 
       {/* "Is any of this already covered?" comes before "what do they owe".
           Spending a session writes a `payments` row, which is what drops the

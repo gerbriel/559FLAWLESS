@@ -474,6 +474,16 @@ export type AppointmentService = {
   price_cents: number
   duration_minutes: number
   sort_order: number
+
+  // ── Pair deal, added in 067 ─────────────────────────────────
+  /** List price before a pair discount, integer cents. Null = undiscounted. */
+  full_price_cents: number | null
+  /** Which pair deal cut this line's price, if any. */
+  pair_discount_id: number | null
+  /** Staff member who added this line in the chair. Null = came with the booking. */
+  added_by: string | null
+  /** When a line was added after booking. Null = came with the booking. */
+  added_at: string | null
 }
 
 export type ClientRecord = {
@@ -1070,6 +1080,40 @@ export type ServiceAddonLink = {
   addon_id: number
 }
 
+// ── Loyalty & pair deals, added in 067 ────────────────────────
+
+/**
+ * Book the trigger service and the discounted service in one visit, and the
+ * discounted one is percent_off cheaper. Applied server-side in priceService();
+ * the result freezes into `appointment_services` like every other price.
+ */
+export type ServicePairDiscount = {
+  id: number
+  trigger_service_id: number
+  discounted_service_id: number
+  percent_off: number
+  /** Client-facing copy for the service card. */
+  label: string
+  is_active: boolean
+  created_at: string
+}
+
+/**
+ * Loyalty points, one row per movement — the balance is the sum, never stored.
+ * `earned`/`reversal` rows mirror `payments` 1:1 via trigger; `adjustment`
+ * rows are manager goodwill or corrections.
+ */
+export type LoyaltyLedgerEntry = {
+  id: number
+  client_id: string
+  points: number
+  kind: 'earned' | 'reversal' | 'adjustment'
+  payment_id: number | null
+  note: string | null
+  created_by: string | null
+  created_at: string
+}
+
 export type ServiceConsumable = {
   service_id: number
   product_id: number
@@ -1502,6 +1546,23 @@ export type Database = {
           Rel<'appointment_services_appointment_id_fkey', ['appointment_id'], 'appointments', ['id']>,
           Rel<'appointment_services_service_id_fkey', ['service_id'], 'services', ['id']>,
           Rel<'appointment_services_addon_id_fkey', ['addon_id'], 'service_addons', ['id']>,
+          Rel<'appointment_services_pair_discount_id_fkey', ['pair_discount_id'], 'service_pair_discounts', ['id']>,
+          ToProfile<'appointment_services', 'added_by'>,
+        ]
+      >
+      service_pair_discounts: TableDef<
+        ServicePairDiscount,
+        [
+          Rel<'service_pair_discounts_trigger_service_id_fkey', ['trigger_service_id'], 'services', ['id']>,
+          Rel<'service_pair_discounts_discounted_service_id_fkey', ['discounted_service_id'], 'services', ['id']>,
+        ]
+      >
+      loyalty_ledger: TableDef<
+        LoyaltyLedgerEntry,
+        [
+          ToProfile<'loyalty_ledger', 'client_id'>,
+          ToProfile<'loyalty_ledger', 'created_by'>,
+          Rel<'loyalty_ledger_payment_id_fkey', ['payment_id'], 'payments', ['id']>,
         ]
       >
       appointment_events: TableDef<
@@ -2443,6 +2504,15 @@ export type Database = {
       waitlist_sweep: { Args: Record<PropertyKey, never>; Returns: number }
       appointment_balance_cents: {
         Args: { p_appointment: string }
+        Returns: number
+      }
+      /**
+       * Points balance — the sum of the caller-visible ledger. SECURITY
+       * INVOKER: RLS decides whose rows count, so a client asking about
+       * someone else gets zero. Added in 067.
+       */
+      loyalty_balance: {
+        Args: { p_client: string }
         Returns: number
       }
       order_balance_cents: {

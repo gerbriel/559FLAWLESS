@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { CalendarDays, FileText, MessageSquare } from 'lucide-react'
+import { CalendarDays, FileText, MessageSquare, Sparkles } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { ButtonLink } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -28,8 +28,13 @@ export default async function AccountPage() {
   // Server Component: the clock comes from the named seam, not a bare Date.
   const now = new Date(requestNow()).toISOString()
 
-  const [{ data: profile }, { data: upcoming }, { data: record }, { count: unreadMessages }] =
-    await Promise.all([
+  const [
+    { data: profile },
+    { data: upcoming },
+    { data: record },
+    { count: unreadMessages },
+    { data: pointsBalance },
+  ] = await Promise.all([
       supabase.from('profiles').select('first_name').eq('id', user.id).maybeSingle(),
       supabase
         .from('appointments')
@@ -53,6 +58,8 @@ export default async function AccountPage() {
         .select('id', { count: 'exact', head: true })
         .eq('client_id', user.id)
         .eq('client_unread', true),
+      // Their points (067) — the sum of their own ledger, by RLS.
+      supabase.rpc('loyalty_balance', { p_client: user.id }),
     ])
 
   const next = upcoming?.[0]
@@ -178,7 +185,7 @@ export default async function AccountPage() {
         </div>
       )}
 
-      <div className="mt-10 grid gap-px border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-3">
+      <div className="mt-10 grid gap-px border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-2 lg:grid-cols-4">
         <Link
           href="/account/appointments"
           className="flex flex-col gap-2 bg-[var(--color-background)] p-6 transition-colors hover:bg-[var(--color-linen)] dark:hover:bg-[var(--color-surface)]"
@@ -187,6 +194,17 @@ export default async function AccountPage() {
           <span className="label-caps mt-2">Appointments</span>
           <span className="text-sm text-[var(--color-muted)]">
             {record?.visit_count ?? 0} completed
+          </span>
+        </Link>
+
+        <Link
+          href="/account/rewards"
+          className="flex flex-col gap-2 bg-[var(--color-background)] p-6 transition-colors hover:bg-[var(--color-linen)] dark:hover:bg-[var(--color-surface)]"
+        >
+          <Sparkles className="h-5 w-5 text-[var(--color-accent)]" strokeWidth={1.5} />
+          <span className="label-caps mt-2">Rewards</span>
+          <span className="text-sm tabular-nums text-[var(--color-muted)]">
+            {(pointsBalance ?? 0).toLocaleString()} points
           </span>
         </Link>
 

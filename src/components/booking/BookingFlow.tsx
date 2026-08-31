@@ -9,6 +9,11 @@ import { Badge } from '@/components/ui/badge'
 import { Field, Input, Textarea } from '@/components/ui/field'
 import { cn, formatMoney, formatDuration } from '@/lib/utils'
 import {
+  bestPairDiscount,
+  pairDiscountCents,
+  type PairDiscountRule,
+} from '@/lib/pair-discounts'
+import {
   addDaysToDateKey,
   dateKeyInTimeZone,
   formatTimeInTimeZone,
@@ -66,6 +71,7 @@ const WEEK_DAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S']
 export function BookingFlow({
   services,
   providers,
+  pairDiscounts = [],
   initialServiceSlug,
   signedInUserId,
   signedInEmail,
@@ -74,6 +80,8 @@ export function BookingFlow({
 }: {
   services: BookableService[]
   providers: BookableProvider[]
+  /** The pair deal (067). Preview only — priceService() is what decides. */
+  pairDiscounts?: PairDiscountRule[]
   initialServiceSlug?: string
   /** Present when the profile can be written back to — see `submit`. */
   signedInUserId?: string | null
@@ -162,9 +170,22 @@ export function BookingFlow({
     [availableAddons, addonIds]
   )
 
+  // Pair deal (067): the same math priceService() runs, so the preview and
+  // the booking agree to the cent. Lines keep their list price — the deal
+  // shows as its own deduction, the way the receipt already shows memberships.
+  const selectedIds = selected.map((s) => s.id)
+  const pairCutFor = (s: BookableService) => {
+    const rule = bestPairDiscount(pairDiscounts, selectedIds, s.id)
+    if (!rule) return null
+    const off = pairDiscountCents(s.price_cents, rule.percent_off)
+    return off > 0 ? { rule, off } : null
+  }
+  const pairSavingsCents = selected.reduce((n, s) => n + (pairCutFor(s)?.off ?? 0), 0)
+
   const totalCents =
     selected.reduce((n, s) => n + s.price_cents, 0) +
-    selectedAddons.reduce((n, a) => n + a.price_cents, 0)
+    selectedAddons.reduce((n, a) => n + a.price_cents, 0) -
+    pairSavingsCents
   const totalMinutes =
     selected.reduce((n, s) => n + s.duration_minutes, 0) +
     selectedAddons.reduce((n, a) => n + a.duration_minutes, 0)
@@ -602,46 +623,74 @@ export function BookingFlow({
                     {group[0].category.is_intimate && <Badge tone="accent">18+</Badge>}
                   </p>
                   <div className="grid gap-px border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-2">
-                    {group.map((s) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        aria-pressed={selected.some((x) => x.id === s.id)}
-                        onClick={() => {
-                          toggleService(s)
-                          // Re-confirm age whenever the set changes: what was
-                          // attested to was a different booking.
-                          setAgeConfirmed(false)
-                          void trackEvent('service_selected', { service_id: s.id })
-                        }}
-                        className={cn(
-                          'flex items-start justify-between gap-3 p-5 text-left transition-colors',
-                          selected.some((x) => x.id === s.id)
-                            ? 'bg-[var(--color-clay-soft)] dark:bg-[var(--color-surface)]'
-                            : 'bg-[var(--color-background)] hover:bg-[var(--color-linen)] dark:hover:bg-[var(--color-surface)]'
-                        )}
-                      >
-                        <span className="flex flex-col gap-2">
-                          <span className="text-base">{s.name}</span>
-                          <span className="text-xs text-[var(--color-muted)]">
-                            {formatDuration(s.duration_minutes)} · {formatMoney(s.price_cents)}
-                          </span>
-                        </span>
-                        <span
-                          aria-hidden
+                    {group.map((s) => {
+                      // The pair deal, on the card where the decision is made:
+                      // the offer before it applies, the cut price once it does.
+                      const cut = pairCutFor(s)
+                      const deal = cut
+                        ? null
+                        : pairDiscounts.find((r) => r.discounted_service_id === s.id)
+                      return (
+                        <button
+                          key={s.id}
+                          type="button"
+                          aria-pressed={selected.some((x) => x.id === s.id)}
+                          onClick={() => {
+                            toggleService(s)
+                            // Re-confirm age whenever the set changes: what was
+                            // attested to was a different booking.
+                            setAgeConfirmed(false)
+                            void trackEvent('service_selected', { service_id: s.id })
+                          }}
                           className={cn(
-                            'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center border',
+                            'flex items-start justify-between gap-3 p-5 text-left transition-colors',
                             selected.some((x) => x.id === s.id)
-                              ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-white'
-                              : 'border-[var(--color-border)]'
+                              ? 'bg-[var(--color-clay-soft)] dark:bg-[var(--color-surface)]'
+                              : 'bg-[var(--color-background)] hover:bg-[var(--color-linen)] dark:hover:bg-[var(--color-surface)]'
                           )}
                         >
-                          {selected.some((x) => x.id === s.id) && (
-                            <Check className="h-3 w-3" strokeWidth={3} />
-                          )}
-                        </span>
-                      </button>
-                    ))}
+                          <span className="flex flex-col gap-2">
+                            <span className="text-base">{s.name}</span>
+                            <span className="text-xs text-[var(--color-muted)]">
+                              {formatDuration(s.duration_minutes)} ·{' '}
+                              {cut ? (
+                                <>
+                                  <s>{formatMoney(s.price_cents)}</s>{' '}
+                                  <span className="text-[var(--color-clay-deep)] dark:text-[var(--color-accent)]">
+                                    {formatMoney(s.price_cents - cut.off)}
+                                  </span>
+                                </>
+                              ) : (
+                                formatMoney(s.price_cents)
+                              )}
+                            </span>
+                            {deal && (
+                              <span className="text-xs text-[var(--color-clay-deep)] dark:text-[var(--color-accent)]">
+                                {deal.label}
+                              </span>
+                            )}
+                            {cut && (
+                              <span className="text-xs text-[var(--color-clay-deep)] dark:text-[var(--color-accent)]">
+                                Pair deal applied — you save {formatMoney(cut.off)}
+                              </span>
+                            )}
+                          </span>
+                          <span
+                            aria-hidden
+                            className={cn(
+                              'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center border',
+                              selected.some((x) => x.id === s.id)
+                                ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-white'
+                                : 'border-[var(--color-border)]'
+                            )}
+                          >
+                            {selected.some((x) => x.id === s.id) && (
+                              <Check className="h-3 w-3" strokeWidth={3} />
+                            )}
+                          </span>
+                        </button>
+                      )
+                    })}
                   </div>
                 </div>
               ))}
@@ -1150,6 +1199,15 @@ export function BookingFlow({
                 <dt className="text-[var(--color-muted)]">Duration</dt>
                 <dd className="tabular-nums">{formatDuration(totalMinutes)}</dd>
               </div>
+
+              {/* The lines above stay at list price; the deal is its own row,
+                  the way the staff receipt shows a membership coming off. */}
+              {pairSavingsCents > 0 && (
+                <div className="flex justify-between">
+                  <dt className="text-[var(--color-muted)]">Pair deal</dt>
+                  <dd className="tabular-nums">&minus;{formatMoney(pairSavingsCents)}</dd>
+                </div>
+              )}
 
               <div className="flex justify-between">
                 <dt className="text-[var(--color-muted)]">Total</dt>
