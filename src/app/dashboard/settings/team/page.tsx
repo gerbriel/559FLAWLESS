@@ -464,6 +464,13 @@ export default async function TeamSettingsPage() {
                       </div>
                       {person && <Badge tone="neutral">{ROLE_LABELS[person.role]}</Badge>}
                       {person?.suspended_at && <Badge tone="danger">Suspended</Badge>}
+                      <ButtonLink
+                        href={`/dashboard/calendar/hours?provider=${member.profile_id}`}
+                        variant="outline"
+                        size="sm"
+                      >
+                        Adjust hours
+                      </ButtonLink>
                       <StaffProfileLicenceBadge
                         expiresOn={credentials.get(member.profile_id)?.licence_expires_on ?? null}
                         now={now}
