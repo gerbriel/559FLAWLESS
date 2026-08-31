@@ -50,7 +50,7 @@ export default async function BookPage({ searchParams }: Props) {
         // select at the type level and concatenation widens it to `string`,
         // which collapses the result type to SelectQueryError.
         .select(
-          'id, name, slug, description, price_cents, duration_minutes, deposit_cents, is_intimate, requires_age_verification, min_age, patch_test_hours, sort_order, category_id, service_categories(name, slug, is_intimate, sort_order)'
+          'id, name, slug, description, price_cents, duration_minutes, deposit_cents, is_intimate, requires_age_verification, min_age, patch_test_hours, sort_order, category_id, service_categories(name, slug, is_intimate, sort_order, is_active)'
         )
         .eq('is_active', true)
         .eq('requires_consultation', false)
@@ -101,6 +101,14 @@ export default async function BookPage({ searchParams }: Props) {
   }
 
   const services: BookableService[] = (rawServices ?? [])
+    // A retired (inactive) category takes its services off the public menu
+    // while the engine still books them — which is what makes an unlisted,
+    // link-only service possible (a payment test, a private offer). The deep
+    // link is the one door back in.
+    .filter((s) => {
+      const cat = s.service_categories as unknown as { is_active?: boolean } | null
+      return (cat?.is_active ?? true) || s.slug === serviceSlug
+    })
     .map((s) => {
       const cat = s.service_categories as unknown as {
         name: string

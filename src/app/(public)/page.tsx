@@ -31,8 +31,11 @@ export default async function HomePage() {
         .order('sort_order'),
       supabase
         .from('services')
-        .select('id, name, slug, description, price_cents, duration_minutes, price_is_starting, service_categories(slug)')
+        // !inner so the category filter below actually drops the row — a
+        // service in a retired category is off the menu everywhere public.
+        .select('id, name, slug, description, price_cents, duration_minutes, price_is_starting, service_categories!inner(slug)')
         .eq('is_active', true)
+        .eq('service_categories.is_active', true)
         .order('sort_order')
         .limit(6),
       supabase
