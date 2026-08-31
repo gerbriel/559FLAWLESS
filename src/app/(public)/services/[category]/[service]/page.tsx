@@ -217,14 +217,28 @@ export default async function ServiceDetailPage({ params }: Props) {
                   </li>
                 ))}
                 {addons.map((a) => (
-                  <li key={a.id} className="flex items-baseline justify-between gap-6 py-4">
+                  <li
+                    key={a.id}
+                    data-edit-key={`service_addons:${a.id}`}
+                    className="flex items-baseline justify-between gap-6 py-4"
+                  >
                     <div>
-                      <p className="text-base">{a.name}</p>
+                      <p data-edit-field="name" className="text-base">
+                        {a.name}
+                      </p>
                       {a.description && (
-                        <p className="mt-1 text-sm text-[var(--color-muted)]">{a.description}</p>
+                        <p data-edit-field="description" className="mt-1 text-sm text-[var(--color-muted)]">
+                          {a.description}
+                        </p>
                       )}
                     </div>
-                    <span className="shrink-0 tabular-nums">{formatMoney(a.price_cents)}</span>
+                    <span
+                      data-edit-field="price_cents"
+                      data-edit-type="money"
+                      className="shrink-0 tabular-nums"
+                    >
+                      {formatMoney(a.price_cents)}
+                    </span>
                   </li>
                 ))}
               </ul>

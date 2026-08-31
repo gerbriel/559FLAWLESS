@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { Check, PencilLine, RotateCcw, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
-import type { Faq, Product, Service, ServiceCategory } from '@/types/database'
+import type { Faq, Product, Service, ServiceAddon, ServiceCategory } from '@/types/database'
 
 /**
  * Editing the storefront where it stands.
@@ -98,6 +98,9 @@ const EDITABLE_COLUMNS: Record<string, readonly string[]> = {
     'duration_minutes',
   ],
   products: ['name', 'description', 'ingredients', 'how_to_use', 'image_url', 'price_cents'],
+  // The "Add to this service" rows. No `price_is_starting` — an add-on price
+  // is a price, so "from $30" is refused rather than silently flattened.
+  service_addons: ['name', 'description', 'price_cents'],
   // Not `slug`. A category's slug is its public address — /services/nails and
   // every link the studio has ever handed out — so renaming "Nails" to "Nail
   // Care" changes the heading and leaves the URL alone, which is what anybody
@@ -236,7 +239,8 @@ function pathsFor(keys: string[]): string[] {
       }
     } else if (key === 'about') paths.add('/about')
     else if (table === 'faqs') paths.add('/faq')
-    else if (table === 'services' || table === 'service_categories') paths.add('/services')
+    else if (table === 'services' || table === 'service_categories' || table === 'service_addons')
+      paths.add('/services')
     else if (table === 'products') paths.add('/shop')
     else if (key === 'shop' || key === 'page_shop') paths.add('/shop')
     // page_faq → /faq, page_gift_cards → /gift-cards, and so on. The route
@@ -519,8 +523,15 @@ export function AdminEditKit() {
             if (!read.ok) throw new Error(read.why)
             for (const [target, value] of Object.entries(read.values)) {
               // `price_is_starting` arrives as a companion of price_cents, so
-              // it is checked against the same list rather than trusted.
+              // it is checked against the same list rather than trusted. A
+              // table without the column (an add-on) drops a false quietly —
+              // the price said nothing — and refuses a true, which would have
+              // meant something the row cannot hold.
               if (!allowed.includes(target)) {
+                if (target !== column && value === false) continue
+                if (target === 'price_is_starting') {
+                  throw new Error('This price cannot say “from” — write it like $30.')
+                }
                 throw new Error(`${table}.${target} is not editable here.`)
               }
               patch[target] = value
@@ -547,6 +558,11 @@ export function AdminEditKit() {
                   ? await supabase
                       .from('faqs')
                       .update(patch as Partial<Faq>)
+                      .eq('id', Number(id))
+                : table === 'service_addons'
+                  ? await supabase
+                      .from('service_addons')
+                      .update(patch as Partial<ServiceAddon>)
                       .eq('id', Number(id))
                 : await supabase
                     .from('products')
