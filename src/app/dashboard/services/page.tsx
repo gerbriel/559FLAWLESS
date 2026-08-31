@@ -8,6 +8,11 @@ import {
   type CatalogueCategory,
   type CatalogueService,
 } from '@/components/shared/ServicesCatalogue'
+import {
+  AddonManager,
+  type ManagedAddon,
+  type ManagedPairDeal,
+} from '@/components/shared/AddonManager'
 import { isManager, isAdmin, type UserRole } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
@@ -36,7 +41,13 @@ export default async function ServicesPage() {
   const canEdit = isManager(role)
   const admin = isAdmin(role)
 
-  const [{ data: categories }, { data: services }] = await Promise.all([
+  const [
+    { data: categories },
+    { data: services },
+    { data: addons },
+    { data: addonLinks },
+    { data: pairDeals },
+  ] = await Promise.all([
     supabase
       .from('service_categories')
       // slug and image_url are for the rail and the row thumbnails: the public
@@ -51,6 +62,16 @@ export default async function ServicesPage() {
       )
       .order('sort_order')
       .order('name'),
+    // The "add to this service" section, for the admin manager below.
+    supabase
+      .from('service_addons')
+      .select('id, name, description, price_cents, duration_minutes, is_active')
+      .order('sort_order')
+      .order('name'),
+    supabase.from('service_addon_links').select('service_id, addon_id'),
+    supabase
+      .from('service_pair_discounts')
+      .select('id, trigger_service_id, discounted_service_id, percent_off, label, is_active'),
   ])
 
   const cats = (categories ?? []) as CatalogueCategory[]
@@ -83,6 +104,24 @@ export default async function ServicesPage() {
       />
 
       <ServicesCatalogue services={all} categories={cats} canEdit={canEdit} isAdmin={admin} />
+
+      {/* Add-ons and pair deals, per service. Admin only — same as the RLS
+          that actually enforces it (002, 067). */}
+      {admin && all.length > 0 && (
+        <AddonManager
+          services={all.map((s) => ({
+            id: s.id,
+            name: s.name,
+            price_cents: s.price_cents,
+            category_id: s.category_id,
+            is_active: s.is_active,
+          }))}
+          categories={cats.map((c) => ({ id: c.id, name: c.name }))}
+          addons={(addons ?? []) as ManagedAddon[]}
+          links={addonLinks ?? []}
+          pairDeals={(pairDeals ?? []) as ManagedPairDeal[]}
+        />
+      )}
     </div>
   )
 }

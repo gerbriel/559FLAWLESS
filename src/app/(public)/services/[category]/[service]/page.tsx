@@ -7,6 +7,7 @@ import { Container, Section } from '@/components/ui/section'
 import { ButtonLink } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { formatMoney, formatServicePrice, formatDuration } from '@/lib/utils'
+import { pairDiscountCents } from '@/lib/pair-discounts'
 
 export const revalidate = 300
 
@@ -64,10 +65,28 @@ export default async function ServiceDetailPage({ params }: Props) {
   const cat = service.service_categories as { name: string; slug: string } | null
   if (cat?.slug !== category) notFound()
 
-  const { data: addonLinks } = await supabase
-    .from('service_addon_links')
-    .select('service_addons(id, name, description, price_cents, duration_minutes, is_active)')
-    .eq('service_id', service.id)
+  const [{ data: addonLinks }, { data: pairRules }, { data: dealsOnThis }] = await Promise.all([
+    supabase
+      .from('service_addon_links')
+      .select('service_addons(id, name, description, price_cents, duration_minutes, is_active)')
+      .eq('service_id', service.id),
+    // The pair deal (067), from this page's side of it: what gets cheaper when
+    // booked alongside THIS service.
+    supabase
+      .from('service_pair_discounts')
+      .select(
+        'id, percent_off, services!service_pair_discounts_discounted_service_id_fkey(id, name, slug, description, price_cents, is_active)'
+      )
+      .eq('trigger_service_id', service.id)
+      .eq('is_active', true),
+    // And the other side: is THIS service the one a deal makes cheaper?
+    supabase
+      .from('service_pair_discounts')
+      .select('label')
+      .eq('discounted_service_id', service.id)
+      .eq('is_active', true)
+      .limit(1),
+  ])
 
   const addons = (addonLinks ?? [])
     .map((l) => l.service_addons as unknown as {
@@ -79,6 +98,32 @@ export default async function ServiceDetailPage({ params }: Props) {
       is_active: boolean
     })
     .filter((a) => a?.is_active)
+
+  const pairDeals = (pairRules ?? [])
+    .map((r) => {
+      const target = r.services as unknown as {
+        id: number
+        name: string
+        slug: string
+        description: string | null
+        price_cents: number
+        is_active: boolean
+      } | null
+      if (!target?.is_active) return null
+      const off = pairDiscountCents(target.price_cents, r.percent_off)
+      if (off === 0) return null
+      return {
+        id: r.id,
+        name: target.name,
+        description: target.description,
+        percentOff: r.percent_off,
+        fullCents: target.price_cents,
+        priceCents: target.price_cents - off,
+      }
+    })
+    .filter((d): d is NonNullable<typeof d> => d !== null)
+
+  const dealNote = dealsOnThis?.[0]?.label ?? null
 
   return (
     <Section>
@@ -135,10 +180,34 @@ export default async function ServiceDetailPage({ params }: Props) {
             </div>
           )}
 
-          {addons.length > 0 && (
+          {(addons.length > 0 || pairDeals.length > 0) && (
             <div className="mt-10 border-t border-[var(--color-border)] pt-10">
               <h2 className="label-caps mb-6 text-[var(--color-accent)]">Add to this service</h2>
               <ul className="divide-y divide-[var(--color-border)]">
+                {/* The pair deal leads: list price crossed out, the pair price
+                    in green. The booking flow applies it automatically when
+                    both are in the visit. */}
+                {pairDeals.map((d) => (
+                  <li key={`pair-${d.id}`} className="flex items-baseline justify-between gap-6 py-4">
+                    <div>
+                      <p className="text-base">
+                        {d.name}
+                        <span className="ml-2 label-caps text-[0.5625rem] text-[var(--color-clay-deep)]">
+                          {d.percentOff}% off together
+                        </span>
+                      </p>
+                      <p className="mt-1 text-sm text-[var(--color-muted)]">
+                        {d.description ?? `Booked in the same visit, it is ${d.percentOff}% off.`}
+                      </p>
+                    </div>
+                    <span className="shrink-0 tabular-nums">
+                      <s className="text-[var(--color-muted)]">{formatMoney(d.fullCents)}</s>{' '}
+                      <span className="text-emerald-800 dark:text-emerald-400">
+                        {formatMoney(d.priceCents)}
+                      </span>
+                    </span>
+                  </li>
+                ))}
                 {addons.map((a) => (
                   <li key={a.id} className="flex items-baseline justify-between gap-6 py-4">
                     <div>
@@ -245,6 +314,14 @@ export default async function ServiceDetailPage({ params }: Props) {
               >
                 Book this service
               </ButtonLink>
+            )}
+
+            {/* This service is the cheaper half of a pair deal — say so where
+                the price is. */}
+            {dealNote && (
+              <p className="mt-5 border-t border-[var(--color-border)] pt-5 text-xs leading-relaxed text-emerald-800 dark:text-emerald-400">
+                {dealNote}.
+              </p>
             )}
 
             {service.requires_age_verification && (
