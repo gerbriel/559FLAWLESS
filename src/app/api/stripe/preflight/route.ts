@@ -99,9 +99,10 @@ export async function GET() {
 
   if (stripeConfigured()) {
     try {
-      // The SDK wants an explicit id even for "the account these keys belong
-      // to"; 'account' is the alias Stripe accepts for exactly that.
-      const acct = await getStripe().accounts.retrieve('account')
+      // GET /v1/account — the account these keys belong to. retrieve(id) is
+      // the Connect variant and rejects an ordinary key for any id, including
+      // the literal string 'account'.
+      const acct = await getStripe().accounts.retrieveCurrent()
       const enabled = acct.charges_enabled === true
       account = {
         ok: enabled,
