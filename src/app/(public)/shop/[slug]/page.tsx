@@ -174,6 +174,22 @@ export default async function ProductPage({ params }: Props) {
                   priceCents={product.price_cents}
                   disabled={!inStock}
                 />
+                {/* Delivery is the marketplace's department even when the
+                    shelf is stocked — the studio ships nothing itself. */}
+                {inStock && canShip && (
+                  <p className="mt-3 text-sm text-[var(--color-muted)]">
+                    Prefer it delivered?{' '}
+                    <a
+                      href={product.external_url!}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="underline underline-offset-4 hover:text-[var(--color-foreground)]"
+                    >
+                      Order it shipped from our Rhonda Allison shop
+                    </a>{' '}
+                    — they take payment and mail it to you.
+                  </p>
+                )}
                 {!inStock && !canShip && (
                   <p className="mt-3 text-sm text-[var(--color-muted)]">
                     Ask us at your next visit — we can order it in.

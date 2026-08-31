@@ -19,6 +19,9 @@ interface CartProduct {
   slug: string
   price_cents: number
   stock_qty: number
+  /** The product's page on the studio's Rhonda Allison storefront — where
+   *  shipping actually happens. The studio ships nothing itself. */
+  external_url: string | null
 }
 
 export function CartView() {
@@ -81,7 +84,7 @@ export function CartView() {
       const supabase = createClient()
       const { data } = await supabase
         .from('products')
-        .select('id, name, slug, price_cents, stock_qty')
+        .select('id, name, slug, price_cents, stock_qty, external_url')
         .in(
           'id',
           lines.map((l) => l.productId)
@@ -112,6 +115,9 @@ export function CartView() {
 
   async function checkout(e: React.FormEvent) {
     e.preventDefault()
+    // Unreachable through the UI (shipping swaps the button for the Rhonda
+    // Allison links), kept as the belt to that suspender.
+    if (form.fulfillment === 'shipping') return
     setSubmitting(true)
 
     // At the click, not the redirect — if Stripe refuses (stock, config), the
@@ -259,7 +265,23 @@ export function CartView() {
           <p className="label-caps mb-6 text-[var(--color-accent)]">Order summary</p>
 
           <div className="space-y-4">
-            {known ? (
+            {/* The choice comes first because it decides everything below:
+                pickup checks out here; shipping is Rhonda Allison's job, and
+                pretending otherwise made the studio a free postage service. */}
+            <Field label="Fulfillment" htmlFor="cart_fulfillment">
+              <Select
+                id="cart_fulfillment"
+                value={form.fulfillment}
+                onChange={(e) =>
+                  setForm({ ...form, fulfillment: e.target.value as 'pickup' | 'shipping' })
+                }
+              >
+                <option value="pickup">Pick up at the studio</option>
+                <option value="shipping">Ship to me</option>
+              </Select>
+            </Field>
+
+            {form.fulfillment === 'pickup' && known ? (
               <>
                 <SignedInAs
                   label="Ordering as"
@@ -286,7 +308,7 @@ export function CartView() {
                   </Field>
                 )}
               </>
-            ) : (
+            ) : form.fulfillment === 'pickup' ? (
               <>
                 <Field label="Name" htmlFor="cart_name">
                   <Input
@@ -317,47 +339,76 @@ export function CartView() {
                   />
                 </Field>
               </>
-            )}
-            <Field label="Fulfillment" htmlFor="cart_fulfillment">
-              <Select
-                id="cart_fulfillment"
-                value={form.fulfillment}
-                onChange={(e) =>
-                  setForm({ ...form, fulfillment: e.target.value as 'pickup' | 'shipping' })
-                }
-              >
-                <option value="pickup">Pick up at the studio</option>
-                <option value="shipping">Ship to me</option>
-              </Select>
-            </Field>
+            ) : null}
 
-            <label className="flex cursor-pointer items-start gap-3 text-sm">
-              <input
-                type="checkbox"
-                checked={form.subscribeNewsletter}
-                onChange={(e) => setForm({ ...form, subscribeNewsletter: e.target.checked })}
-                className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
-              />
-              <span className="text-[var(--color-muted)]">
-                Subscribe to our newsletter for exclusive offers and skincare tips
-              </span>
-            </label>
+            {form.fulfillment === 'pickup' && (
+              <label className="flex cursor-pointer items-start gap-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={form.subscribeNewsletter}
+                  onChange={(e) => setForm({ ...form, subscribeNewsletter: e.target.checked })}
+                  className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
+                />
+                <span className="text-[var(--color-muted)]">
+                  Subscribe to our newsletter for exclusive offers and skincare tips
+                </span>
+              </label>
+            )}
           </div>
 
-          <dl className="mt-6 space-y-2 border-t border-[var(--color-border)] pt-6 text-sm">
-            <div className="flex justify-between">
-              <dt className="text-[var(--color-muted)]">Subtotal</dt>
-              <dd className="tabular-nums">{formatMoney(subtotal)}</dd>
-            </div>
-            <div className="flex justify-between text-[var(--color-muted)]">
-              <dt>Tax and shipping</dt>
-              <dd>Calculated at checkout</dd>
-            </div>
-          </dl>
+          {form.fulfillment === 'pickup' ? (
+            <>
+              <dl className="mt-6 space-y-2 border-t border-[var(--color-border)] pt-6 text-sm">
+                <div className="flex justify-between">
+                  <dt className="text-[var(--color-muted)]">Subtotal</dt>
+                  <dd className="tabular-nums">{formatMoney(subtotal)}</dd>
+                </div>
+                <div className="flex justify-between text-[var(--color-muted)]">
+                  <dt>Tax and shipping</dt>
+                  <dd>Calculated at checkout</dd>
+                </div>
+              </dl>
 
-          <Button type="submit" size="lg" className="mt-6 w-full" disabled={submitting}>
-            {submitting ? 'Redirecting…' : 'Checkout'}
-          </Button>
+              <Button type="submit" size="lg" className="mt-6 w-full" disabled={submitting}>
+                {submitting ? 'Redirecting…' : 'Checkout'}
+              </Button>
+            </>
+          ) : (
+            /* Shipping is Rhonda Allison's department. Their site takes the
+               payment, sets the postage, and mails it — the studio never
+               boxes anything. Prices there are theirs, so no figure is quoted
+               here that this page cannot honour. */
+            <div className="mt-6 border-t border-[var(--color-border)] pt-6">
+              <p className="text-sm leading-relaxed text-[var(--color-muted)]">
+                Shipped orders come straight from our Rhonda Allison shop — they take
+                payment and mail it to you directly. Order each product there:
+              </p>
+              <ul className="mt-4 space-y-2">
+                {rows.map((r) =>
+                  r.product.external_url ? (
+                    <li key={r.productId}>
+                      <a
+                        href={r.product.external_url}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        className="text-sm underline underline-offset-4 hover:text-[var(--color-accent)]"
+                      >
+                        Order {r.product.name} shipped ↗
+                      </a>
+                    </li>
+                  ) : (
+                    <li key={r.productId} className="text-sm text-[var(--color-muted)]">
+                      {r.product.name} — studio pickup only
+                    </li>
+                  )
+                )}
+              </ul>
+              <p className="mt-4 text-xs text-[var(--color-muted)]">
+                Prices and postage are set at their checkout. Anything marked pickup-only
+                stays in your bag here — switch back to pick it up at the studio.
+              </p>
+            </div>
+          )}
         </div>
       </form>
     </div>

@@ -19,7 +19,10 @@ const Body = z.object({
     )
     .min(1)
     .max(MAX_LINES),
-  fulfillment: z.enum(['pickup', 'shipping']).default('pickup'),
+  // Pickup only. Shipping was retired from studio checkout: shipped orders go
+  // through the Rhonda Allison storefront, which takes payment and mails them
+  // itself — the studio ships nothing. Refusing here keeps an old tab honest.
+  fulfillment: z.literal('pickup').default('pickup'),
   email: z.string().email().max(254),
   name: z.string().trim().min(1).max(120),
   phone: z.string().trim().max(40).nullish(),
@@ -166,9 +169,6 @@ export async function POST(request: NextRequest) {
         },
       }
     }),
-    ...(fulfillment === 'shipping'
-      ? { shipping_address_collection: { allowed_countries: ['US' as const] } }
-      : {}),
     // `amount` rides along for the confirmation page's ad pixel, which needs a
     // value and has no other honest way to get one: the page is public, the
     // order may be a guest's, and letting it look totals up by guessable id
