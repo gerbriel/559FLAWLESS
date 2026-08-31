@@ -33,7 +33,7 @@ export default async function AccountPage() {
     { data: upcoming },
     { data: record },
     { count: unreadMessages },
-    { data: pointsBalance },
+    { count: rewardsReady },
   ] = await Promise.all([
       supabase.from('profiles').select('first_name').eq('id', user.id).maybeSingle(),
       supabase
@@ -58,8 +58,12 @@ export default async function AccountPage() {
         .select('id', { count: 'exact', head: true })
         .eq('client_id', user.id)
         .eq('client_unread', true),
-      // Their points (067) — the sum of their own ledger, by RLS.
-      supabase.rpc('loyalty_balance', { p_client: user.id }),
+      // Referral rewards ready to use (069). Points accrue but are not shown.
+      supabase
+        .from('referral_redemptions')
+        .select('id', { count: 'exact', head: true })
+        .eq('referrer_id', user.id)
+        .eq('reward_status', 'earned'),
     ])
 
   const next = upcoming?.[0]
@@ -203,8 +207,10 @@ export default async function AccountPage() {
         >
           <Sparkles className="h-5 w-5 text-[var(--color-accent)]" strokeWidth={1.5} />
           <span className="label-caps mt-2">Rewards</span>
-          <span className="text-sm tabular-nums text-[var(--color-muted)]">
-            {(pointsBalance ?? 0).toLocaleString()} points
+          <span className="text-sm text-[var(--color-muted)]">
+            {(rewardsReady ?? 0) > 0
+              ? `${rewardsReady} reward${rewardsReady === 1 ? '' : 's'} ready`
+              : 'Refer a friend'}
           </span>
         </Link>
 

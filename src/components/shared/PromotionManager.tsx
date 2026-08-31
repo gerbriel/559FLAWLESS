@@ -235,6 +235,7 @@ export function PromotionManager({
     router.refresh()
   }
 
+  const referralPending = referrals.filter((r) => r.status === 'pending').length
   const referralEarned = referrals.filter((r) => r.status === 'earned').length
   const referralApplied = referrals.filter((r) => r.status === 'applied').length
 
@@ -522,14 +523,16 @@ export function PromotionManager({
         </h2>
         <p className="mt-1 max-w-prose text-sm text-[var(--color-muted)]">
           Every client has a code on their Rewards page. A new client types it into their
-          first booking; each code counts each person once, and the reward above (the
-          “Referral reward” deal) is what the referrer earns — the front desk takes it
-          off their next visit from the appointment screen.
+          first booking; each code counts each person once, and the reward (the
+          “Referral reward” deal above) unlocks only when the friend&rsquo;s first visit is
+          complete and paid in full — then the front desk takes it off the
+          referrer&rsquo;s next visit from the appointment screen. Rewards stack.
         </p>
 
-        <div className="mt-5 grid gap-px border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-3">
+        <div className="mt-5 grid gap-px border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-2 lg:grid-cols-4">
           <StatTile label="People referred" value={referrals.length} />
-          <StatTile label="Rewards waiting" value={referralEarned} />
+          <StatTile label="Awaiting first visit" value={referralPending} />
+          <StatTile label="Rewards ready" value={referralEarned} />
           <StatTile label="Rewards used" value={referralApplied} />
         </div>
 
@@ -544,14 +547,24 @@ export function PromotionManager({
                   </span>
                 </span>
                 <Badge
-                  tone={r.status === 'applied' ? 'neutral' : r.status === 'earned' ? 'success' : 'danger'}
+                  tone={
+                    r.status === 'applied'
+                      ? 'neutral'
+                      : r.status === 'earned'
+                        ? 'success'
+                        : r.status === 'pending'
+                          ? 'info'
+                          : 'danger'
+                  }
                   size="sm"
                 >
-                  {r.status === 'earned'
-                    ? `reward waiting${r.rewardCents ? ` · ${formatMoney(r.rewardCents)}` : r.rewardPercent ? ` · ${r.rewardPercent}%` : ''}`
-                    : r.status === 'applied'
-                      ? 'reward used'
-                      : 'void'}
+                  {r.status === 'pending'
+                    ? 'awaiting their visit'
+                    : r.status === 'earned'
+                      ? `reward ready${r.rewardCents ? ` · ${formatMoney(r.rewardCents)}` : r.rewardPercent ? ` · ${r.rewardPercent}%` : ''}`
+                      : r.status === 'applied'
+                        ? 'reward used'
+                        : 'void'}
                 </Badge>
               </li>
             ))}

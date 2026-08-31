@@ -1153,8 +1153,9 @@ export type ReferralCode = {
 }
 
 /**
- * One person a code brought in. The referrer's reward rides the row: earned
- * when the friend books, applied when the desk takes it off a visit.
+ * One person a code brought in. The referrer's reward rides the row: pending
+ * when the friend books, earned when their first visit completes fully paid
+ * (069, decided by DB trigger), applied when the desk takes it off a visit.
  */
 export type ReferralRedemption = {
   id: number
@@ -1164,7 +1165,7 @@ export type ReferralRedemption = {
   appointment_id: string | null
   reward_cents: number | null
   reward_percent: number | null
-  reward_status: 'earned' | 'applied' | 'void'
+  reward_status: 'pending' | 'earned' | 'applied' | 'void'
   applied_appointment_id: string | null
   created_at: string
   applied_at: string | null

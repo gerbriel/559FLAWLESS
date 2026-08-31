@@ -663,7 +663,9 @@ export default async function ClientDetailPage({ params }: Props) {
                     (referralsMade ?? []).length > 0
                       ? `${(referralsMade ?? []).length} · ${
                           (referralsMade ?? []).filter((r) => r.reward_status === 'earned').length
-                        } reward(s) waiting`
+                        } ready · ${
+                          (referralsMade ?? []).filter((r) => r.reward_status === 'pending').length
+                        } awaiting their visit`
                       : '—'
                   }
                 />

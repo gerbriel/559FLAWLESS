@@ -597,6 +597,9 @@ async function applyVisitPromotions(opts: {
           appointment_id: appointmentId,
           reward_cents: reward?.amount_cents ?? null,
           reward_percent: reward?.amount_cents ? null : (reward?.percent_off ?? null),
+          // Pending until the friend's visit completes fully paid — the
+          // referral_settle triggers (069) decide that, not this code.
+          reward_status: 'pending',
         })
 
         if (!refError) {
@@ -604,7 +607,7 @@ async function applyVisitPromotions(opts: {
             user_id: ref.client_id,
             type: 'system',
             title: 'Your referral code was used',
-            body: 'A friend booked with your code. Your reward is waiting — the front desk can take it off your next visit.',
+            body: 'A friend booked their first visit with your code. Your reward unlocks once their visit is complete and paid.',
             link: '/account/rewards',
           })
         }
