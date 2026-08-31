@@ -14,6 +14,12 @@ import {
   type PairDiscountRule,
 } from '@/lib/pair-discounts'
 import {
+  bestSaleForService,
+  newClientPromo,
+  secondServicePromo,
+  type PromotionRule,
+} from '@/lib/promotions'
+import {
   addDaysToDateKey,
   dateKeyInTimeZone,
   formatTimeInTimeZone,
@@ -72,6 +78,8 @@ export function BookingFlow({
   services,
   providers,
   pairDiscounts = [],
+  promotions = [],
+  isNewClient = false,
   initialServiceSlug,
   initialAddSlugs = [],
   signedInUserId,
@@ -83,6 +91,10 @@ export function BookingFlow({
   providers: BookableProvider[]
   /** The pair deal (067). Preview only — priceService() is what decides. */
   pairDiscounts?: PairDiscountRule[]
+  /** The deal board (068). Same rule: preview here, decided on the server. */
+  promotions?: PromotionRule[]
+  /** True when this signed-in client has no prior booking — the server re-checks. */
+  isNewClient?: boolean
   initialServiceSlug?: string
   /** Extra services to pre-tick — the pair-deal row on a service page. */
   initialAddSlugs?: string[]
@@ -137,6 +149,9 @@ export function BookingFlow({
     phone: signedInPhone ?? '',
     notes: '',
   })
+  // A friend's referral code (068). Offered to first-time clients only — a
+  // returning client's entry would be a silent no-op, so it is not asked for.
+  const [referralCode, setReferralCode] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirmation, setConfirmation] = useState<{
@@ -182,17 +197,23 @@ export function BookingFlow({
     [availableAddons, addonIds]
   )
 
-  // Pair deal (067): the same math priceService() runs, so the preview and
-  // the booking agree to the cent. Lines keep their list price — the deal
+  // Deals (067/068): the same math priceService() runs, so the preview and
+  // the booking agree to the cent. Lines keep their list price — each deal
   // shows as its own deduction, the way the receipt already shows memberships.
+  // The clock is read once at mount: a preview must not flicker mid-render,
+  // and the server re-checks every window anyway.
+  const [nowMs] = useState(() => Date.now())
   const selectedIds = selected.map((s) => s.id)
+
+  /** Best single cut for one line — pair deal vs live sale, never both. */
   const pairCutFor = (s: BookableService) => {
-    const rule = bestPairDiscount(pairDiscounts, selectedIds, s.id)
-    if (!rule) return null
-    const off = pairDiscountCents(s.price_cents, rule.percent_off)
-    return off > 0 ? { rule, off } : null
+    const pair = bestPairDiscount(pairDiscounts, selectedIds, s.id)
+    const pairOff = pair ? pairDiscountCents(s.price_cents, pair.percent_off) : 0
+    const sale = bestSaleForService(promotions, s.id, s.price_cents, nowMs)
+    if (sale && sale.off > pairOff) return { off: sale.off, label: sale.rule.name }
+    if (pair && pairOff > 0) return { off: pairOff, label: 'Pair deal' }
+    return null
   }
-  const pairSavingsCents = selected.reduce((n, s) => n + (pairCutFor(s)?.off ?? 0), 0)
 
   // Pair-deal services surfaced inside "Add to your service", so nobody has to
   // scroll to another category to find the deal. Toggling one selects the
@@ -204,10 +225,38 @@ export function BookingFlow({
     return bestPairDiscount(pairDiscounts, others, s.id) !== null
   })
 
-  const totalCents =
+  // Every deduction the server will make, named, in the order it makes them:
+  // per-line cuts, then mix-and-match on the cheapest untouched line, then
+  // the new-client percent on what is left.
+  const previewDeals: { label: string; off: number }[] = []
+  for (const s of selected) {
+    const cut = pairCutFor(s)
+    if (cut) previewDeals.push({ label: `${cut.label} — ${s.name}`, off: cut.off })
+  }
+  const secondService = secondServicePromo(promotions, nowMs)
+  if (secondService && selected.length >= 2) {
+    const untouched = selected.filter((s) => pairCutFor(s) === null)
+    if (untouched.length > 0) {
+      const cheapest = untouched.reduce((low, s) => (s.price_cents < low.price_cents ? s : low))
+      const off = pairDiscountCents(cheapest.price_cents, secondService.percent_off!)
+      if (off > 0) previewDeals.push({ label: `${secondService.name} — ${cheapest.name}`, off })
+    }
+  }
+
+  const lineSavingsCents = previewDeals.reduce((n, d) => n + d.off, 0)
+  const baseAfterLines =
     selected.reduce((n, s) => n + s.price_cents, 0) +
     selectedAddons.reduce((n, a) => n + a.price_cents, 0) -
-    pairSavingsCents
+    lineSavingsCents
+
+  const newClientDeal = isNewClient ? newClientPromo(promotions, nowMs) : null
+  const newClientOff =
+    newClientDeal && baseAfterLines > 0
+      ? pairDiscountCents(baseAfterLines, newClientDeal.percent_off!)
+      : 0
+  if (newClientOff > 0) previewDeals.push({ label: newClientDeal!.name, off: newClientOff })
+
+  const totalCents = Math.max(baseAfterLines - newClientOff, 0)
   const totalMinutes =
     selected.reduce((n, s) => n + s.duration_minutes, 0) +
     selectedAddons.reduce((n, a) => n + a.duration_minutes, 0)
@@ -325,6 +374,7 @@ export function BookingFlow({
           phone: form.phone || null,
           notes: form.notes || null,
           age_attested: ageConfirmed,
+          referral_code: referralCode.trim() || null,
         }),
       })
 
@@ -693,7 +743,7 @@ export function BookingFlow({
                             )}
                             {cut && (
                               <span className="text-xs text-[var(--color-clay-deep)] dark:text-[var(--color-accent)]">
-                                Pair deal applied — you save {formatMoney(cut.off)}
+                                {cut.label} applied — you save {formatMoney(cut.off)}
                               </span>
                             )}
                           </span>
@@ -1190,6 +1240,23 @@ export function BookingFlow({
                   onChange={(e) => setForm({ ...form, notes: e.target.value })}
                 />
               </Field>
+
+              {isNewClient && (
+                <Field
+                  label="Referral code"
+                  htmlFor="referral_code"
+                  className="sm:col-span-2"
+                  hint="Did a friend send you? Their code thanks them for it — your own price is unchanged."
+                >
+                  <Input
+                    id="referral_code"
+                    maxLength={24}
+                    value={referralCode}
+                    onChange={(e) => setReferralCode(e.target.value.toUpperCase())}
+                    placeholder="FLW-XXXXX"
+                  />
+                </Field>
+              )}
             </div>
 
             {error && (
@@ -1280,14 +1347,15 @@ export function BookingFlow({
                 <dd className="tabular-nums">{formatDuration(totalMinutes)}</dd>
               </div>
 
-              {/* The lines above stay at list price; the deal is its own row,
-                  the way the staff receipt shows a membership coming off. */}
-              {pairSavingsCents > 0 && (
-                <div className="flex justify-between">
-                  <dt className="text-[var(--color-muted)]">Pair deal</dt>
-                  <dd className="tabular-nums">&minus;{formatMoney(pairSavingsCents)}</dd>
+              {/* The lines above stay at list price; every deal is its own
+                  named row, the way the staff receipt shows a membership
+                  coming off. */}
+              {previewDeals.map((d, i) => (
+                <div key={i} className="flex justify-between gap-3">
+                  <dt className="min-w-0 text-[var(--color-muted)]">{d.label}</dt>
+                  <dd className="shrink-0 tabular-nums">&minus;{formatMoney(d.off)}</dd>
                 </div>
-              )}
+              ))}
 
               <div className="flex justify-between">
                 <dt className="text-[var(--color-muted)]">Total</dt>

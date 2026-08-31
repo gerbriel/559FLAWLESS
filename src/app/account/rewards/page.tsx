@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { ButtonLink } from '@/components/ui/button'
 import { formatMoney } from '@/lib/utils'
-import { formatDateTimeInTimeZone } from '@/lib/time'
+import { formatDateTimeInTimeZone, requestNow } from '@/lib/time'
 
 export const dynamic = 'force-dynamic'
 
@@ -43,15 +43,44 @@ export default async function RewardsPage() {
   } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const [{ data: balance }, { data: entries }] = await Promise.all([
-    supabase.rpc('loyalty_balance', { p_client: user.id }),
-    supabase
-      .from('loyalty_ledger')
-      .select('id, points, kind, note, created_at, payment:payments!loyalty_ledger_payment_id_fkey(kind, amount_cents)')
-      .eq('client_id', user.id)
-      .order('created_at', { ascending: false })
-      .limit(100),
-  ])
+  const [{ data: balance }, { data: entries }, { data: code }, { data: referrals }, { data: rewardRows }] =
+    await Promise.all([
+      supabase.rpc('loyalty_balance', { p_client: user.id }),
+      supabase
+        .from('loyalty_ledger')
+        .select('id, points, kind, note, created_at, payment:payments!loyalty_ledger_payment_id_fkey(kind, amount_cents)')
+        .eq('client_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(100),
+      // Minted on first visit to this page — one per client, forever (068).
+      supabase.rpc('get_or_create_referral_code', { p_client: user.id }),
+      supabase
+        .from('referral_redemptions')
+        .select('id, reward_status, reward_cents, reward_percent, created_at')
+        .eq('referrer_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(50),
+      // What the programme currently pays, for the copy below.
+      supabase
+        .from('promotions')
+        .select('amount_cents, percent_off, starts_at, ends_at, is_active')
+        .eq('kind', 'referral')
+        .eq('is_active', true),
+    ])
+
+  const now = requestNow()
+  const rewardConfig = (rewardRows ?? []).find((r) => {
+    if (r.starts_at && new Date(r.starts_at).getTime() > now) return false
+    if (r.ends_at && new Date(r.ends_at).getTime() < now) return false
+    return true
+  })
+  const rewardLabel = rewardConfig?.amount_cents
+    ? formatMoney(rewardConfig.amount_cents)
+    : rewardConfig?.percent_off
+      ? `${rewardConfig.percent_off}%`
+      : null
+  const referred = referrals ?? []
+  const waiting = referred.filter((r) => r.reward_status === 'earned').length
 
   const history = ((entries ?? []) as unknown as {
     id: number
@@ -81,6 +110,33 @@ export default async function RewardsPage() {
           they are yours.
         </p>
       </div>
+
+      <section className="mt-14">
+        <h2 className="label-caps mb-4 text-[var(--color-accent)]">Refer a friend</h2>
+        <div className="border border-[var(--color-border)] bg-[var(--color-surface)] p-8">
+          <p className="text-sm text-[var(--color-muted)]">Your code</p>
+          <p className="display mt-1 text-3xl tracking-wide">{code ?? '—'}</p>
+          <p className="mt-4 max-w-prose text-sm text-[var(--color-muted)]">
+            {rewardLabel
+              ? `Give it to a friend who has not been in before. When they book their first visit with it, ${rewardLabel} off comes to you — just mention it at the desk on your next visit.`
+              : 'Give it to a friend who has not been in before — their first booking is counted to you.'}
+          </p>
+          {referred.length > 0 && (
+            <p className="mt-4 text-sm">
+              You have brought in{' '}
+              <span className="tabular-nums">{referred.length}</span>{' '}
+              {referred.length === 1 ? 'person' : 'people'}
+              {waiting > 0 && (
+                <span className="text-[var(--color-clay-deep)] dark:text-[var(--color-accent)]">
+                  {' '}
+                  — {waiting} reward{waiting === 1 ? '' : 's'} waiting for your next visit
+                </span>
+              )}
+              .
+            </p>
+          )}
+        </div>
+      </section>
 
       <section className="mt-14">
         <h2 className="label-caps mb-4 text-[var(--color-accent)]">History</h2>

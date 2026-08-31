@@ -25,6 +25,9 @@ const BookingSchema = z.object({
   phone: z.string().trim().max(40).nullish(),
   notes: z.string().trim().max(2000).nullish(),
   age_attested: z.boolean().default(false),
+  // A friend's referral code (068). Validated server-side; a bad or reused
+  // code is silently a no-op, never a failed booking.
+  referral_code: z.string().trim().max(24).nullish(),
 })
 
 export async function POST(request: NextRequest) {
@@ -74,6 +77,7 @@ export async function POST(request: NextRequest) {
     notes: body.notes ?? null,
     ageAttested: body.age_attested,
     clientId: user?.id ?? null,
+    referralCode: body.referral_code ?? null,
   })
 
   if (!outcome.ok) {

@@ -67,6 +67,13 @@ export default async function MarketingLayout({
           { href: '/dashboard/marketing', label: 'Overview' },
           { href: '/dashboard/marketing/analytics', label: 'Analytics' },
           { href: '/dashboard/marketing/broadcast', label: 'Send newsletter' },
+          // Admin like Tracking: a promotion is a pricing decision, and
+          // `promotions` (068) only has an admin write policy behind it.
+          {
+            href: '/dashboard/marketing/promotions',
+            label: 'Promotions',
+            visible: isAdmin(profile.role),
+          },
           // The one tab in this section that is not manager-visible. Tracking
           // writes to site_content, whose only write policy is admin, and its
           // fields put script tags on every public page — so a manager seeing

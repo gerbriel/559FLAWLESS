@@ -28,6 +28,13 @@ import { syncAppointmentToCalendar } from '@/lib/calendar-push'
 import { applyMembershipBenefit } from '@/lib/memberships'
 import { generateSlots, type AvailabilityInput } from '@/lib/availability'
 import { bestPairDiscount, pairDiscountCents } from '@/lib/pair-discounts'
+import {
+  bestSaleForService,
+  newClientPromo,
+  referralPromo,
+  secondServicePromo,
+  type PromotionRule,
+} from '@/lib/promotions'
 import { dateKeyInTimeZone, isValidTimeZone, MINUTE_MS } from '@/lib/time'
 
 export const MAX_ADDONS = 6
@@ -70,6 +77,8 @@ export interface BookingRequest {
   notes: string | null
   ageAttested: boolean
   clientId: string | null
+  /** A friend's referral code, typed by a new client. Validated server-side. */
+  referralCode?: string | null
 }
 
 export interface BookingResult {
@@ -265,10 +274,14 @@ export interface PricedLine {
   name: string
   price_cents: number
   duration_minutes: number
-  /** Set when a pair deal (067) cut this line — the list price before the cut. */
+  /** Set when a pair deal (067) or promotion (068) cut this line — the list price before the cut. */
   full_price_cents?: number
   /** Which pair deal cut it. */
   pair_discount_id?: number
+  /** Which promotion cut it — never set alongside pair_discount_id. */
+  promotion_id?: number
+  /** The promotion's name, snapshotted into the redemption record. */
+  promotion_name?: string
 }
 
 export interface PricedService {
@@ -321,7 +334,8 @@ export async function priceService(
   const wanted = [...new Set(serviceIds)]
   if (wanted.length === 0) return { ok: false, error: 'unknown_service' }
 
-  const [{ data: services }, { data: links }, { data: pairRules }] = await Promise.all([
+  const [{ data: services }, { data: links }, { data: pairRules }, { data: promoRows }] =
+    await Promise.all([
     supabase
       // One string literal: postgrest-js parses the select at the type level,
       // and `'a' + 'b'` widens to `string`, collapsing the result type.
@@ -341,6 +355,14 @@ export async function priceService(
       .select('id, trigger_service_id, discounted_service_id, percent_off, label')
       .eq('is_active', true)
       .in('discounted_service_id', wanted),
+    // The deal board (068): sales and mix-and-match. Windows checked in code.
+    supabase
+      .from('promotions')
+      .select(
+        'id, name, kind, percent_off, amount_cents, sale_price_cents, min_items, service_ids, starts_at, ends_at, is_active'
+      )
+      .eq('is_active', true)
+      .in('kind', ['service_sale', 'second_service']),
   ])
 
   const active = (services ?? []).filter((s) => s.is_active)
@@ -364,18 +386,49 @@ export async function priceService(
     }
   })
 
-  // The pair deal comes off here — the same place every other price is
-  // decided, after the per-provider override so half off means half of what
-  // this provider actually charges. The line keeps its list price in
+  // Discounts come off here — the same place every other price is decided,
+  // after the per-provider override so half off means half of what this
+  // provider actually charges. The line keeps its list price in
   // full_price_cents, so the receipt can say what the deal was worth.
+  //
+  // No stacking, ever: each line takes the single best cut between its pair
+  // deal (067) and any live sale (068), and the mix-and-match pass below only
+  // touches lines nothing else has touched.
+  const promoRules = (promoRows ?? []) as PromotionRule[]
+  const nowMs = Date.now()
+
   for (const line of priced) {
-    const rule = bestPairDiscount(pairRules ?? [], wanted, line.id)
-    if (!rule) continue
-    const off = pairDiscountCents(line.price_cents, rule.percent_off)
-    if (off === 0) continue
-    line.full_price_cents = line.price_cents
-    line.price_cents -= off
-    line.pair_discount_id = rule.id
+    const pair = bestPairDiscount(pairRules ?? [], wanted, line.id)
+    const pairOff = pair ? pairDiscountCents(line.price_cents, pair.percent_off) : 0
+    const sale = bestSaleForService(promoRules, line.id, line.price_cents, nowMs)
+
+    if (sale && sale.off > pairOff) {
+      line.full_price_cents = line.price_cents
+      line.price_cents -= sale.off
+      line.promotion_id = sale.rule.id
+      line.promotion_name = sale.rule.name
+    } else if (pair && pairOff > 0) {
+      line.full_price_cents = line.price_cents
+      line.price_cents -= pairOff
+      line.pair_discount_id = pair.id
+    }
+  }
+
+  // Mix and match: two or more services in one visit, and the cheapest line
+  // that no other deal has already cut gets the percent off.
+  const secondService = secondServicePromo(promoRules, nowMs)
+  if (secondService && priced.length >= 2) {
+    const untouched = priced.filter((l) => l.full_price_cents === undefined)
+    if (untouched.length > 0) {
+      const cheapest = untouched.reduce((low, l) => (l.price_cents < low.price_cents ? l : low))
+      const off = pairDiscountCents(cheapest.price_cents, secondService.percent_off!)
+      if (off > 0) {
+        cheapest.full_price_cents = cheapest.price_cents
+        cheapest.price_cents -= off
+        cheapest.promotion_id = secondService.id
+        cheapest.promotion_name = secondService.name
+      }
+    }
   }
 
   let addons: PricedLine[] = []
@@ -422,6 +475,150 @@ export async function priceService(
       requiresConsultation: ordered.some((s) => s.requires_consultation),
     },
   }
+}
+
+/**
+ * Visit-level promotions (068), applied once the appointment and its lines
+ * exist: the new-client percent, the referral hand-off, and the redemption
+ * records for every line a deal cut. Best-effort by design — a committed
+ * booking must never fail over a discount, so the worst case is a full-price
+ * visit and a log line, never a lost appointment.
+ *
+ * Returns what was written to `promo_discount_cents`.
+ */
+async function applyVisitPromotions(opts: {
+  supabase: ReturnType<typeof createAdminClient>
+  appointmentId: string
+  clientId: string | null
+  /** What a visit-level percent applies to: lines after their own cuts, less any membership benefit. */
+  baseCents: number
+  lines: PricedLine[]
+  referralCode?: string | null
+  now: Date
+}): Promise<number> {
+  const { supabase, appointmentId, clientId, baseCents, lines, referralCode, now } = opts
+  let visitDiscount = 0
+
+  const redemptions: {
+    promotion_id: number | null
+    promotion_name: string
+    client_id: string | null
+    appointment_id: string
+    discount_cents: number
+  }[] = []
+
+  // The lines a sale or mix-and-match already cut — priced in priceService,
+  // recorded here where the appointment id exists. Pair deals (067) keep
+  // their own columns and are deliberately not duplicated into this table.
+  for (const l of lines) {
+    if (l.promotion_id && l.full_price_cents !== undefined) {
+      redemptions.push({
+        promotion_id: l.promotion_id,
+        promotion_name: l.promotion_name ?? 'Promotion',
+        client_id: clientId,
+        appointment_id: appointmentId,
+        discount_cents: l.full_price_cents - l.price_cents,
+      })
+    }
+  }
+
+  try {
+    const { data: promoRows } = await supabase
+      .from('promotions')
+      .select(
+        'id, name, kind, percent_off, amount_cents, sale_price_cents, min_items, service_ids, starts_at, ends_at, is_active'
+      )
+      .eq('is_active', true)
+      .in('kind', ['new_client', 'referral'])
+    const rules = (promoRows ?? []) as PromotionRule[]
+    const nowMs = now.getTime()
+
+    // ── The new-client percent ─────────────────────────────
+    // "New" means no other live or finished appointment — a cancellation or
+    // no-show does not spend somebody's first-visit welcome. The redemption
+    // check keeps it to once even if that first booking is later cancelled.
+    const nc = newClientPromo(rules, nowMs)
+    if (nc && clientId && baseCents > 0) {
+      const [{ count: prior }, { count: used }] = await Promise.all([
+        supabase
+          .from('appointments')
+          .select('id', { count: 'exact', head: true })
+          .eq('client_id', clientId)
+          .neq('id', appointmentId)
+          .not('status', 'in', '(cancelled,no_show)'),
+        supabase
+          .from('promotion_redemptions')
+          .select('id', { count: 'exact', head: true })
+          .eq('client_id', clientId)
+          .eq('promotion_id', nc.id),
+      ])
+
+      if ((prior ?? 0) === 0 && (used ?? 0) === 0) {
+        const off = pairDiscountCents(baseCents, nc.percent_off!)
+        if (off > 0) {
+          const { error } = await supabase
+            .from('appointments')
+            .update({ promo_discount_cents: off })
+            .eq('id', appointmentId)
+          if (!error) {
+            visitDiscount = off
+            redemptions.push({
+              promotion_id: nc.id,
+              promotion_name: nc.name,
+              client_id: clientId,
+              appointment_id: appointmentId,
+              discount_cents: off,
+            })
+          }
+        }
+      }
+    }
+
+    // ── The friend code ────────────────────────────────────
+    // Recording who sent them; the reward belongs to the REFERRER and is
+    // taken off one of their visits at the desk. The unique constraint on
+    // referred_client_id is what makes a code's count honest — a person is
+    // referred into the studio once, so a duplicate insert failing is the
+    // rule working, not an error worth surfacing.
+    const code = referralCode?.trim().toUpperCase()
+    if (code && clientId) {
+      const { data: ref } = await supabase
+        .from('referral_codes')
+        .select('code, client_id')
+        .eq('code', code)
+        .maybeSingle()
+
+      if (ref && ref.client_id !== clientId) {
+        const reward = referralPromo(rules, nowMs)
+        const { error: refError } = await supabase.from('referral_redemptions').insert({
+          code: ref.code,
+          referrer_id: ref.client_id,
+          referred_client_id: clientId,
+          appointment_id: appointmentId,
+          reward_cents: reward?.amount_cents ?? null,
+          reward_percent: reward?.amount_cents ? null : (reward?.percent_off ?? null),
+        })
+
+        if (!refError) {
+          await supabase.from('notifications').insert({
+            user_id: ref.client_id,
+            type: 'system',
+            title: 'Your referral code was used',
+            body: 'A friend booked with your code. Your reward is waiting — the front desk can take it off your next visit.',
+            link: '/account/rewards',
+          })
+        }
+      }
+    }
+
+    if (redemptions.length > 0) {
+      await supabase.from('promotion_redemptions').insert(redemptions)
+    }
+  } catch (err) {
+    console.error('visit promotions failed for', appointmentId, err)
+  }
+
+  return visitDiscount
 }
 
 export async function createBooking(req: BookingRequest): Promise<BookingOutcome> {
@@ -557,9 +754,10 @@ export async function createBooking(req: BookingRequest): Promise<BookingOutcome
       name_snapshot: svc.name,
       price_cents: svc.price_cents,
       duration_minutes: svc.duration_minutes,
-      // The pair deal, frozen with the price it cut (067).
+      // The pair deal or promotion, frozen with the price it cut (067/068).
       full_price_cents: svc.full_price_cents ?? null,
       pair_discount_id: svc.pair_discount_id ?? null,
+      promotion_id: svc.promotion_id ?? null,
       sort_order: i,
     })),
     // Add-ons sort after every service, so the receipt reads services first.
@@ -615,18 +813,30 @@ export async function createBooking(req: BookingRequest): Promise<BookingOutcome
     now,
   })
 
-  // A membership can take the total below the deposit, and a deposit larger
-  // than the whole appointment is not a deposit — it is asking somebody to
-  // prepay more than they owe. `deposit_cents` was written at insert, before
-  // the benefit was claimed, because claiming it needs the lines to exist. So
-  // it is capped here, once the real total is known, and the row is corrected
-  // rather than the response quietly disagreeing with the database.
+  // Visit-level promotions (068) ride after the membership: the new-client
+  // percent applies to what the client would otherwise pay, and the referral
+  // hand-off is recorded against a booking that now fully exists.
+  const membershipCut = applied ? applied.coveredCents + applied.discountCents : 0
+  const visitPromoCents = await applyVisitPromotions({
+    supabase,
+    appointmentId: appointment.id,
+    clientId: routed?.client_id ?? req.clientId,
+    baseCents: Math.max(priced.totalCents - membershipCut, 0),
+    lines: services,
+    referralCode: req.referralCode,
+    now,
+  })
+
+  // A membership or a promotion can take the total below the deposit, and a
+  // deposit larger than the whole appointment is not a deposit — it is asking
+  // somebody to prepay more than they owe. `deposit_cents` was written at
+  // insert, before either was applied, because applying them needs the lines
+  // to exist. So it is capped here, once the real total is known, and the row
+  // is corrected rather than the response quietly disagreeing with the
+  // database.
   //
   // Integer cents throughout: `Math.min` on two integers, never a rate.
-  const finalTotalCents = Math.max(
-    priced.totalCents - (applied ? applied.coveredCents + applied.discountCents : 0),
-    0
-  )
+  const finalTotalCents = Math.max(priced.totalCents - membershipCut - visitPromoCents, 0)
   let depositAfterBenefit = appointment.deposit_cents
   if (depositAfterBenefit > finalTotalCents) {
     depositAfterBenefit = finalTotalCents
@@ -822,10 +1032,12 @@ export async function createStaffBooking(req: StaffBookingRequest): Promise<Book
       name_snapshot: svc.name,
       price_cents: svc.price_cents,
       duration_minutes: svc.duration_minutes,
-      // The pair deal applies at the desk too — the same priceService decided
-      // it, and the front desk should never have to take it off by hand.
+      // The pair deal and every promotion apply at the desk too — the same
+      // priceService decided them, and the front desk should never have to
+      // take a running deal off by hand.
       full_price_cents: svc.full_price_cents ?? null,
       pair_discount_id: svc.pair_discount_id ?? null,
+      promotion_id: svc.promotion_id ?? null,
       sort_order: i,
     })),
     // Add-ons sort after every service, so the receipt reads services first.
@@ -857,6 +1069,19 @@ export async function createStaffBooking(req: StaffBookingRequest): Promise<Book
     now,
   })
 
+  // Visit-level promotions too — a new client booked over the phone is still
+  // a new client. No referral code on this path; the desk can read one out of
+  // the client's account instead.
+  const staffMembershipCut = applied ? applied.coveredCents + applied.discountCents : 0
+  const staffPromoCents = await applyVisitPromotions({
+    supabase,
+    appointmentId: appointment.id,
+    clientId: req.clientId,
+    baseCents: Math.max(outcome.priced.totalCents - staffMembershipCut, 0),
+    lines: services,
+    now,
+  })
+
   void syncAppointmentToCalendar(appointment.id)
 
   // No notification is written here: the appointment_notify trigger already
@@ -870,7 +1095,7 @@ export async function createStaffBooking(req: StaffBookingRequest): Promise<Book
       status: appointment.status,
       depositCents: 0,
       totalCents: Math.max(
-        outcome.priced.totalCents - (applied ? applied.coveredCents + applied.discountCents : 0),
+        outcome.priced.totalCents - staffMembershipCut - staffPromoCents,
         0
       ),
       timezone: provider.timezone,

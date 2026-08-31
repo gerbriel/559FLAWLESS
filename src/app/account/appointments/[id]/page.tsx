@@ -37,7 +37,7 @@ export default async function AppointmentDetailPage({ params, searchParams }: Pr
   const { data: appointment } = await supabase
     .from('appointments')
     .select(
-      'id, starts_at, ends_at, status, total_cents, membership_covered_cents, membership_discount_cents, deposit_cents, deposit_status, client_notes, cancellation_reason, profiles!appointments_provider_id_fkey(display_name, first_name, bio), appointment_services(id, name_snapshot, price_cents, duration_minutes, full_price_cents, sort_order)'
+      'id, starts_at, ends_at, status, total_cents, membership_covered_cents, membership_discount_cents, promo_discount_cents, deposit_cents, deposit_status, client_notes, cancellation_reason, profiles!appointments_provider_id_fkey(display_name, first_name, bio), appointment_services(id, name_snapshot, price_cents, duration_minutes, full_price_cents, sort_order)'
     )
     .eq('id', id)
     .eq('client_id', user.id)
@@ -234,7 +234,8 @@ export default async function AppointmentDetailPage({ params, searchParams }: Pr
             after them, named, so the total is never a smaller number with no
             explanation attached to it. */}
         {(appointment.membership_covered_cents > 0 ||
-          appointment.membership_discount_cents > 0) && (
+          appointment.membership_discount_cents > 0 ||
+          appointment.promo_discount_cents > 0) && (
           <ul className="divide-y divide-[var(--color-border)] border-t border-[var(--color-border)]">
             {appointment.membership_covered_cents > 0 && (
               <li className="flex items-baseline justify-between gap-6 px-6 py-4">
@@ -251,6 +252,14 @@ export default async function AppointmentDetailPage({ params, searchParams }: Pr
                 <span className="text-[var(--color-muted)]">Member discount</span>
                 <span className="tabular-nums text-[var(--color-muted)]">
                   &minus;{formatMoney(appointment.membership_discount_cents)}
+                </span>
+              </li>
+            )}
+            {appointment.promo_discount_cents > 0 && (
+              <li className="flex items-baseline justify-between gap-6 px-6 py-4">
+                <span className="text-[var(--color-muted)]">Promotions &amp; rewards</span>
+                <span className="tabular-nums text-[var(--color-muted)]">
+                  &minus;{formatMoney(appointment.promo_discount_cents)}
                 </span>
               </li>
             )}

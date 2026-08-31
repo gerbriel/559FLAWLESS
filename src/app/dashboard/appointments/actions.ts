@@ -26,6 +26,116 @@ import { bestPairDiscount, pairDiscountCents, type PairDiscountRule } from '@/li
 import { dateKeyInTimeZone, requestNow } from '@/lib/time'
 import { isFrontDesk, isStaff, type UserRole } from '@/types/database'
 
+// ── Referral rewards (068) ───────────────────────────────────
+
+export type ReferralApplyError =
+  | 'unauthorized'
+  | 'forbidden'
+  | 'not_found'
+  | 'not_theirs'
+  | 'already_applied'
+  | 'nothing_to_apply'
+  | 'failed'
+
+export const REFERRAL_APPLY_ERROR_MESSAGES: Record<ReferralApplyError, string> = {
+  unauthorized: 'You are signed out. Sign in and try again.',
+  forbidden: 'Front desk and up apply referral rewards.',
+  not_found: 'That reward could not be loaded.',
+  not_theirs: 'That reward belongs to a different client.',
+  already_applied: 'That reward has already been used.',
+  nothing_to_apply: 'This visit has nothing left to take the reward off.',
+  failed: 'The reward could not be applied. Please try again.',
+}
+
+/**
+ * Take an earned referral reward off THIS visit.
+ *
+ * The reward was earned when this client's code brought somebody new in; the
+ * desk applies it here, where the client is standing. The discount lands in
+ * `promo_discount_cents` — the same column every visit-level deal uses, so
+ * the total derivation and the balance math need nothing new. Capped at the
+ * visit's remaining total: a reward never turns into money owed to anyone.
+ */
+export async function applyReferralReward(
+  appointmentId: string,
+  redemptionId: number
+): Promise<{ ok: true; cents: number } | { ok: false; error: ReferralApplyError }> {
+  const fail = (error: ReferralApplyError) => ({ ok: false as const, error })
+
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return fail('unauthorized')
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('role, suspended_at')
+    .eq('id', user.id)
+    .maybeSingle()
+  if (profile?.suspended_at || !isFrontDesk((profile?.role ?? 'client') as UserRole)) {
+    return fail('forbidden')
+  }
+
+  const [{ data: appointment }, { data: reward }] = await Promise.all([
+    supabase
+      .from('appointments')
+      .select('id, client_id, status, total_cents, promo_discount_cents')
+      .eq('id', appointmentId)
+      .maybeSingle(),
+    supabase
+      .from('referral_redemptions')
+      .select('id, referrer_id, reward_cents, reward_percent, reward_status')
+      .eq('id', redemptionId)
+      .maybeSingle(),
+  ])
+
+  if (!appointment || !reward) return fail('not_found')
+  if (reward.reward_status !== 'earned') return fail('already_applied')
+  if (!appointment.client_id || appointment.client_id !== reward.referrer_id) {
+    return fail('not_theirs')
+  }
+  if (['cancelled', 'no_show'].includes(appointment.status)) return fail('nothing_to_apply')
+
+  const cents = Math.min(
+    reward.reward_cents ?? pairDiscountCents(appointment.total_cents, reward.reward_percent ?? 0),
+    appointment.total_cents
+  )
+  if (cents <= 0) return fail('nothing_to_apply')
+
+  // Mark the reward spent FIRST — its status is the guard against applying it
+  // twice, and the .eq on status makes the race lose cleanly.
+  const { data: marked, error: markError } = await supabase
+    .from('referral_redemptions')
+    .update({
+      reward_status: 'applied',
+      applied_appointment_id: appointmentId,
+      applied_at: new Date(requestNow()).toISOString(),
+    })
+    .eq('id', redemptionId)
+    .eq('reward_status', 'earned')
+    .select('id')
+
+  if (markError || !marked || marked.length === 0) return fail('already_applied')
+
+  const { error: discountError } = await supabase
+    .from('appointments')
+    .update({ promo_discount_cents: appointment.promo_discount_cents + cents })
+    .eq('id', appointmentId)
+
+  if (discountError) {
+    // Put the reward back rather than strand it spent-but-unapplied.
+    await supabase
+      .from('referral_redemptions')
+      .update({ reward_status: 'earned', applied_appointment_id: null, applied_at: null })
+      .eq('id', redemptionId)
+    return fail('failed')
+  }
+
+  revalidatePath(`/dashboard/appointments/${appointmentId}`)
+  return { ok: true, cents }
+}
+
 const STUDIO_TZ = 'America/Los_Angeles'
 
 export type PairUpsellError =

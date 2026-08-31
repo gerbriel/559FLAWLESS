@@ -169,6 +169,27 @@ export default async function ClientDetailPage({ params }: Props) {
       .select('id, note, source, import_batch, claimed_at, created_at')
       .eq('claimed_by', id)
       .maybeSingle(),
+    // Every deal this client has used (068) — the "who uses what, how many
+    // times" the studio asked for, on the profile where they will look for it.
+    supabase
+      .from('promotion_redemptions')
+      .select('id, promotion_name, discount_cents, created_at, appointment_id, order_id')
+      .eq('client_id', id)
+      .order('created_at', { ascending: false })
+      .limit(25),
+    // Their side of the referral programme: code, people brought in, and
+    // whether they were referred in themselves.
+    supabase.from('referral_codes').select('code').eq('client_id', id).maybeSingle(),
+    supabase
+      .from('referral_redemptions')
+      .select('id, reward_status, reward_cents, reward_percent, created_at')
+      .eq('referrer_id', id)
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('referral_redemptions')
+      .select('id, code, profiles!referral_redemptions_referrer_id_fkey(first_name, last_name)')
+      .eq('referred_client_id', id)
+      .maybeSingle(),
   ])
 
   const [
@@ -192,6 +213,10 @@ export default async function ClientDetailPage({ params }: Props) {
     { data: allTags },
     { data: locations },
     { data: originStub },
+    { data: promoUses },
+    { data: referralCode },
+    { data: referralsMade },
+    { data: referredBy },
   ] = await extrasPromise
 
   // No row means either the id is wrong or RLS filtered it out — either way
@@ -605,6 +630,69 @@ export default async function ClientDetailPage({ params }: Props) {
               >
                 The record they claimed
               </Link>
+            </section>
+          )}
+
+          {/* Deals & referrals (068): who uses what, how many times — the
+              tracking the promotions were built to produce. */}
+          {((promoUses ?? []).length > 0 ||
+            referralCode ||
+            (referralsMade ?? []).length > 0 ||
+            referredBy) && (
+            <section className="border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
+              <h3 className="label-caps mb-5 text-[var(--color-accent)]">Deals & referrals</h3>
+              <dl className="space-y-3 text-sm">
+                {referralCode && <Row label="Their code" value={referralCode.code} />}
+                <Row
+                  label="Referred in"
+                  value={(() => {
+                    const by = referredBy?.profiles as {
+                      first_name: string | null
+                      last_name: string | null
+                    } | null
+                    return referredBy
+                      ? `by ${`${by?.first_name ?? ''} ${by?.last_name ?? ''}`.trim() || referredBy.code}`
+                      : 'came on their own'
+                  })()}
+                />
+                <Row
+                  label="Referrals made"
+                  value={
+                    (referralsMade ?? []).length > 0
+                      ? `${(referralsMade ?? []).length} · ${
+                          (referralsMade ?? []).filter((r) => r.reward_status === 'earned').length
+                        } reward(s) waiting`
+                      : '—'
+                  }
+                />
+                <Row label="Deals used" value={String((promoUses ?? []).length) } />
+              </dl>
+              {(promoUses ?? []).length > 0 && (
+                <ul className="mt-4 divide-y divide-[var(--color-border)] border-t border-[var(--color-border)] text-sm">
+                  {(promoUses ?? []).slice(0, 8).map((u) => (
+                    <li key={u.id} className="flex items-baseline justify-between gap-4 py-2.5">
+                      <span className="min-w-0">
+                        {u.appointment_id ? (
+                          <Link
+                            href={`/dashboard/appointments/${u.appointment_id}`}
+                            className="underline-offset-4 hover:underline"
+                          >
+                            {u.promotion_name}
+                          </Link>
+                        ) : (
+                          u.promotion_name
+                        )}
+                        <span className="ml-2 text-xs text-[var(--color-muted)]">
+                          {new Date(u.created_at).toLocaleDateString('en-US', { timeZone })}
+                        </span>
+                      </span>
+                      <span className="shrink-0 tabular-nums text-[var(--color-muted)]">
+                        &minus;{formatMoney(u.discount_cents)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </section>
           )}
 

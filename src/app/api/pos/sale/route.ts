@@ -3,6 +3,7 @@ import { logError } from '@/lib/log-error'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { multibuyDiscountCents, multibuyPromo, type PromotionRule } from '@/lib/promotions'
 import { isFrontDesk } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
@@ -153,6 +154,24 @@ export async function POST(request: NextRequest) {
 
   const subtotal = lines.reduce((sum, l) => sum + l.unit_price_cents * l.qty, 0)
 
+  // The multibuy deal (068): "buy 2 get the 3rd half off". Computed from the
+  // whole basket, cheapest units first, before the order exists — the items
+  // trigger reads discount_cents off the order when it rolls up the total.
+  const { data: promoRows } = await admin
+    .from('promotions')
+    .select(
+      'id, name, kind, percent_off, amount_cents, sale_price_cents, min_items, service_ids, starts_at, ends_at, is_active'
+    )
+    .eq('is_active', true)
+    .eq('kind', 'product_multibuy')
+  const multibuy = multibuyPromo((promoRows ?? []) as PromotionRule[], Date.now())
+  const discount = multibuy
+    ? multibuyDiscountCents(
+        multibuy,
+        lines.flatMap((l) => Array<number>(l.qty).fill(l.unit_price_cents))
+      )
+    : 0
+
   const { data: rateSetting } = await admin
     .from('site_settings')
     .select('text_value')
@@ -163,7 +182,8 @@ export async function POST(request: NextRequest) {
   const parsedRate = Number(rateSetting?.text_value)
   const taxRate =
     Number.isFinite(parsedRate) && parsedRate >= 0 && parsedRate < 1 ? parsedRate : DEFAULT_TAX_RATE
-  const tax = Math.round(subtotal * taxRate)
+  // Tax follows what the customer actually pays, not the pre-deal figure.
+  const tax = Math.round(Math.max(subtotal - discount, 0) * taxRate)
 
   const { data: order, error: orderError } = await admin
     .from('orders')
@@ -178,6 +198,7 @@ export async function POST(request: NextRequest) {
       appointment_id: appointmentId ?? null,
       staff_notes: notes ?? null,
       tax_cents: tax,
+      discount_cents: discount,
     })
     .select('id')
     .single()
@@ -245,5 +266,20 @@ export async function POST(request: NextRequest) {
     void logError('pos/sale', paymentError.message, { step: 'record_payment', order_id: paid.id })
   }
 
-  return NextResponse.json({ ok: true, order: paid }, { status: 201 })
+  // The deal's paper trail — who it was and how much came off. Best effort:
+  // the sale stands either way.
+  if (multibuy && discount > 0) {
+    const { error: redemptionError } = await admin.from('promotion_redemptions').insert({
+      promotion_id: multibuy.id,
+      promotion_name: multibuy.name,
+      client_id: clientId ?? null,
+      order_id: paid.id,
+      discount_cents: discount,
+    })
+    if (redemptionError) {
+      void logError('pos/sale', redemptionError.message, { step: 'promo_redemption', order_id: paid.id })
+    }
+  }
+
+  return NextResponse.json({ ok: true, order: paid, discount_cents: discount }, { status: 201 })
 }

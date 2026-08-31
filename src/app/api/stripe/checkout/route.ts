@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { getStripe, stripeConfigured, siteUrl } from '@/lib/stripe'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
+import { multibuyDiscountCents, multibuyPromo, type PromotionRule } from '@/lib/promotions'
 
 export const dynamic = 'force-dynamic'
 
@@ -77,6 +78,24 @@ export async function POST(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
+  // The multibuy deal (068), same arithmetic as the till: whole basket,
+  // cheapest units first. The order carries it so the totals trigger agrees,
+  // and Stripe gets it as a one-off coupon so the charge agrees too.
+  const { data: promoRows } = await admin
+    .from('promotions')
+    .select(
+      'id, name, kind, percent_off, amount_cents, sale_price_cents, min_items, service_ids, starts_at, ends_at, is_active'
+    )
+    .eq('is_active', true)
+    .eq('kind', 'product_multibuy')
+  const multibuy = multibuyPromo((promoRows ?? []) as PromotionRule[], Date.now())
+  const discount = multibuy
+    ? multibuyDiscountCents(
+        multibuy,
+        lines.flatMap((l) => Array<number>(l.qty).fill(byId.get(l.productId)!.price_cents))
+      )
+    : 0
+
   const { data: order, error: orderError } = await admin
     .from('orders')
     .insert({
@@ -86,6 +105,7 @@ export async function POST(request: NextRequest) {
       guest_phone: phone ?? null,
       status: 'pending_payment',
       fulfillment,
+      discount_cents: discount,
     })
     .select('id')
     .single()
@@ -116,9 +136,25 @@ export async function POST(request: NextRequest) {
   }
 
   const stripe = getStripe()
+
+  // The discount reaches Stripe as a single-use coupon: line items stay at
+  // list price (the receipt shows the deal rather than quietly cheaper
+  // bottles), and the webhook's recorded payment matches the order total.
+  let discounts: { coupon: string }[] | undefined
+  if (multibuy && discount > 0) {
+    const coupon = await stripe.coupons.create({
+      amount_off: discount,
+      currency: 'usd',
+      duration: 'once',
+      name: multibuy.name.slice(0, 40),
+    })
+    discounts = [{ coupon: coupon.id }]
+  }
+
   const session = await stripe.checkout.sessions.create({
     mode: 'payment',
     customer_email: email,
+    ...(discounts ? { discounts } : {}),
     line_items: lines.map((line) => {
       const p = byId.get(line.productId)!
       return {
@@ -140,8 +176,9 @@ export async function POST(request: NextRequest) {
     // marketing telemetry only — the webhook remains the record of payment,
     // and a client editing their own URL edits nothing but their own ad
     // attribution.
-    success_url: `${siteUrl()}/shop/confirmation?order=${order.id}&amount=${lines.reduce(
-      (sum, line) => sum + byId.get(line.productId)!.price_cents * line.qty,
+    success_url: `${siteUrl()}/shop/confirmation?order=${order.id}&amount=${Math.max(
+      lines.reduce((sum, line) => sum + byId.get(line.productId)!.price_cents * line.qty, 0) -
+        discount,
       0
     )}`,
     cancel_url: `${siteUrl()}/cart?cancelled=1`,
@@ -152,6 +189,19 @@ export async function POST(request: NextRequest) {
     .from('orders')
     .update({ stripe_session_id: session.id })
     .eq('id', order.id)
+
+  // The deal's paper trail. Written now rather than in the webhook — an
+  // abandoned checkout leaves an unpaid order AND its redemption row behind,
+  // and both read as what they are: an order that never happened.
+  if (multibuy && discount > 0) {
+    await admin.from('promotion_redemptions').insert({
+      promotion_id: multibuy.id,
+      promotion_name: multibuy.name,
+      client_id: user?.id ?? null,
+      order_id: order.id,
+      discount_cents: discount,
+    })
+  }
 
   return NextResponse.json({ url: session.url, order_id: order.id })
 }

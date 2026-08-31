@@ -321,6 +321,13 @@ const TREE: NavEntry[] = [
         visible: (r) => isManager(r),
       },
       {
+        href: '/dashboard/marketing/promotions',
+        label: 'Promotions',
+        // Admin like Tracking below: a promotion is a pricing decision, and
+        // the table's only write policy is admin (068).
+        visible: (r) => isAdmin(r),
+      },
+      {
         href: '/dashboard/marketing/tracking',
         label: 'Tracking',
         // Admin, not manager, unlike the rest of this section: the fields put

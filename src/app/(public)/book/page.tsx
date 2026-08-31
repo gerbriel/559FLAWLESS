@@ -47,6 +47,7 @@ export default async function BookPage({ searchParams }: Props) {
     profileRes,
     { data: bookingSettings },
     { data: pairRules },
+    { data: promoRules },
   ] = await Promise.all([
       supabase
         .from('services')
@@ -86,6 +87,14 @@ export default async function BookPage({ searchParams }: Props) {
         .from('service_pair_discounts')
         .select('id, trigger_service_id, discounted_service_id, percent_off, label')
         .eq('is_active', true),
+      // The deal board (068), same arrangement: preview here, decided there.
+      supabase
+        .from('promotions')
+        .select(
+          'id, name, kind, percent_off, amount_cents, sale_price_cents, min_items, service_ids, starts_at, ends_at, is_active'
+        )
+        .eq('is_active', true)
+        .in('kind', ['service_sale', 'second_service', 'new_client']),
     ])
 
   // Map add-ons to their services once, rather than per render.
@@ -207,6 +216,19 @@ export default async function BookPage({ searchParams }: Props) {
     redirect(`/account/complete?next=${encodeURIComponent(bookingUrl)}`)
   }
 
+  // First visit? The flow shows the new-client deal only to someone it can
+  // apply to. Presentation only — the engine re-derives this at booking, so a
+  // stale answer here can never mis-price anyone.
+  let isNewClient = false
+  {
+    const { count: priorVisits } = await supabase
+      .from('appointments')
+      .select('id', { count: 'exact', head: true })
+      .eq('client_id', user.id)
+      .not('status', 'in', '(cancelled,no_show)')
+    isNewClient = (priorVisits ?? 0) === 0
+  }
+
   // ── The gentle reorder ───────────────────────────────────
   // When their own recent events point at a service (interest.ts, under
   // migration 060's "client reads own events" policy), that service's whole
@@ -294,6 +316,11 @@ export default async function BookPage({ searchParams }: Props) {
             services={orderedServices}
             providers={scopedProviders}
             pairDiscounts={pairRules ?? []}
+            promotions={(promoRules ?? []).map((p) => ({
+              ...p,
+              service_ids: p.service_ids ?? [],
+            }))}
+            isNewClient={isNewClient}
             initialServiceSlug={serviceSlug}
             initialAddSlugs={addSlugs}
             // Everything the profile already holds, so the details step can ask

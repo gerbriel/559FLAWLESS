@@ -9,6 +9,7 @@ import { TakePayment, type PaymentRecord } from '@/components/shared/TakePayment
 import { PackageVisitCredit } from '@/components/shared/PackageVisitCredit'
 import { PhotoReminderPrompt } from '@/components/shared/PhotoReminderPrompt'
 import { PairUpsell, type PairUpsellOption } from '@/components/shared/PairUpsell'
+import { ReferralRewardApply, type WaitingReward } from '@/components/shared/ReferralRewardApply'
 import { formatMoney, formatDuration } from '@/lib/utils'
 import { bestPairDiscount, pairDiscountCents, type PairDiscountRule } from '@/lib/pair-discounts'
 import { formatDateTimeInTimeZone, dateKeyInTimeZone, requestNow } from '@/lib/time'
@@ -30,7 +31,7 @@ export default async function StaffAppointmentPage({ params }: Props) {
   const { data: appointment } = await supabase
     .from('appointments')
     .select(
-      'id, starts_at, ends_at, status, source, provider_id, subtotal_cents, total_cents, membership_covered_cents, membership_discount_cents, deposit_cents, deposit_status, client_notes, staff_notes, client_id, guest_first_name, guest_last_name, guest_email, guest_phone, age_attested_at, profiles!appointments_client_id_fkey(first_name, last_name, email, phone), appointment_services(id, service_id, name_snapshot, price_cents, duration_minutes, full_price_cents, added_by, sort_order)'
+      'id, starts_at, ends_at, status, source, provider_id, subtotal_cents, total_cents, membership_covered_cents, membership_discount_cents, promo_discount_cents, deposit_cents, deposit_status, client_notes, staff_notes, client_id, guest_first_name, guest_last_name, guest_email, guest_phone, age_attested_at, profiles!appointments_client_id_fkey(first_name, last_name, email, phone), appointment_services(id, service_id, name_snapshot, price_cents, duration_minutes, full_price_cents, added_by, promotion_id, sort_order)'
     )
     .eq('id', id)
     .maybeSingle()
@@ -56,6 +57,7 @@ export default async function StaffAppointmentPage({ params }: Props) {
     duration_minutes: number
     full_price_cents: number | null
     added_by: string | null
+    promotion_id: number | null
     sort_order: number
   }[]).sort((a, b) => a.sort_order - b.sort_order)
 
@@ -153,6 +155,23 @@ export default async function StaffAppointmentPage({ params }: Props) {
     }
   }
 
+  // Referral rewards this client has waiting (068) — earned when their code
+  // brought somebody in, applied here where the money settles. Not offered on
+  // a visit that is not billed.
+  let waitingRewards: WaitingReward[] = []
+  if (appointment.client_id && !notBilled) {
+    const { data: rewards } = await supabase
+      .from('referral_redemptions')
+      .select('id, reward_cents, reward_percent')
+      .eq('referrer_id', appointment.client_id)
+      .eq('reward_status', 'earned')
+      .order('created_at')
+    waitingRewards = (rewards ?? []).map((r) => ({
+      id: r.id,
+      label: r.reward_cents ? formatMoney(r.reward_cents) : `${r.reward_percent ?? 0}%`,
+    }))
+  }
+
   // Is a before/after photograph due on this visit? `photo_due` is null unless
   // a documented service is booked AND the client's consent covers it — the
   // gate is in `client_photo_consent_ok` (039), never in the component.
@@ -224,11 +243,12 @@ export default async function StaffAppointmentPage({ params }: Props) {
             <li key={l.id} className="flex justify-between gap-6 py-3 text-sm">
               <span>
                 {l.name_snapshot}
-                {/* A pair-deal line says so, and whether it was added in the
-                    chair — the split the redemptions report counts. */}
+                {/* A discounted line says which deal cut it, and whether it
+                    was added in the chair. */}
                 {l.full_price_cents !== null && (
                   <span className="ml-2 text-xs text-[var(--color-muted)]">
-                    pair deal{l.added_by ? ', added in the chair' : ''}
+                    {l.promotion_id ? 'promo' : 'pair deal'}
+                    {l.added_by ? ', added in the chair' : ''}
                   </span>
                 )}
               </span>
@@ -249,7 +269,8 @@ export default async function StaffAppointmentPage({ params }: Props) {
             why the total below is smaller than they add up to. Saying nothing
             here would make the receipt look wrong. */}
         {(appointment.membership_covered_cents > 0 ||
-          appointment.membership_discount_cents > 0) && (
+          appointment.membership_discount_cents > 0 ||
+          appointment.promo_discount_cents > 0) && (
           <ul className="divide-y divide-[var(--color-border)] border-b border-[var(--color-border)] text-sm">
             {appointment.membership_covered_cents > 0 && (
               <li className="flex justify-between gap-6 py-3">
@@ -266,6 +287,16 @@ export default async function StaffAppointmentPage({ params }: Props) {
                 <span className="text-[var(--color-muted)]">Member discount</span>
                 <span className="tabular-nums text-[var(--color-muted)]">
                   &minus;{formatMoney(appointment.membership_discount_cents)}
+                </span>
+              </li>
+            )}
+            {appointment.promo_discount_cents > 0 && (
+              <li className="flex justify-between gap-6 py-3">
+                <span className="text-[var(--color-muted)]">
+                  Promotions &amp; rewards
+                </span>
+                <span className="tabular-nums text-[var(--color-muted)]">
+                  &minus;{formatMoney(appointment.promo_discount_cents)}
                 </span>
               </li>
             )}
@@ -291,6 +322,14 @@ export default async function StaffAppointmentPage({ params }: Props) {
       {upsellOptions.length > 0 && (
         <div className="mt-8">
           <PairUpsell appointmentId={appointment.id} options={upsellOptions} />
+        </div>
+      )}
+
+      {/* Same ordering law: applying a reward lowers the total everything
+          below reads. */}
+      {waitingRewards.length > 0 && (
+        <div className="mt-8">
+          <ReferralRewardApply appointmentId={appointment.id} rewards={waitingRewards} />
         </div>
       )}
 

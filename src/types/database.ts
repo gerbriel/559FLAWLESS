@@ -461,6 +461,10 @@ export type Appointment = {
   /** The member percentage off the rest of the visit, integer cents. */
   membership_discount_cents: number
 
+  // ── Promotions, added in 068 ────────────────────────────────
+  /** Visit-level promo money (new-client %, applied referral reward), cents. */
+  promo_discount_cents: number
+
   created_at: string
   updated_at: string
 }
@@ -476,10 +480,12 @@ export type AppointmentService = {
   sort_order: number
 
   // ── Pair deal, added in 067 ─────────────────────────────────
-  /** List price before a pair discount, integer cents. Null = undiscounted. */
+  /** List price before a pair or promo discount, integer cents. Null = undiscounted. */
   full_price_cents: number | null
   /** Which pair deal cut this line's price, if any. */
   pair_discount_id: number | null
+  /** Which promotion (068) cut this line's price, if any. */
+  promotion_id: number | null
   /** Staff member who added this line in the chair. Null = came with the booking. */
   added_by: string | null
   /** When a line was added after booking. Null = came with the booking. */
@@ -1098,6 +1104,72 @@ export type ServicePairDiscount = {
   created_at: string
 }
 
+// ── Promotions & referrals, added in 068 ──────────────────────
+
+export type PromotionKind =
+  | 'service_sale'
+  | 'second_service'
+  | 'product_multibuy'
+  | 'new_client'
+  | 'referral'
+
+/**
+ * One running deal on the board. Which value fields matter depends on `kind`;
+ * the engine reads what its kind needs and the admin form offers only those.
+ */
+export type Promotion = {
+  id: number
+  name: string
+  kind: PromotionKind
+  percent_off: number | null
+  amount_cents: number | null
+  sale_price_cents: number | null
+  min_items: number | null
+  service_ids: number[]
+  starts_at: string | null
+  ends_at: string | null
+  is_active: boolean
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** One applied deal — who, where, how much came off. Name is a snapshot. */
+export type PromotionRedemption = {
+  id: number
+  promotion_id: number | null
+  promotion_name: string
+  client_id: string | null
+  appointment_id: string | null
+  order_id: number | null
+  discount_cents: number
+  created_at: string
+}
+
+export type ReferralCode = {
+  code: string
+  client_id: string
+  created_at: string
+}
+
+/**
+ * One person a code brought in. The referrer's reward rides the row: earned
+ * when the friend books, applied when the desk takes it off a visit.
+ */
+export type ReferralRedemption = {
+  id: number
+  code: string
+  referrer_id: string
+  referred_client_id: string
+  appointment_id: string | null
+  reward_cents: number | null
+  reward_percent: number | null
+  reward_status: 'earned' | 'applied' | 'void'
+  applied_appointment_id: string | null
+  created_at: string
+  applied_at: string | null
+}
+
 /**
  * Loyalty points, one row per movement — the balance is the sum, never stored.
  * `earned`/`reversal` rows mirror `payments` 1:1 via trigger; `adjustment`
@@ -1563,6 +1635,29 @@ export type Database = {
           ToProfile<'loyalty_ledger', 'client_id'>,
           ToProfile<'loyalty_ledger', 'created_by'>,
           Rel<'loyalty_ledger_payment_id_fkey', ['payment_id'], 'payments', ['id']>,
+        ]
+      >
+      promotions: TableDef<Promotion, [ToProfile<'promotions', 'created_by'>]>
+      promotion_redemptions: TableDef<
+        PromotionRedemption,
+        [
+          Rel<'promotion_redemptions_promotion_id_fkey', ['promotion_id'], 'promotions', ['id']>,
+          ToProfile<'promotion_redemptions', 'client_id'>,
+          Rel<'promotion_redemptions_appointment_id_fkey', ['appointment_id'], 'appointments', ['id']>,
+          Rel<'promotion_redemptions_order_id_fkey', ['order_id'], 'orders', ['id']>,
+        ]
+      >
+      referral_codes: TableDef<ReferralCode, [ToProfile<'referral_codes', 'client_id'>]>
+      // Two FKs to profiles AND two to appointments — every embed must name
+      // its constraint.
+      referral_redemptions: TableDef<
+        ReferralRedemption,
+        [
+          Rel<'referral_redemptions_code_fkey', ['code'], 'referral_codes', ['code']>,
+          ToProfile<'referral_redemptions', 'referrer_id'>,
+          ToProfile<'referral_redemptions', 'referred_client_id'>,
+          Rel<'referral_redemptions_appointment_id_fkey', ['appointment_id'], 'appointments', ['id']>,
+          Rel<'referral_redemptions_applied_appointment_id_fkey', ['applied_appointment_id'], 'appointments', ['id']>,
         ]
       >
       appointment_events: TableDef<
@@ -2514,6 +2609,14 @@ export type Database = {
       loyalty_balance: {
         Args: { p_client: string }
         Returns: number
+      }
+      /**
+       * A client's referral code, minted on first ask. The only mint —
+       * no insert policy exists on referral_codes. Added in 068.
+       */
+      get_or_create_referral_code: {
+        Args: { p_client: string }
+        Returns: string
       }
       order_balance_cents: {
         Args: { p_order: number }
