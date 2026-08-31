@@ -178,8 +178,10 @@ export default async function ClientDetailPage({ params }: Props) {
       .order('created_at', { ascending: false })
       .limit(25),
     // Their side of the referral programme: code, people brought in, and
-    // whether they were referred in themselves.
-    supabase.from('referral_codes').select('code').eq('client_id', id).maybeSingle(),
+    // whether they were referred in themselves. Minted on view, not just
+    // read — the desk reading a code out loud is a normal path, and a client
+    // who never opened their Rewards page still deserves to have one.
+    supabase.rpc('get_or_create_referral_code', { p_client: id }),
     supabase
       .from('referral_redemptions')
       .select('id, reward_status, reward_cents, reward_percent, created_at')
@@ -642,7 +644,7 @@ export default async function ClientDetailPage({ params }: Props) {
             <section className="border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
               <h3 className="label-caps mb-5 text-[var(--color-accent)]">Deals & referrals</h3>
               <dl className="space-y-3 text-sm">
-                {referralCode && <Row label="Their code" value={referralCode.code} />}
+                {referralCode && <Row label="Their code" value={referralCode} />}
                 <Row
                   label="Referred in"
                   value={(() => {
