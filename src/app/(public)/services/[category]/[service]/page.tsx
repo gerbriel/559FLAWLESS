@@ -115,6 +115,7 @@ export default async function ServiceDetailPage({ params }: Props) {
       return {
         id: r.id,
         name: target.name,
+        slug: target.slug,
         description: target.description,
         percentOff: r.percent_off,
         fullCents: target.price_cents,
@@ -188,24 +189,31 @@ export default async function ServiceDetailPage({ params }: Props) {
                     in green. The booking flow applies it automatically when
                     both are in the visit. */}
                 {pairDeals.map((d) => (
-                  <li key={`pair-${d.id}`} className="flex items-baseline justify-between gap-6 py-4">
-                    <div>
-                      <p className="text-base">
-                        {d.name}
-                        <span className="ml-2 label-caps text-[0.5625rem] text-[var(--color-clay-deep)]">
-                          {d.percentOff}% off together
+                  <li key={`pair-${d.id}`}>
+                    {/* The row IS the offer — clicking it opens the booking
+                        with both services pre-ticked and the deal applied. */}
+                    <Link
+                      href={`/book?service=${service.slug}&add=${d.slug}`}
+                      className="flex items-baseline justify-between gap-6 py-4 transition-colors hover:text-[var(--color-accent)]"
+                    >
+                      <div>
+                        <p className="text-base">
+                          {d.name}
+                          <span className="ml-2 label-caps text-[0.5625rem] text-[var(--color-clay-deep)]">
+                            {d.percentOff}% off together
+                          </span>
+                        </p>
+                        <p className="mt-1 text-sm text-[var(--color-muted)]">
+                          {d.description ?? `Booked in the same visit, it is ${d.percentOff}% off.`}
+                        </p>
+                      </div>
+                      <span className="shrink-0 tabular-nums">
+                        <s className="text-[var(--color-muted)]">{formatMoney(d.fullCents)}</s>{' '}
+                        <span className="text-emerald-800 dark:text-emerald-400">
+                          {formatMoney(d.priceCents)}
                         </span>
-                      </p>
-                      <p className="mt-1 text-sm text-[var(--color-muted)]">
-                        {d.description ?? `Booked in the same visit, it is ${d.percentOff}% off.`}
-                      </p>
-                    </div>
-                    <span className="shrink-0 tabular-nums">
-                      <s className="text-[var(--color-muted)]">{formatMoney(d.fullCents)}</s>{' '}
-                      <span className="text-emerald-800 dark:text-emerald-400">
-                        {formatMoney(d.priceCents)}
                       </span>
-                    </span>
+                    </Link>
                   </li>
                 ))}
                 {addons.map((a) => (

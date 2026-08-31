@@ -73,6 +73,7 @@ export function BookingFlow({
   providers,
   pairDiscounts = [],
   initialServiceSlug,
+  initialAddSlugs = [],
   signedInUserId,
   signedInEmail,
   signedInName,
@@ -83,6 +84,8 @@ export function BookingFlow({
   /** The pair deal (067). Preview only — priceService() is what decides. */
   pairDiscounts?: PairDiscountRule[]
   initialServiceSlug?: string
+  /** Extra services to pre-tick — the pair-deal row on a service page. */
+  initialAddSlugs?: string[]
   /** Present when the profile can be written back to — see `submit`. */
   signedInUserId?: string | null
   signedInEmail?: string | null
@@ -99,13 +102,22 @@ export function BookingFlow({
     ? (services.find((s) => s.slug === initialServiceSlug) ?? null)
     : null
 
-  const [step, setStep] = useState<Step>(
-    // An age-gated service still has to show its gate, so stay on step one.
-    deepLinked && !deepLinked.requires_age_verification ? 'provider' : 'service'
-  )
+  // A deep link used to jump straight to the provider step. It no longer does:
+  // add-ons, pair deals and the age gate all live on step one, and skipping it
+  // meant a client arriving from a service page could never add anything to
+  // their visit. The service arrives pre-ticked; continuing is one tap.
+  const [step, setStep] = useState<Step>('service')
   // A visit can be several services — a facial and a wax booked as one
   // appointment occupying one continuous block, not two bookings side by side.
-  const [selected, setSelected] = useState<BookableService[]>(deepLinked ? [deepLinked] : [])
+  // `add` slugs (the pair-deal row on a service page) pre-tick alongside.
+  const [selected, setSelected] = useState<BookableService[]>(() => {
+    const initial = deepLinked ? [deepLinked] : []
+    for (const slug of initialAddSlugs) {
+      const found = services.find((s) => s.slug === slug)
+      if (found && !initial.some((x) => x.id === found.id)) initial.push(found)
+    }
+    return initial
+  })
   const [addonIds, setAddonIds] = useState<number[]>([])
   const [provider, setProvider] = useState<BookableProvider | null>(null)
   const [ageConfirmed, setAgeConfirmed] = useState(false)

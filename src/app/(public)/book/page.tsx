@@ -21,11 +21,14 @@ export const metadata: Metadata = {
 }
 
 interface Props {
-  searchParams: Promise<{ service?: string; location?: string }>
+  searchParams: Promise<{ service?: string; location?: string; add?: string }>
 }
 
 export default async function BookPage({ searchParams }: Props) {
-  const { service: serviceSlug, location: locationSlug } = await searchParams
+  const { service: serviceSlug, location: locationSlug, add } = await searchParams
+  // The pair-deal row on a service page pre-ticks its service alongside the
+  // deep link — comma-separated, unknown slugs simply don't match anything.
+  const addSlugs = (add ?? '').split(',').filter(Boolean)
   const supabase = await createClient()
 
   // Which studio. With one location this resolves to `single` without a second
@@ -192,6 +195,7 @@ export default async function BookPage({ searchParams }: Props) {
   const bookingParams = new URLSearchParams()
   if (locationSlug) bookingParams.set('location', locationSlug)
   if (serviceSlug) bookingParams.set('service', serviceSlug)
+  if (addSlugs.length > 0) bookingParams.set('add', addSlugs.join(','))
   const bookingUrl = `/book${bookingParams.size ? `?${bookingParams}` : ''}`
   if (!user) {
     redirect(`/login?next=${encodeURIComponent(bookingUrl)}`)
@@ -291,6 +295,7 @@ export default async function BookPage({ searchParams }: Props) {
             providers={scopedProviders}
             pairDiscounts={pairRules ?? []}
             initialServiceSlug={serviceSlug}
+            initialAddSlugs={addSlugs}
             // Everything the profile already holds, so the details step can ask
             // for what is missing and nothing else — and write back whatever
             // they end up supplying.
