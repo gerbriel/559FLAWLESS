@@ -182,6 +182,16 @@ export function BookingFlow({
   }
   const pairSavingsCents = selected.reduce((n, s) => n + (pairCutFor(s)?.off ?? 0), 0)
 
+  // Pair-deal services surfaced inside "Add to your service", so nobody has to
+  // scroll to another category to find the deal. Toggling one selects the
+  // service itself — it is a real service line with its own gates (the 18+
+  // confirmation appears below the moment it goes on), never an add-on.
+  // "Among the others" so an already-added deal keeps its row, checked.
+  const pairOfferServices = services.filter((s) => {
+    const others = selected.filter((x) => x.id !== s.id).map((x) => x.id)
+    return bestPairDiscount(pairDiscounts, others, s.id) !== null
+  })
+
   const totalCents =
     selected.reduce((n, s) => n + s.price_cents, 0) +
     selectedAddons.reduce((n, a) => n + a.price_cents, 0) -
@@ -708,12 +718,70 @@ export function BookingFlow({
                   <span className="tabular-nums">{formatMoney(totalCents)}</span>
                 </div>
 
-                {availableAddons.length > 0 && (
+                {(availableAddons.length > 0 || pairOfferServices.length > 0) && (
                   <>
                     <h3 className="label-caps mb-5 text-[var(--color-accent)]">
                       Add to your service
                     </h3>
                     <div className="grid gap-px border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-2">
+                      {/* The pair deal leads: crossed-out list price, the pair
+                          price in green. Clicking selects the service itself. */}
+                      {pairOfferServices.map((s) => {
+                        const on = selected.some((x) => x.id === s.id)
+                        const others = selected
+                          .filter((x) => x.id !== s.id)
+                          .map((x) => x.id)
+                        const rule = bestPairDiscount(pairDiscounts, others, s.id)!
+                        const off = pairDiscountCents(s.price_cents, rule.percent_off)
+                        return (
+                          <button
+                            key={`pair-${s.id}`}
+                            type="button"
+                            onClick={() => {
+                              toggleService(s)
+                              // Re-confirm age whenever the set changes: what
+                              // was attested to was a different booking.
+                              setAgeConfirmed(false)
+                              void trackEvent('service_selected', { service_id: s.id })
+                            }}
+                            className={cn(
+                              'flex items-center justify-between gap-4 p-4 text-left text-sm transition-colors',
+                              on
+                                ? 'bg-[var(--color-clay-soft)] dark:bg-[var(--color-surface)]'
+                                : 'bg-[var(--color-background)] hover:bg-[var(--color-linen)] dark:hover:bg-[var(--color-surface)]'
+                            )}
+                          >
+                            <span className="flex items-center gap-2.5">
+                              <span
+                                className={cn(
+                                  'flex h-4 w-4 items-center justify-center border',
+                                  on
+                                    ? 'border-[var(--color-accent)] bg-[var(--color-accent)]'
+                                    : 'border-[var(--color-border)]'
+                                )}
+                              >
+                                {on && (
+                                  <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />
+                                )}
+                              </span>
+                              <span>
+                                {s.name}
+                                <span className="ml-2 label-caps text-[0.5625rem] text-[var(--color-clay-deep)] dark:text-[var(--color-accent)]">
+                                  {rule.percent_off}% off
+                                </span>
+                              </span>
+                            </span>
+                            <span className="tabular-nums">
+                              <s className="text-[var(--color-muted)]">
+                                {formatMoney(s.price_cents)}
+                              </s>{' '}
+                              <span className="text-emerald-800 dark:text-emerald-400">
+                                +{formatMoney(s.price_cents - off)}
+                              </span>
+                            </span>
+                          </button>
+                        )
+                      })}
                       {availableAddons.map((a) => {
                         const on = addonIds.includes(a.id)
                         return (
