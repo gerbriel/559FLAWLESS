@@ -79,12 +79,13 @@ interface Props {
   stats?: AnnouncementStat[]
 }
 
-export function AdminAnnouncementSettings({
-  announcements: initialAnnouncements,
-  stats = [],
-}: Props) {
+export function AdminAnnouncementSettings({ announcements, stats = [] }: Props) {
   const router = useRouter()
-  const [announcements, setAnnouncements] = useState(initialAnnouncements)
+  // The list renders straight from props — router.refresh() after every write
+  // is what updates it. It used to be copied into useState once at mount,
+  // which meant a saved edit never appeared in the list, and worse: pressing
+  // Edit again re-filled the form from the stale copy, so the NEXT save wrote
+  // the old values back over the first one. Props can't go stale.
   const [editing, setEditing] = useState<number | 'new' | null>(null)
   const [formData, setFormData] = useState({
     title: '',
@@ -112,6 +113,21 @@ export function AdminAnnouncementSettings({
   const [loading, setLoading] = useState(false)
 
   const statFor = new Map(stats.map((s) => [s.announcement_id, s]))
+
+  /**
+   * The storefront paints announcements inside its cached public layout
+   * (revalidate 300), so without this a saved change takes up to five minutes
+   * to show on the site — which reads as "it didn't save". Same seam the
+   * in-place page editor uses; best effort, the write already succeeded.
+   */
+  const bustPublicCache = () =>
+    fetch('/api/admin/revalidate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        paths: ['/', '/services', '/shop', '/about', '/faq', '/team', '/policies', '/contact', '/gift-cards'],
+      }),
+    }).catch(() => {})
 
   const preset = TEMPLATES.find((t) => t.value === formData.variant) ?? TEMPLATES[0]
 
@@ -241,6 +257,7 @@ export function AdminAnnouncementSettings({
         if (updateError) throw updateError
       }
 
+      await bustPublicCache()
       router.refresh()
       resetForm()
     } catch (err) {
@@ -266,7 +283,7 @@ export function AdminAnnouncementSettings({
 
       if (deleteError) throw deleteError
 
-      setAnnouncements(announcements.filter(a => a.id !== id))
+      await bustPublicCache()
       router.refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete')
@@ -287,6 +304,7 @@ export function AdminAnnouncementSettings({
 
       if (updateError) throw updateError
 
+      await bustPublicCache()
       router.refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update')
