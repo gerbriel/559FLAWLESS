@@ -169,7 +169,11 @@ export default async function ProductPage({ params }: Props) {
               </>
             ) : (
               <>
-                <AddToCart productId={product.id} disabled={!inStock} />
+                <AddToCart
+                  productId={product.id}
+                  priceCents={product.price_cents}
+                  disabled={!inStock}
+                />
                 {!inStock && !canShip && (
                   <p className="mt-3 text-sm text-[var(--color-muted)]">
                     Ask us at your next visit — we can order it in.

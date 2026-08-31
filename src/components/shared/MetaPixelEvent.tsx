@@ -30,6 +30,24 @@ declare global {
  * read back, and a forged value forges nothing but the forger's own ad
  * attribution.
  */
+/**
+ * Fire one Meta standard event at interaction time — AddToCart,
+ * InitiateCheckout. No polling and no dedupe, on purpose: a click lands long
+ * after the base pixel loaded, and clicking twice genuinely is two events.
+ * Missing pixel (dev, unconfigured, blocked) means silently nothing — the same
+ * contract as the component below: marketing must never break the shop.
+ */
+export function trackMetaEvent(
+  event: 'AddToCart' | 'InitiateCheckout',
+  params: Record<string, unknown> = {}
+) {
+  try {
+    window.fbq?.('track', event, params)
+  } catch {
+    // Nothing — see above.
+  }
+}
+
 export function MetaPixelEvent({
   event,
   id,

@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Field, Input, Select } from '@/components/ui/field'
 import { formatMoney } from '@/lib/utils'
 import { trackCartEvent } from './ClientAnalytics'
+import { trackMetaEvent } from './MetaPixelEvent'
 
 interface CartProduct {
   id: number
@@ -112,6 +113,17 @@ export function CartView() {
   async function checkout(e: React.FormEvent) {
     e.preventDefault()
     setSubmitting(true)
+
+    // At the click, not the redirect — if Stripe refuses (stock, config), the
+    // attempt to check out still happened, which is what this event names.
+    trackMetaEvent('InitiateCheckout', {
+      content_ids: rows.map((r) => String(r.productId)),
+      content_type: 'product',
+      contents: rows.map((r) => ({ id: String(r.productId), quantity: r.qty })),
+      num_items: rows.reduce((n, r) => n + r.qty, 0),
+      value: subtotal / 100,
+      currency: 'USD',
+    })
 
     try {
       const supabase = createClient()

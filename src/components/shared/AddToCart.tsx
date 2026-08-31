@@ -6,12 +6,16 @@ import { Minus, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useCart } from '@/store/cart'
 import { trackCartEvent } from './ClientAnalytics'
+import { trackMetaEvent } from './MetaPixelEvent'
 
 export function AddToCart({
   productId,
+  priceCents,
   disabled,
 }: {
   productId: number
+  /** For the ad pixel's `value` only — checkout re-prices from the database. */
+  priceCents?: number
   disabled?: boolean
 }) {
   const [qty, setQty] = useState(1)
@@ -53,6 +57,14 @@ export function AddToCart({
         size="lg"
         onClick={() => {
           void trackCartEvent('add', { product_id: productId, quantity: qty })
+          trackMetaEvent('AddToCart', {
+            content_ids: [String(productId)],
+            content_type: 'product',
+            contents: [{ id: String(productId), quantity: qty }],
+            ...(priceCents !== undefined
+              ? { value: (priceCents * qty) / 100, currency: 'USD' }
+              : {}),
+          })
           add(productId, qty)
           toast.success('Added to your bag.')
         }}
