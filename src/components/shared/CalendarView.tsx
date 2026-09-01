@@ -967,10 +967,12 @@ function HourGrid({
     }
   })
 
-  // Narrower columns at a tighter zoom are half the answer to "too big": seven
-  // days at 9rem plus the gutter is 1080px and scrolls sideways inside the
-  // dashboard's main column, where seven at 7.5rem is 892px and does not.
-  const template = `${metrics.gutter} repeat(${columns.length}, minmax(${metrics.columnMin}, 1fr))`
+  // The week fits the screen the way the month does: columns share whatever
+  // width there is rather than each demanding the density's ideal. The old
+  // `minmax(columnMin, 1fr)` made seven days claim ~1080px and scroll
+  // sideways on a phone — a diary you pan across is a diary you misread. The
+  // tiny floor only stops a column vanishing entirely; cards truncate instead.
+  const template = `min(${metrics.gutter}, 12vw) repeat(${columns.length}, minmax(2.25rem, 1fr))`
 
   /**
    * What the current-time line needs to know about the columns.

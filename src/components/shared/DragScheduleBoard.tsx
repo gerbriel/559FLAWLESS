@@ -273,7 +273,8 @@ export function DragScheduleBoard({
    * dashboard's main column, where seven at 7.5rem plus 3.25rem is 892px and
    * does not.
    */
-  const template = `${metrics.gutter} repeat(${columns.length}, minmax(${metrics.columnMin}, 1fr))`
+  // Fits the screen like the month grid — see CalendarView's template note.
+  const template = `min(${metrics.gutter}, 12vw) repeat(${columns.length}, minmax(2.25rem, 1fr))`
 
   /**
    * The current-time line reads the clock itself — see `CurrentTimeIndicator`.
