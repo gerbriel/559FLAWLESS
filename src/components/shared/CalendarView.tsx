@@ -24,7 +24,8 @@ import {
   formatTimeInTimeZone,
   dayOfWeekForDateKey,
   dayLabelForDateKey,
-  minutesToTime,
+  hourLabel,
+  minutesToTimeLabel,
   monthLabelForDateKey,
   requestNow,
   zonedParts,
@@ -595,7 +596,7 @@ export interface StudioNow {
   hour: number
   /** Wall-clock minute, 0-59. Picks the height within the row. */
   minute: number
-  /** 'HH:MM', matching the 24-hour gutter the pill sits in. */
+  /** '1:35 PM' — the clock people speak, matching the gutter. */
   label: string
 }
 
@@ -613,7 +614,7 @@ export function studioNowFrom(nowMs: number, timezone: string): StudioNow | null
     dateKey: dateKeyInTimeZone(instant, timezone),
     hour: parts.hour,
     minute: parts.minute,
-    label: minutesToTime(parts.hour * 60 + parts.minute),
+    label: minutesToTimeLabel(parts.hour * 60 + parts.minute),
   }
 }
 
@@ -1079,7 +1080,7 @@ function HourGrid({
                       tight ? 'px-2 py-1 text-[0.6875rem]' : 'px-3 py-2 text-xs'
                     )}
                   >
-                    {timeString}
+                    {hourLabel(hour)}
                   </div>
 
                   {columns.map((column) => {
@@ -1183,8 +1184,7 @@ function HourGrid({
       {offGrid.length > 0 && (
         <Panel className="mt-4 p-4">
           <p className="label-caps text-[var(--color-muted)]">
-            Outside the {String(FIRST_HOUR).padStart(2, '0')}:00–
-            {String(LAST_HOUR).padStart(2, '0')}:59 grid
+            Outside the {hourLabel(FIRST_HOUR)}–{hourLabel(LAST_HOUR + 1)} grid
           </p>
           <div className="mt-3 space-y-2">
             {offGrid.map((appt) => (

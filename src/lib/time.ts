@@ -137,6 +137,23 @@ export function minutesToTime(minutes: number): string {
   return `${pad(Math.floor(m / 60), 2)}:${pad(m % 60, 2)}`
 }
 
+/**
+ * 0-23 -> the clock people speak: '8 AM', '1 PM', '12 AM'. The calendars'
+ * gutters show this; the 'HH:MM' strings stay underneath as data, because a
+ * slot key is not a label.
+ */
+export function hourLabel(hour: number): string {
+  const h = ((hour % 24) + 24) % 24
+  return `${h % 12 === 0 ? 12 : h % 12} ${h < 12 ? 'AM' : 'PM'}`
+}
+
+/** Minutes since midnight -> '1:35 PM'. The now-pill's clock. */
+export function minutesToTimeLabel(minutes: number): string {
+  const m = ((minutes % 1440) + 1440) % 1440
+  const h = Math.floor(m / 60)
+  return `${h % 12 === 0 ? 12 : h % 12}:${pad(m % 60, 2)} ${h < 12 ? 'AM' : 'PM'}`
+}
+
 /** Calendar-day arithmetic on the date key itself — never on an instant. */
 export function addDaysToDateKey(dateKey: string, days: number): string {
   const [y, mo, d] = dateKey.split('-').map(Number)

@@ -13,6 +13,7 @@ import {
   formatTimeInTimeZone,
   zonedTimeToUtc,
   zonedParts,
+  hourLabel,
 } from '@/lib/time'
 import {
   blockedSpansForDay,
@@ -510,7 +511,7 @@ export function DragScheduleBoard({
                   tight ? 'px-2 py-1 text-[0.6875rem]' : 'p-2 text-xs'
                 }`}
               >
-                {String(hour).padStart(2, '0')}:00
+                {hourLabel(hour)}
               </div>
 
               {columns.map((c) => {
@@ -631,8 +632,7 @@ export function DragScheduleBoard({
       {offGrid.length > 0 && (
         <div className="mt-4 border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
           <p className="label-caps text-[var(--color-muted)]">
-            Outside the {String(FIRST_HOUR).padStart(2, '0')}:00–
-            {String(LAST_HOUR).padStart(2, '0')}:59 grid
+            Outside the {hourLabel(FIRST_HOUR)}–{hourLabel(LAST_HOUR + 1)} grid
           </p>
           {/* A list in a panel of its own: no row to fit inside and nothing
               below it to push down, so the zoom buys nothing here and these
