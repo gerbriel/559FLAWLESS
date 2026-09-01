@@ -34,13 +34,25 @@ export function BookingSettingsForm({ settings }: { settings: BookingSettings })
     max_advance_days: String(settings.max_advance_days),
     timezone: settings.timezone,
     auto_confirm: settings.auto_confirm,
-    default_deposit_cents: String(settings.default_deposit_cents),
+    // Shown in DOLLARS, like the service editor's deposit field — the two
+    // used to disagree (this one took cents), which is a 100x mistake waiting.
+    default_deposit_dollars:
+      settings.default_deposit_cents % 100 === 0
+        ? String(settings.default_deposit_cents / 100)
+        : (settings.default_deposit_cents / 100).toFixed(2),
     cancellation_policy: settings.cancellation_policy ?? '',
     late_policy: settings.late_policy ?? '',
   })
 
   async function save(e: React.FormEvent) {
     e.preventDefault()
+
+    const depositCents = Math.round(Number(form.default_deposit_dollars) * 100)
+    if (!Number.isFinite(depositCents) || depositCents < 0) {
+      toast.error('That default deposit is not a number.')
+      return
+    }
+
     setBusy(true)
 
     const { error } = await createClient()
@@ -50,7 +62,7 @@ export function BookingSettingsForm({ settings }: { settings: BookingSettings })
         max_advance_days: Number(form.max_advance_days),
         timezone: form.timezone.trim(),
         auto_confirm: form.auto_confirm,
-        default_deposit_cents: Number(form.default_deposit_cents),
+        default_deposit_cents: depositCents,
         cancellation_policy: form.cancellation_policy.trim() || null,
         late_policy: form.late_policy.trim() || null,
       })
@@ -129,16 +141,17 @@ export function BookingSettingsForm({ settings }: { settings: BookingSettings })
         </Field>
 
         <Field
-          label="Default deposit (cents)"
+          label="Default deposit ($)"
           htmlFor="deposit"
-          hint="Used when a service sets no deposit of its own."
+          hint="In dollars, like the service editor. Used when a service sets no deposit of its own."
         >
           <Input
             id="deposit"
             type="number"
             min={0}
-            value={form.default_deposit_cents}
-            onChange={(e) => setForm({ ...form, default_deposit_cents: e.target.value })}
+            step="0.01"
+            value={form.default_deposit_dollars}
+            onChange={(e) => setForm({ ...form, default_deposit_dollars: e.target.value })}
           />
         </Field>
       </div>
