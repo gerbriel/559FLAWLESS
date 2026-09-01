@@ -1,8 +1,8 @@
-import Link from 'next/link'
 import { Suspense } from 'react'
 import type { Metadata } from 'next'
 import { SignupForm } from '@/components/shared/SignupForm'
 import { GoogleSignIn } from '@/components/shared/GoogleSignIn'
+import { AuthToggle } from '@/components/shared/AuthToggle'
 
 export const metadata: Metadata = {
   title: 'Create Account',
@@ -18,19 +18,16 @@ export default function SignupPage() {
         fill out intake once.
       </p>
 
-      <div className="mt-10">
+      <div className="mt-8">
+        <AuthToggle />
+      </div>
+
+      <div className="mt-8">
         <Suspense fallback={null}>
           <GoogleSignIn label="Sign up with Google" />
         </Suspense>
         <SignupForm />
       </div>
-
-      <p className="mt-8 text-sm text-[var(--color-muted)]">
-        Already have one?{' '}
-        <Link href="/login" className="inline-flex min-h-11 items-center text-[var(--color-foreground)] underline underline-offset-4">
-          Sign in
-        </Link>
-      </p>
     </div>
   )
 }

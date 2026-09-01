@@ -1,8 +1,8 @@
-import Link from 'next/link'
 import { Suspense } from 'react'
 import type { Metadata } from 'next'
 import { LoginForm } from '@/components/shared/LoginForm'
 import { GoogleSignIn } from '@/components/shared/GoogleSignIn'
+import { AuthToggle } from '@/components/shared/AuthToggle'
 
 export const metadata: Metadata = {
   title: 'Sign In',
@@ -23,7 +23,11 @@ export default async function LoginPage({ searchParams }: Props) {
         Sign in to see your appointments, forms, and order history.
       </p>
 
-      <div className="mt-10">
+      <div className="mt-8">
+        <AuthToggle />
+      </div>
+
+      <div className="mt-8">
         {/* Reads `next` from the URL, so it needs a boundary to prerender around. */}
         <Suspense fallback={null}>
           <GoogleSignIn label="Sign in with Google" />
@@ -32,12 +36,6 @@ export default async function LoginPage({ searchParams }: Props) {
       </div>
 
       <p className="mt-8 text-sm text-[var(--color-muted)]">
-        No account?{' '}
-        <Link href="/signup" className="inline-flex min-h-11 items-center text-[var(--color-foreground)] underline underline-offset-4">
-          Create one
-        </Link>
-      </p>
-      <p className="mt-3 text-sm text-[var(--color-muted)]">
         You will need an account to book, so we can keep your forms and history together.
       </p>
     </div>

@@ -255,10 +255,13 @@ export function SiteHeader({ categories }: { categories: NavCategory[] }) {
         </div>
       )}
 
-      {/* Mobile nav */}
+      {/* Mobile nav. The header is sticky, so a menu taller than the screen
+          used to clip its tail — "My account" and the book button — with no
+          way to reach them. It scrolls within the viewport now, and the deep
+          bottom padding keeps the last items clear of the phone's own chrome. */}
       {mobileOpen && (
-        <div className="border-t border-[var(--color-border)] bg-[var(--color-background)] lg:hidden">
-          <Container className="py-6">
+        <div className="max-h-[calc(100dvh-5rem)] overflow-y-auto border-t border-[var(--color-border)] bg-[var(--color-background)] lg:hidden">
+          <Container className="pt-6 pb-24">
             <nav className="space-y-6" aria-label="Mobile">
               {/* Full width and always visible here, rather than behind another
                   tap: the toggle in the bar is hidden on a phone precisely so

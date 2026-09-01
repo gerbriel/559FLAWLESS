@@ -59,12 +59,19 @@ export function SignupForm() {
 
     if (signUpError) {
       // The auth service failing to SEND its confirmation email surfaces as a
-      // bare 500 — not something a client can act on. Give them the two doors
-      // that actually work instead of the plumbing's own words.
+      // bare 500 — sometimes with no message at all, which rendered as "{}".
+      // Anything a client cannot act on becomes the two doors that work.
+      const status = (signUpError as { status?: number }).status ?? 0
+      const msg = (signUpError.message ?? '').trim()
+      const unhelpful =
+        status >= 500 ||
+        !msg ||
+        msg === '{}' ||
+        /confirmation email|unexpected_failure|error sending/i.test(msg)
       setError(
-        /confirmation email|unexpected_failure|error sending/i.test(signUpError.message)
-          ? 'We could not send the confirmation email just now. Please use “Sign up with Google” above — or call the studio and we will set your account up for you.'
-          : signUpError.message
+        unhelpful
+          ? 'We could not create the account just now. Please use “Sign up with Google” above — or call the studio and we will set your account up for you.'
+          : msg
       )
       return
     }
