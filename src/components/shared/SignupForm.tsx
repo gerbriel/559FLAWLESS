@@ -58,7 +58,14 @@ export function SignupForm() {
     setBusy(false)
 
     if (signUpError) {
-      setError(signUpError.message)
+      // The auth service failing to SEND its confirmation email surfaces as a
+      // bare 500 — not something a client can act on. Give them the two doors
+      // that actually work instead of the plumbing's own words.
+      setError(
+        /confirmation email|unexpected_failure|error sending/i.test(signUpError.message)
+          ? 'We could not send the confirmation email just now. Please use “Sign up with Google” above — or call the studio and we will set your account up for you.'
+          : signUpError.message
+      )
       return
     }
 
