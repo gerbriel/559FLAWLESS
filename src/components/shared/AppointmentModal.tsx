@@ -3,8 +3,10 @@
 import type { CalendarAppointment as AppointmentData } from '@/components/shared/CalendarView'
 
 import * as React from 'react'
-import { X, Calendar, Clock, User, FileText, DollarSign, Phone, Mail } from 'lucide-react'
+import { toast } from 'sonner'
+import { X, Calendar, Clock, User, FileText, DollarSign, Phone, Mail, Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { createClient } from '@/lib/supabase/client'
 import { formatMoney } from '@/lib/utils'
 import { formatDateTimeInTimeZone, formatTimeInTimeZone } from '@/lib/time'
 import type { AppointmentStatus } from '@/types/database'
@@ -45,6 +47,72 @@ export function AppointmentModal({
     window.addEventListener('keydown', handleEscape)
     return () => window.removeEventListener('keydown', handleEscape)
   }, [onClose])
+
+  // The live money picture, loaded when the modal opens: deposit status and
+  // what has actually been paid. The calendar's own query stays lean; this is
+  // one appointment, on demand. Payments are front-desk-and-up by policy — a
+  // reader the policy refuses simply sees no balance line, not an error.
+  const [money, setMoney] = React.useState<{
+    depositStatus: string | null
+    takenCents: number | null
+  } | null>(null)
+  const [nudging, setNudging] = React.useState(false)
+  const [nudged, setNudged] = React.useState(false)
+  const appointmentId = appointment?.id ?? null
+
+  // Reset for a different appointment during render — the documented
+  // adjust-state-on-prop-change pattern, which the compiler accepts where a
+  // synchronous set inside the effect would cascade.
+  const [prevId, setPrevId] = React.useState<string | null>(null)
+  if (appointmentId !== prevId) {
+    setPrevId(appointmentId)
+    setMoney(null)
+    setNudged(false)
+  }
+
+  React.useEffect(() => {
+    if (!appointmentId) return
+    let cancelled = false
+    async function load() {
+      const supabase = createClient()
+      const [{ data: appt }, { data: payments, error: payError }] = await Promise.all([
+        supabase.from('appointments').select('deposit_status').eq('id', appointmentId!).maybeSingle(),
+        supabase
+          .from('payments')
+          .select('amount_cents')
+          .eq('appointment_id', appointmentId!)
+          .eq('status', 'succeeded'),
+      ])
+      if (cancelled) return
+      setMoney({
+        depositStatus: appt?.deposit_status ?? null,
+        takenCents: payError ? null : (payments ?? []).reduce((n, p) => n + p.amount_cents, 0),
+      })
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [appointmentId])
+
+  async function sendPaymentLink() {
+    if (!appointmentId) return
+    setNudging(true)
+    try {
+      const res = await fetch(`/api/appointments/${appointmentId}/payment-nudge`, { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) {
+        toast.error(data.message ?? 'Could not send the payment notice.')
+        return
+      }
+      setNudged(true)
+      toast.success(`Sent — they can pay the ${formatMoney(data.balance_cents)} balance online.`)
+    } catch {
+      toast.error('Could not send the payment notice.')
+    } finally {
+      setNudging(false)
+    }
+  }
 
   if (!appointment) return null
 
@@ -177,7 +245,8 @@ export function AppointmentModal({
             </div>
           )}
 
-          {/* Financials */}
+          {/* Financials — the live picture: deposit state, what has been
+              taken, and what is still owed, with the ask one tap away. */}
           <div className="space-y-2 border-t border-[var(--color-border)] pt-6">
             <div className="flex items-start gap-3">
               <DollarSign className="mt-0.5 h-5 w-5 text-[var(--color-muted)]" />
@@ -188,10 +257,55 @@ export function AppointmentModal({
                 </div>
                 {appointment.deposit_cents > 0 && (
                   <div className="mt-1 flex items-baseline justify-between">
-                    <p className="text-xs text-[var(--color-muted)]">Deposit</p>
-                    <p className="text-sm tabular-nums">{formatMoney(appointment.deposit_cents)}</p>
+                    <p className="text-xs text-[var(--color-muted)]">
+                      Deposit {formatMoney(appointment.deposit_cents)}
+                    </p>
+                    <p className="text-sm">
+                      {money === null
+                        ? '…'
+                        : money.depositStatus === 'paid'
+                          ? '✓ paid'
+                          : (money.depositStatus ?? 'pending')}
+                    </p>
                   </div>
                 )}
+                {money?.takenCents !== null && money !== null && (
+                  <>
+                    <div className="mt-1 flex items-baseline justify-between">
+                      <p className="text-xs text-[var(--color-muted)]">Paid so far</p>
+                      <p className="text-sm tabular-nums">{formatMoney(money.takenCents)}</p>
+                    </div>
+                    {!['cancelled', 'no_show'].includes(appointment.status) && (
+                      <div className="mt-1 flex items-baseline justify-between">
+                        <p className="text-xs text-[var(--color-muted)]">Balance</p>
+                        <p className="text-sm font-medium tabular-nums">
+                          {formatMoney(Math.max(appointment.total_cents - money.takenCents, 0))}
+                        </p>
+                      </div>
+                    )}
+                  </>
+                )}
+                {appointment.client_id &&
+                  money?.takenCents !== null &&
+                  money !== null &&
+                  !['cancelled', 'no_show'].includes(appointment.status) &&
+                  appointment.total_cents - money.takenCents > 0 && (
+                    <div className="mt-3">
+                      <Button
+                        variant="subtle"
+                        size="sm"
+                        disabled={nudging || nudged}
+                        onClick={sendPaymentLink}
+                      >
+                        <Send className="h-4 w-4" strokeWidth={1.75} />
+                        {nudged
+                          ? 'Payment link sent'
+                          : nudging
+                            ? 'Sending…'
+                            : 'Send payment link to client'}
+                      </Button>
+                    </div>
+                  )}
               </div>
             </div>
           </div>

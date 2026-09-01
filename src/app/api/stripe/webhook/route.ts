@@ -105,6 +105,45 @@ export async function POST(request: NextRequest) {
           )
         }
 
+        if (kind === 'appointment_balance') {
+          const appointmentId = session.metadata?.appointment_id
+          if (!appointmentId) break
+
+          // Idempotency: this session's payment intent is the key. A retry
+          // finds the row it already wrote and stops here.
+          const intent = paymentIntentId(session)
+          if (intent) {
+            const { data: existing } = await admin
+              .from('payments')
+              .select('id')
+              .eq('stripe_payment_intent_id', intent)
+              .eq('kind', 'service')
+              .limit(1)
+            if (existing && existing.length > 0) break
+          }
+
+          const { data: appointment } = await admin
+            .from('appointments')
+            .select('id, client_id')
+            .eq('id', appointmentId)
+            .maybeSingle()
+          if (!appointment) break
+
+          must(
+            await admin.from('payments').insert({
+              amount_cents: session.amount_total ?? 0,
+              method: 'card',
+              kind: 'service',
+              appointment_id: appointmentId,
+              client_id: appointment.client_id,
+              stripe_payment_intent_id: intent,
+              status: 'succeeded',
+              note: 'Balance paid online',
+            }),
+            `record balance payment for ${appointmentId}`
+          )
+        }
+
         if (kind === 'product_order') {
           const orderId = Number(session.metadata?.order_id)
           if (!Number.isInteger(orderId)) break

@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
 import { ButtonLink } from '@/components/ui/button'
 import { CancelAppointment } from '@/components/shared/CancelAppointment'
+import { BalancePayButton } from '@/components/shared/BalancePayButton'
 import { MetaPixelEvent } from '@/components/shared/MetaPixelEvent'
 import { formatMoney, formatDuration } from '@/lib/utils'
 import { formatDateTimeInTimeZone , requestNow } from '@/lib/time'
@@ -20,12 +21,12 @@ const STUDIO_TZ = 'America/Los_Angeles'
 
 interface Props {
   params: Promise<{ id: string }>
-  searchParams: Promise<{ deposit?: string }>
+  searchParams: Promise<{ deposit?: string; balance?: string }>
 }
 
 export default async function AppointmentDetailPage({ params, searchParams }: Props) {
   const { id } = await params
-  const { deposit } = await searchParams
+  const { deposit, balance: balanceParam } = await searchParams
 
   const supabase = await createClient()
   const {
@@ -44,6 +45,15 @@ export default async function AppointmentDetailPage({ params, searchParams }: Pr
     .maybeSingle()
 
   if (!appointment) notFound()
+
+  // What has actually been taken, for the balance the pay button offers. RLS
+  // admits only the client's own rows; the server re-derives at the click.
+  const { data: payments } = await supabase
+    .from('payments')
+    .select('amount_cents')
+    .eq('appointment_id', id)
+    .eq('status', 'succeeded')
+  const takenCents = (payments ?? []).reduce((n, p) => n + p.amount_cents, 0)
 
   const provider = appointment.profiles as {
     display_name: string | null
@@ -73,6 +83,17 @@ export default async function AppointmentDetailPage({ params, searchParams }: Pr
   // occasionally are not.
   const depositSettled = appointment.deposit_status === 'paid'
   const providerName = provider?.first_name ?? provider?.display_name ?? 'the studio'
+
+  // The remaining balance, payable online once the visit is real: not while a
+  // person is still deciding (pending), never on a visit that is not billed,
+  // and not while an unpaid deposit is the thing being asked for.
+  const notBilledHere = appointment.status === 'cancelled' || appointment.status === 'no_show'
+  const balanceCents = notBilledHere ? 0 : Math.max(appointment.total_cents - takenCents, 0)
+  const offerBalance =
+    balanceCents > 0 &&
+    !awaitingApproval &&
+    !notBilledHere &&
+    (appointment.deposit_cents === 0 || depositSettled)
 
   return (
     <div>
@@ -282,6 +303,30 @@ export default async function AppointmentDetailPage({ params, searchParams }: Pr
         <div className="mt-8">
           <h2 className="label-caps mb-2 text-[var(--color-muted)]">Cancellation</h2>
           <p className="text-sm text-[var(--color-muted)]">{appointment.cancellation_reason}</p>
+        </div>
+      )}
+
+      {balanceParam === 'paid' && (
+        <div className="mt-8 border-l-2 border-[var(--color-accent)] bg-[var(--color-clay-soft)] p-5 dark:bg-[var(--color-surface)]">
+          <p className="label-caps">Payment sent</p>
+          <p className="mt-2 text-sm text-[var(--color-muted)]">
+            Thank you — your payment is on its way through. The balance below updates the
+            moment it lands.
+          </p>
+        </div>
+      )}
+
+      {/* Owed and payable — shown for a confirmed or finished visit, not one
+          still waiting on a person. */}
+      {offerBalance && (
+        <div className="mt-8 flex flex-wrap items-center justify-between gap-4 border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
+          <div>
+            <p className="label-caps text-[var(--color-accent)]">Remaining balance</p>
+            <p className="mt-1 text-sm text-[var(--color-muted)]">
+              You can settle it now, or at the studio — whichever suits.
+            </p>
+          </div>
+          <BalancePayButton appointmentId={appointment.id} balanceCents={balanceCents} />
         </div>
       )}
 
