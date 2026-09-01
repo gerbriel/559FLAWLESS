@@ -95,11 +95,11 @@ export function AppointmentModal({
     }
   }, [appointmentId])
 
-  async function sendPaymentLink(kind: 'deposit' | 'balance') {
+  async function sendPaymentLink(kind: 'deposit' | 'balance' | 'forms') {
     if (!appointmentId) return
     setNudging(true)
     try {
-      const res = await fetch(`/api/appointments/${appointmentId}/payment-nudge`, {
+      const res = await fetch(`/api/appointments/${appointmentId}/nudge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ kind }),
@@ -113,7 +113,9 @@ export function AppointmentModal({
       toast.success(
         kind === 'deposit'
           ? `Sent — they can pay the ${formatMoney(data.balance_cents)} deposit online.`
-          : `Sent — they can pay the ${formatMoney(data.balance_cents)} balance online.`
+          : kind === 'balance'
+            ? `Sent — they can pay the ${formatMoney(data.balance_cents)} balance online.`
+            : `Reminder sent — ${data.balance_cents} form${data.balance_cents === 1 ? '' : 's'} outstanding.`
       )
     } catch {
       toast.error('Could not send the payment notice.')
@@ -328,6 +330,24 @@ export function AppointmentModal({
                                 : 'Send balance link'}
                           </Button>
                         )}
+                      {/* The visit's paperwork, remindable ahead of the day.
+                          The server names the outstanding forms and refuses
+                          politely when everything is already signed. */}
+                      {['pending', 'confirmed', 'checked_in'].includes(appointment.status) && (
+                        <Button
+                          variant="subtle"
+                          size="sm"
+                          disabled={nudging || nudged.forms}
+                          onClick={() => sendPaymentLink('forms')}
+                        >
+                          <FileText className="h-4 w-4" strokeWidth={1.75} />
+                          {nudged.forms
+                            ? 'Forms reminder sent'
+                            : nudging
+                              ? 'Sending…'
+                              : 'Send forms reminder'}
+                        </Button>
+                      )}
                     </div>
                   )}
               </div>
