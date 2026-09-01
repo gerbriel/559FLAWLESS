@@ -75,7 +75,9 @@ export function NotificationBell({ count }: { count: number }) {
             aria-label="Close notifications"
             tabIndex={-1}
           />
-          <div className="absolute right-0 top-full z-50 mt-2 w-80 border border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg">
+          {/* Capped to the viewport so a narrow phone never clips the left
+              edge of a right-anchored panel. */}
+          <div className="absolute right-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-1.5rem)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg">
             <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
               <span className="label-caps">Notifications</span>
               {unread > 0 && (

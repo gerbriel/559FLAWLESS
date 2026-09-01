@@ -127,7 +127,7 @@ export function SiteHeader({ categories }: { categories: NavCategory[] }) {
                 Services
               </button>
               {openCategory === 'services' && (
-                <div className="absolute left-1/2 top-full z-50 w-[42rem] -translate-x-1/2 border border-[var(--color-border)] bg-[var(--color-surface)] p-8 shadow-lg">
+                <div className="absolute left-1/2 top-full z-50 w-[42rem] max-w-[calc(100vw-2rem)] -translate-x-1/2 border border-[var(--color-border)] bg-[var(--color-surface)] p-8 shadow-lg">
                   <div className="grid grid-cols-3 gap-x-8 gap-y-6">
                     {categories.map((cat) => (
                       <div key={cat.slug}>

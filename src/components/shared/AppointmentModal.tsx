@@ -57,7 +57,7 @@ export function AppointmentModal({
     takenCents: number | null
   } | null>(null)
   const [nudging, setNudging] = React.useState(false)
-  const [nudged, setNudged] = React.useState(false)
+  const [nudged, setNudged] = React.useState<Record<string, boolean>>({})
   const appointmentId = appointment?.id ?? null
 
   // Reset for a different appointment during render — the documented
@@ -67,7 +67,7 @@ export function AppointmentModal({
   if (appointmentId !== prevId) {
     setPrevId(appointmentId)
     setMoney(null)
-    setNudged(false)
+    setNudged({})
   }
 
   React.useEffect(() => {
@@ -95,18 +95,26 @@ export function AppointmentModal({
     }
   }, [appointmentId])
 
-  async function sendPaymentLink() {
+  async function sendPaymentLink(kind: 'deposit' | 'balance') {
     if (!appointmentId) return
     setNudging(true)
     try {
-      const res = await fetch(`/api/appointments/${appointmentId}/payment-nudge`, { method: 'POST' })
+      const res = await fetch(`/api/appointments/${appointmentId}/payment-nudge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind }),
+      })
       const data = await res.json()
       if (!res.ok) {
         toast.error(data.message ?? 'Could not send the payment notice.')
         return
       }
-      setNudged(true)
-      toast.success(`Sent — they can pay the ${formatMoney(data.balance_cents)} balance online.`)
+      setNudged((cur) => ({ ...cur, [kind]: true }))
+      toast.success(
+        kind === 'deposit'
+          ? `Sent — they can pay the ${formatMoney(data.balance_cents)} deposit online.`
+          : `Sent — they can pay the ${formatMoney(data.balance_cents)} balance online.`
+      )
     } catch {
       toast.error('Could not send the payment notice.')
     } finally {
@@ -286,24 +294,40 @@ export function AppointmentModal({
                   </>
                 )}
                 {appointment.client_id &&
-                  money?.takenCents !== null &&
                   money !== null &&
-                  !['cancelled', 'no_show'].includes(appointment.status) &&
-                  appointment.total_cents - money.takenCents > 0 && (
-                    <div className="mt-3">
-                      <Button
-                        variant="subtle"
-                        size="sm"
-                        disabled={nudging || nudged}
-                        onClick={sendPaymentLink}
-                      >
-                        <Send className="h-4 w-4" strokeWidth={1.75} />
-                        {nudged
-                          ? 'Payment link sent'
-                          : nudging
-                            ? 'Sending…'
-                            : 'Send payment link to client'}
-                      </Button>
+                  !['cancelled', 'no_show'].includes(appointment.status) && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {appointment.deposit_cents > 0 && money.depositStatus !== 'paid' && (
+                        <Button
+                          variant="subtle"
+                          size="sm"
+                          disabled={nudging || nudged.deposit}
+                          onClick={() => sendPaymentLink('deposit')}
+                        >
+                          <Send className="h-4 w-4" strokeWidth={1.75} />
+                          {nudged.deposit
+                            ? 'Deposit link sent'
+                            : nudging
+                              ? 'Sending…'
+                              : 'Send deposit link'}
+                        </Button>
+                      )}
+                      {money.takenCents !== null &&
+                        appointment.total_cents - money.takenCents > 0 && (
+                          <Button
+                            variant="subtle"
+                            size="sm"
+                            disabled={nudging || nudged.balance}
+                            onClick={() => sendPaymentLink('balance')}
+                          >
+                            <Send className="h-4 w-4" strokeWidth={1.75} />
+                            {nudged.balance
+                              ? 'Balance link sent'
+                              : nudging
+                                ? 'Sending…'
+                                : 'Send balance link'}
+                          </Button>
+                        )}
                     </div>
                   )}
               </div>

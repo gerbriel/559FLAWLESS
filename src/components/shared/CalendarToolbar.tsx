@@ -242,7 +242,7 @@ function ToolbarMenu({
         <Panel
           role="menu"
           aria-label={label}
-          className="absolute right-0 z-30 mt-2 min-w-56 overflow-hidden p-1.5 shadow-lg"
+          className="absolute right-0 z-30 mt-2 min-w-56 max-w-[calc(100vw-1rem)] overflow-hidden p-1.5 shadow-lg"
           onClick={() => setOpen(false)}
         >
           {children}
