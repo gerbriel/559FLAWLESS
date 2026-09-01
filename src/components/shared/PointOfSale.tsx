@@ -140,7 +140,9 @@ export function PointOfSale({
   const [lines, setLines] = useState<Line[]>([])
   const [customerId, setCustomerId] = useState('')
   const [walkIn, setWalkIn] = useState('')
-  const [method, setMethod] = useState<'cash' | 'card' | 'other'>('card')
+  const [method, setMethod] = useState<
+    'cash' | 'card' | 'apple_pay' | 'zelle' | 'paypal' | 'venmo' | 'cashapp' | 'other'
+  >('card')
   const [notes, setNotes] = useState('')
   const [busy, setBusy] = useState(false)
   const [receipt, setReceipt] = useState<Receipt | null>(null)
@@ -1059,6 +1061,11 @@ export function PointOfSale({
             >
               <option value="card">Card</option>
               <option value="cash">Cash</option>
+              <option value="apple_pay">Apple Pay</option>
+              <option value="zelle">Zelle</option>
+              <option value="paypal">PayPal</option>
+              <option value="venmo">Venmo</option>
+              <option value="cashapp">Cash App</option>
               <option value="other">Other</option>
             </Select>
           </Field>

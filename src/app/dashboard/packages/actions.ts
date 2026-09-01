@@ -127,7 +127,9 @@ function creditNote(packageName: string, lineName: string): string {
 export async function sellPackage(input: {
   packageId: number
   clientId: string
-  paymentMethod: 'cash' | 'card' | 'other'
+  paymentMethod:
+    | 'cash' | 'card' | 'other'
+    | 'apple_pay' | 'zelle' | 'paypal' | 'venmo' | 'cashapp'
   note?: string | null
 }): Promise<PackageOutcome<PackageSaleResult>> {
   const { supabase, user, error: authError } = await requireFrontDesk()

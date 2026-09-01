@@ -21,7 +21,7 @@ const SaleSchema = z
       )
       .min(1)
       .max(50),
-    paymentMethod: z.enum(['cash', 'card', 'other']),
+    paymentMethod: z.enum(['cash', 'card', 'apple_pay', 'zelle', 'paypal', 'venmo', 'cashapp', 'other']),
     appointmentId: z.string().uuid().nullish(),
     notes: z.string().trim().max(500).nullish(),
   })

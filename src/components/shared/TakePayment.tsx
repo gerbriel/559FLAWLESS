@@ -51,7 +51,9 @@ export function TakePayment({
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [amount, setAmount] = useState((balanceCents / 100).toFixed(2))
-  const [method, setMethod] = useState<'cash' | 'card' | 'gift_card' | 'other'>('card')
+  const [method, setMethod] = useState<
+    'cash' | 'card' | 'gift_card' | 'apple_pay' | 'zelle' | 'paypal' | 'venmo' | 'cashapp' | 'other'
+  >('card')
   const [note, setNote] = useState('')
 
   const paid = payments.reduce((sum, p) => sum + p.amount_cents, 0)
@@ -161,6 +163,11 @@ export function TakePayment({
               >
                 <option value="card">Card</option>
                 <option value="cash">Cash</option>
+                <option value="apple_pay">Apple Pay</option>
+                <option value="zelle">Zelle</option>
+                <option value="paypal">PayPal</option>
+                <option value="venmo">Venmo</option>
+                <option value="cashapp">Cash App</option>
                 <option value="gift_card">Gift card</option>
                 <option value="other">Other</option>
               </Select>

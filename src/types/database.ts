@@ -773,7 +773,10 @@ export type Order = {
   /** 'online' = bought through Stripe; 'in_store' = rung up at the desk. */
   channel: 'online' | 'in_store'
   /** Only set for in_store sales — an online order pays through Stripe. */
-  payment_method: 'cash' | 'card' | 'other' | null
+  payment_method:
+    | 'cash' | 'card' | 'other'
+    | 'apple_pay' | 'zelle' | 'paypal' | 'venmo' | 'cashapp'
+    | null
   staff_notes: string | null
   created_at: string
   updated_at: string
@@ -1068,7 +1071,9 @@ export type GiftCard = {
 export type Payment = {
   id: number
   amount_cents: number
-  method: 'card' | 'cash' | 'gift_card' | 'package' | 'other'
+  method:
+    | 'card' | 'cash' | 'gift_card' | 'package' | 'other'
+    | 'apple_pay' | 'zelle' | 'paypal' | 'venmo' | 'cashapp'
   kind: 'deposit' | 'service' | 'product' | 'gift_card' | 'package' | 'refund'
   order_id: number | null
   appointment_id: string | null
@@ -2217,7 +2222,9 @@ export type Database = {
         Args: {
           p_amount_cents: number
           p_kind: 'deposit' | 'service' | 'product' | 'gift_card' | 'package' | 'refund'
-          p_method?: 'card' | 'cash' | 'gift_card' | 'package' | 'other'
+          p_method?:
+            | 'card' | 'cash' | 'gift_card' | 'package' | 'other'
+            | 'apple_pay' | 'zelle' | 'paypal' | 'venmo' | 'cashapp'
           /** Exactly one of p_appointment / p_order. */
           p_appointment?: string | null
           p_order?: number | null
