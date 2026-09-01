@@ -6,6 +6,7 @@ import * as React from 'react'
 import { toast } from 'sonner'
 import { X, Calendar, Clock, User, FileText, DollarSign, Phone, Mail, Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { TakePayment, type PaymentRecord } from '@/components/shared/TakePayment'
 import { createClient } from '@/lib/supabase/client'
 import { formatMoney } from '@/lib/utils'
 import { formatDateTimeInTimeZone, formatTimeInTimeZone } from '@/lib/time'
@@ -55,7 +56,11 @@ export function AppointmentModal({
   const [money, setMoney] = React.useState<{
     depositStatus: string | null
     takenCents: number | null
+    payments: PaymentRecord[]
   } | null>(null)
+  // Bumped after a payment is recorded in the embedded box, so the figures
+  // above it move without closing the popup.
+  const [reloadKey, setReloadKey] = React.useState(0)
   const [nudging, setNudging] = React.useState(false)
   const [nudged, setNudged] = React.useState<Record<string, boolean>>({})
   const appointmentId = appointment?.id ?? null
@@ -79,21 +84,23 @@ export function AppointmentModal({
         supabase.from('appointments').select('deposit_status').eq('id', appointmentId!).maybeSingle(),
         supabase
           .from('payments')
-          .select('amount_cents')
+          .select('id, amount_cents, method, kind, note, created_at')
           .eq('appointment_id', appointmentId!)
-          .eq('status', 'succeeded'),
+          .eq('status', 'succeeded')
+          .order('created_at'),
       ])
       if (cancelled) return
       setMoney({
         depositStatus: appt?.deposit_status ?? null,
         takenCents: payError ? null : (payments ?? []).reduce((n, p) => n + p.amount_cents, 0),
+        payments: payError ? [] : ((payments ?? []) as PaymentRecord[]),
       })
     }
     void load()
     return () => {
       cancelled = true
     }
-  }, [appointmentId])
+  }, [appointmentId, reloadKey])
 
   async function sendPaymentLink(kind: 'deposit' | 'balance' | 'forms') {
     if (!appointmentId) return
@@ -348,6 +355,27 @@ export function AppointmentModal({
                               : 'Send forms reminder'}
                         </Button>
                       )}
+                    </div>
+                  )}
+
+                {/* Money taken any way at all — cash, Zelle, Venmo, the card
+                    terminal — is recorded HERE, the same box the appointment
+                    page carries. An amount matching an unpaid deposit is
+                    recorded as the deposit and flips it paid; the figures
+                    above move the moment it saves. */}
+                {money !== null &&
+                  money.takenCents !== null &&
+                  !['cancelled', 'no_show'].includes(appointment.status) && (
+                    <div className="mt-4">
+                      <TakePayment
+                        key={reloadKey}
+                        appointmentId={appointment.id}
+                        totalCents={appointment.total_cents}
+                        balanceCents={Math.max(appointment.total_cents - money.takenCents, 0)}
+                        payments={money.payments}
+                        settled={false}
+                        onRecorded={() => setReloadKey((k) => k + 1)}
+                      />
                     </div>
                   )}
               </div>

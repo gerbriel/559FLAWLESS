@@ -39,6 +39,7 @@ export function TakePayment({
   balanceCents,
   payments,
   settled,
+  onRecorded,
 }: {
   appointmentId: string
   totalCents: number
@@ -46,6 +47,8 @@ export function TakePayment({
   payments: PaymentRecord[]
   /** Cancelled and no-show appointments are not billed for the treatment. */
   settled: boolean
+  /** For hosts with their own copy of the money to refresh (the calendar popup). */
+  onRecorded?: () => void
 }) {
   const router = useRouter()
   const [open, setOpen] = useState(false)
@@ -91,6 +94,7 @@ export function TakePayment({
     toast.success(`${formatMoney(cents)} recorded.`)
     setNote('')
     setOpen(false)
+    onRecorded?.()
     router.refresh()
   }
 
