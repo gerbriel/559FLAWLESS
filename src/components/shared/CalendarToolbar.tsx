@@ -2,7 +2,6 @@
 
 import * as React from 'react'
 import {
-  CalendarCheck,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -106,8 +105,8 @@ const VIEW_LABELS: Record<CalendarView, string> = {
 
 /** The pill shape the whole right-hand run shares. 44px tall, thumb-sized. */
 const PILL =
-  'inline-flex min-h-11 items-center gap-2 rounded-full border border-[var(--color-border)] ' +
-  'bg-[var(--color-surface)] px-4 text-sm transition-colors hover:border-[var(--color-accent)] ' +
+  'inline-flex h-9 items-center gap-1.5 rounded-full border border-[var(--color-border)] ' +
+  'bg-[var(--color-surface)] px-3 text-sm transition-colors hover:border-[var(--color-accent)] ' +
   'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ' +
   'focus-visible:outline-[var(--color-accent)]'
 
@@ -150,14 +149,6 @@ function shortDateLabel(dateKey: string): string {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
-  })
-}
-
-function shortMonthLabel(dateKey: string): string {
-  const [y, mo] = dateKey.split('-').map(Number)
-  return new Date(Date.UTC(y, mo - 1, 1)).toLocaleDateString('en-US', {
-    timeZone: 'UTC',
-    month: 'short',
   })
 }
 
@@ -347,66 +338,59 @@ export function CalendarToolbar({
       // The bar is how you move through the book, so it stays put while the
       // grid scrolls under it. The negative margin lets its background reach
       // the full width of the main column, which `px-6 lg:px-10` gives it.
-      className="sticky top-16 z-20 -mx-6 border-b border-[var(--color-border)] bg-[var(--color-background)] px-6 py-3 lg:-mx-10 lg:px-10"
+      className="sticky top-16 z-20 -mx-6 border-b border-[var(--color-border)] bg-[var(--color-background)] px-6 py-1.5 lg:-mx-10 lg:px-10"
       left={
+        // Google Calendar's grammar, at its size: Today, the arrows, then the
+        // date as the row's title. The display-face month and the boxed date
+        // pill were most of the bar's height, and said less than this does.
         <>
-          <span className="display mr-1 text-3xl leading-none">
-            {shortMonthLabel(currentDate)}
-          </span>
-
           <button
             type="button"
-            data-ui="tile"
+            data-ui="button"
             onClick={() => onDateChange(todayKey)}
             aria-current={onToday ? 'date' : undefined}
             className={cn(
-              'flex h-11 w-11 items-center justify-center border bg-[var(--color-surface)] transition-colors',
+              'inline-flex h-9 items-center rounded-full border px-3.5 text-sm transition-colors',
               onToday
                 ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
-                : 'border-[var(--color-border)] hover:border-[var(--color-accent)]'
+                : 'border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-accent)]'
             )}
           >
-            <CalendarCheck className="h-4 w-4" strokeWidth={1.5} aria-hidden />
-            <span className="sr-only">Jump to today</span>
+            Today
           </button>
 
-          <div className="flex items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface)]">
+          <div className="flex items-center">
             <button
               type="button"
               onClick={() => onDateChange(shiftDateKey(currentDate, view, -1))}
-              className="flex h-11 w-11 items-center justify-center rounded-full text-[var(--color-muted)] transition-colors hover:text-[var(--color-foreground)]"
+              className="flex h-9 w-9 items-center justify-center rounded-full text-[var(--color-muted)] transition-colors hover:bg-[var(--color-linen)] hover:text-[var(--color-foreground)] dark:hover:bg-[var(--color-surface)]"
             >
               <ChevronLeft className="h-4 w-4" strokeWidth={2} aria-hidden />
               <span className="sr-only">Previous {VIEW_LABELS[view].toLowerCase()}</span>
             </button>
-
-            <span className="whitespace-nowrap px-1 text-sm tabular-nums">
-              {shortDateLabel(currentDate)}
-            </span>
-
             <button
               type="button"
               onClick={() => onDateChange(shiftDateKey(currentDate, view, 1))}
-              className="flex h-11 w-11 items-center justify-center rounded-full text-[var(--color-muted)] transition-colors hover:text-[var(--color-foreground)]"
+              className="flex h-9 w-9 items-center justify-center rounded-full text-[var(--color-muted)] transition-colors hover:bg-[var(--color-linen)] hover:text-[var(--color-foreground)] dark:hover:bg-[var(--color-surface)]"
             >
               <ChevronRight className="h-4 w-4" strokeWidth={2} aria-hidden />
               <span className="sr-only">Next {VIEW_LABELS[view].toLowerCase()}</span>
             </button>
           </div>
+
+          <span className="whitespace-nowrap text-base sm:text-lg">
+            {shortDateLabel(currentDate)}
+          </span>
         </>
       }
       right={
         <>
-          {/* The shared Button shrinks to 36px from `sm` up, which is right for
-              a form and wrong for a row of controls the studio steers the day
-              with — and it would leave this one short beside the hand-rolled
-              pills either side. Held at 44 in both directions. */}
           <ButtonLink
             href={settingsHref}
             variant="subtle"
             size="icon"
             aria-label="Scheduling settings"
-            className="sm:h-11 sm:w-11"
+            className="h-9 w-9 sm:h-9 sm:w-9"
           >
             <Settings2 className="h-4 w-4" strokeWidth={1.5} aria-hidden />
           </ButtonLink>
@@ -513,7 +497,7 @@ export function CalendarToolbar({
                 <button
                   type="button"
                   onClick={() => onProviderFilterChange([])}
-                  className="flex h-11 w-11 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-foreground)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]"
+                  className="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-foreground)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]"
                 >
                   <X className="h-4 w-4" strokeWidth={2} aria-hidden />
                   <span className="sr-only">Show everyone</span>
@@ -532,7 +516,7 @@ export function CalendarToolbar({
                 href="/dashboard/waitlist"
                 variant="outline"
                 size="sm"
-                className="sm:h-11"
+                className="hidden h-9 sm:inline-flex"
               >
                 Waitlist
               </ButtonLink>
@@ -540,7 +524,7 @@ export function CalendarToolbar({
                 href="/dashboard/sell"
                 variant="outline"
                 size="sm"
-                className="sm:h-11"
+                className="hidden h-9 sm:inline-flex"
               >
                 Quick sale
               </ButtonLink>
@@ -550,7 +534,7 @@ export function CalendarToolbar({
                 href={`/dashboard/appointments/book-for-client?date=${currentDate}`}
                 variant="primary"
                 size="sm"
-                className="sm:h-11"
+                className="h-9"
               >
                 <Plus className="h-4 w-4" strokeWidth={2} aria-hidden />
                 Add
