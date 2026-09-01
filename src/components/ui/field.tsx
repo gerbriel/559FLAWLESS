@@ -4,8 +4,11 @@ import { cn } from '@/lib/utils'
 // min-h-11 keeps every input a comfortable touch target; text-base stops
 // iOS Safari zooming the viewport when a field is focused (it does that for
 // anything under 16px).
+// min-w-0 matters on phones: a select's intrinsic width is its longest
+// option, and inside a grid column that forced the whole page wider than the
+// screen — "things getting cut off" on the intake and onboarding forms.
 const control =
-  'w-full min-h-11 border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5 text-base sm:text-sm ' +
+  'w-full min-w-0 max-w-full min-h-11 border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5 text-base sm:text-sm ' +
   'text-[var(--color-foreground)] placeholder:text-[var(--color-muted)] ' +
   'focus:border-[var(--color-accent)] focus:outline-none disabled:opacity-50'
 
@@ -61,7 +64,7 @@ export function Field({
   className?: string
 }) {
   return (
-    <div className={className}>
+    <div className={cn('min-w-0', className)}>
       <Label htmlFor={htmlFor}>{label}</Label>
       {children}
       {hint && !error && <p className="mt-1.5 text-xs text-[var(--color-muted)]">{hint}</p>}

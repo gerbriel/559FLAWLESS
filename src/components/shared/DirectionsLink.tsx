@@ -57,6 +57,8 @@ export function DirectionsLink({
   showIcon?: boolean
 }) {
   const [open, setOpen] = useState(false)
+  // Left-anchored unless that would run past the screen's right edge.
+  const [alignRight, setAlignRight] = useState(false)
   const [copied, setCopied] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -110,7 +112,12 @@ export function DirectionsLink({
     <div ref={ref} className="relative inline-block">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          // Measured at the click, not in render — refs are for handlers.
+          const r = ref.current?.getBoundingClientRect()
+          if (r) setAlignRight(r.left > window.innerWidth - 248)
+          setOpen((o) => !o)
+        }}
         aria-expanded={open}
         aria-haspopup="menu"
         className={cn(
@@ -135,7 +142,10 @@ export function DirectionsLink({
       {open && (
         <div
           role="menu"
-          className="absolute bottom-full left-0 z-50 mb-2 w-60 border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl"
+          className={cn(
+            'absolute bottom-full z-50 mb-2 w-60 max-w-[calc(100vw-1rem)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl',
+            alignRight ? 'right-0' : 'left-0'
+          )}
         >
           <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-2.5">
             <span className="label-caps text-[var(--color-muted)]">Open in</span>

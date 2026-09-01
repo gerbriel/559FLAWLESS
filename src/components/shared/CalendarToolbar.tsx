@@ -200,6 +200,10 @@ function ToolbarMenu({
   className?: string
 }) {
   const [open, setOpen] = React.useState(false)
+  // A right-anchored panel spills past the screen's LEFT edge when its
+  // trigger sits too far left (the Day pill on a phone) — measured at the
+  // click, the panel anchors to whichever side actually has the room.
+  const [alignLeft, setAlignLeft] = React.useState(false)
   const root = React.useRef<HTMLDivElement>(null)
 
   React.useEffect(() => {
@@ -226,7 +230,11 @@ function ToolbarMenu({
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          const r = root.current?.getBoundingClientRect()
+          if (r) setAlignLeft(r.right < 248)
+          setOpen((o) => !o)
+        }}
         className={cn(PILL, open && 'border-[var(--color-accent)]')}
       >
         <span className="sr-only">{label},</span>
@@ -242,7 +250,10 @@ function ToolbarMenu({
         <Panel
           role="menu"
           aria-label={label}
-          className="absolute right-0 z-30 mt-2 min-w-56 max-w-[calc(100vw-1rem)] overflow-hidden p-1.5 shadow-lg"
+          className={cn(
+            'absolute z-30 mt-2 min-w-56 max-w-[calc(100vw-1rem)] overflow-hidden p-1.5 shadow-lg',
+            alignLeft ? 'left-0' : 'right-0'
+          )}
           onClick={() => setOpen(false)}
         >
           {children}
