@@ -1,7 +1,6 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Check, ChevronLeft, ChevronRight, Clock, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -104,7 +103,6 @@ export function BookingFlow({
   signedInName?: { first: string; last: string } | null
   signedInPhone?: string | null
 }) {
-  const router = useRouter()
 
   // Deep link from a service page (/book?service=brazilian-wax) is resolved in
   // the initializers, not an effect: it is the starting state, not a reaction
@@ -462,7 +460,13 @@ export function BookingFlow({
         setCheckoutBlocked(true)
       }
 
-      router.refresh()
+      // Deliberately NO router.refresh() here. The confirmation below renders
+      // from client state alone, and refreshing re-runs /book's server half —
+      // a gatekeeper that redirects to /login or /account/complete whenever a
+      // check says so (a mid-flight session-token rotation is enough). That
+      // navigation tore this screen down after one painted frame, on the one
+      // page a client cannot come back to. Nothing here needs fresher server
+      // data; the next real navigation refetches everything anyway.
     } catch {
       setError('We could not reach the booking service. Please try again.')
     } finally {
