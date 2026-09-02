@@ -117,6 +117,31 @@ export async function POST(request: NextRequest) {
       ban_duration: '876000h',
     })
     if (authError) console.error('auth identity scrub failed', user.id, authError)
+
+    // The email rewrite frees their ADDRESS, but an OAuth identity binds by
+    // provider id, not email — left in place, Google kept resolving that
+    // person to this banned shell forever, and every later "Sign in with
+    // Google" died with "User is banned". Unlink every social identity so
+    // deleting an account really does let someone start over. Straight to the
+    // admin REST endpoint: the JS client has no admin-side unlink.
+    try {
+      const { data: fresh } = await admin.auth.admin.getUserById(user.id)
+      for (const identity of fresh?.user?.identities ?? []) {
+        if (identity.provider === 'email') continue
+        await fetch(
+          `${process.env.NEXT_PUBLIC_SUPABASE_URL}/auth/v1/admin/users/${user.id}/identities/${identity.identity_id}`,
+          {
+            method: 'DELETE',
+            headers: {
+              apikey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+              Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY!}`,
+            },
+          }
+        )
+      }
+    } catch (err) {
+      console.error('social identity unlink failed', user.id, err)
+    }
   }
 
   // Kill every session everywhere, not just this browser. Their tokens should
