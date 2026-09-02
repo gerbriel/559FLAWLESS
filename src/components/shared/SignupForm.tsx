@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { trackMetaEvent } from '@/components/shared/MetaPixelEvent'
 import { Button } from '@/components/ui/button'
 import { Field, Input } from '@/components/ui/field'
 
@@ -75,6 +76,9 @@ export function SignupForm() {
       )
       return
     }
+
+    // The account exists from here on, whichever branch renders next.
+    trackMetaEvent('Lead')
 
     // No session means the project requires email confirmation.
     if (!data.session) {

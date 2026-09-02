@@ -28,7 +28,7 @@ import { trackEvent } from '@/components/shared/AnalyticsTracker'
 import { clearConsidered, rememberConsidered } from '@/lib/interest'
 import { FormRequirementChecker } from '@/components/shared/FormRequirementChecker'
 import { DepositRedirect } from '@/components/shared/DepositRedirect'
-import { MetaPixelEvent } from '@/components/shared/MetaPixelEvent'
+import { MetaPixelEvent, trackMetaEvent } from '@/components/shared/MetaPixelEvent'
 import { WaitlistJoin } from '@/components/booking/WaitlistJoin'
 import { SignedInAs, backfillProfile } from '@/components/shared/SignedInIdentity'
 
@@ -356,6 +356,16 @@ export function BookingFlow({
 
     setSubmitting(true)
     setError(null)
+
+    // At the press of Confirm, before the outcome: the client initiated the
+    // booking's checkout whether or not the slot survives the race.
+    trackMetaEvent('InitiateCheckout', {
+      content_ids: selected.map((s) => String(s.id)),
+      content_type: 'product',
+      num_items: selected.length,
+      value: totalCents / 100,
+      currency: 'USD',
+    })
 
     try {
       const res = await fetch('/api/book', {

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Lock, Send } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { trackMetaEvent } from '@/components/shared/MetaPixelEvent'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/field'
 import { cn } from '@/lib/utils'
@@ -99,6 +100,11 @@ export function MessageThreadView({
       toast.error('Could not send that. Please try again.')
       return
     }
+
+    // The ad-funnel Contact, client side only — staff replying to their own
+    // inbox is not a conversion. The public contact form's thanks page fires
+    // its own; this covers the signed-in messenger.
+    if (!asStaff) trackMetaEvent('Contact')
 
     setMessages((m) => (m.some((x) => x.id === data.id) ? m : [...m, data]))
     setBody('')

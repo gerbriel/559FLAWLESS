@@ -38,7 +38,7 @@ declare global {
  * contract as the component below: marketing must never break the shop.
  */
 export function trackMetaEvent(
-  event: 'AddToCart' | 'InitiateCheckout',
+  event: 'AddToCart' | 'InitiateCheckout' | 'Contact' | 'Lead',
   params: Record<string, unknown> = {}
 ) {
   try {
