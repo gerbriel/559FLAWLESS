@@ -21,8 +21,14 @@ const BATCH = 30
  *  forever — the bell already told them, and stale email is worse than none. */
 const GIVE_UP_MS = 3 * 24 * 60 * 60 * 1000
 
+/** The sender, overridable by env. The default is at the studio's own domain,
+ *  which is what the Resend account verifies. */
+function emailFrom(): string {
+  return process.env.EMAIL_FROM ?? '559 Flawless <hello@559flawless.com>'
+}
+
 export function emailConfigured(): boolean {
-  return Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM)
+  return Boolean(process.env.RESEND_API_KEY)
 }
 
 function esc(text: string): string {
@@ -108,7 +114,7 @@ export async function dispatchNotificationEmails(): Promise<DispatchResult> {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          from: process.env.EMAIL_FROM,
+          from: emailFrom(),
           to: address,
           subject: n.title,
           html: emailHtml(n.title, n.body, n.link),
