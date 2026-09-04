@@ -5,7 +5,17 @@ import { useRouter } from 'next/navigation'
 import Image from 'next/image'
 import Link from 'next/link'
 import { toast } from 'sonner'
-import { Search, Plus, Minus, Trash2, ExternalLink, Check, Package, Layers } from 'lucide-react'
+import {
+  Search,
+  Plus,
+  Minus,
+  Trash2,
+  ExternalLink,
+  Check,
+  Package,
+  Layers,
+  Scissors,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Field, Input, Select } from '@/components/ui/field'
@@ -55,6 +65,14 @@ export interface SellablePackage {
   price_cents: number
   /** 0 means it never lapses. */
   valid_days: number
+}
+
+export interface SellableService {
+  id: number
+  name: string
+  price_cents: number
+  duration_minutes: number
+  category: string
 }
 
 export interface CustomerOption {
@@ -124,6 +142,8 @@ export function PointOfSale({
   customers,
   taxRate,
   packages,
+  services,
+  canDiscount = false,
 }: {
   products: SellableProduct[]
   customers: CustomerOption[]
@@ -134,6 +154,10 @@ export function PointOfSale({
    * switch is not drawn at all.
    */
   packages?: SellablePackage[]
+  /** Treatments sellable at the counter. Same contract: absent = no tab. */
+  services?: SellableService[]
+  /** Manager and up: the hand-typed discount. Verified again server-side. */
+  canDiscount?: boolean
 }) {
   const router = useRouter()
   const [search, setSearch] = useState('')
@@ -195,12 +219,18 @@ export function PointOfSale({
   }, [packages])
 
   const packageList = packages ?? fetchedPackages ?? []
-  const [mode, setMode] = useState<'retail' | 'prepaid'>('retail')
+  const [mode, setMode] = useState<'retail' | 'services' | 'prepaid'>('retail')
+  // Services mode: each tap adds one line; two facials really are two lines.
+  const [serviceLines, setServiceLines] = useState<SellableService[]>([])
+  // The manager's discount, in dollars as typed. Parsed at use, capped server-side.
+  const [discount, setDiscount] = useState('')
   const [packageId, setPackageId] = useState<number | null>(null)
   // A package sale is one package. Two courses for the same person are two
   // balances, and two balances are two sales — there is no quantity here.
   const chosenPackage = packageList.find((p) => p.id === packageId) ?? null
   const sellingPackage = packageList.length > 0 && mode === 'prepaid'
+  const serviceList = services ?? []
+  const sellingServices = serviceList.length > 0 && mode === 'services'
 
   // One cue at a time, cleared a beat after the animation ends. Guarded by seq
   // so a later tap's timer is the only one that can retire it.
@@ -229,16 +259,26 @@ export function PointOfSale({
   }, [products, search])
 
   const retailSubtotal = lines.reduce((s, l) => s + l.product.price_cents * l.qty, 0)
-  // Integer cents in, integer cents out — the rate is the only fraction in the
-  // building and it never survives past this line.
-  const retailTax = Math.round(retailSubtotal * taxRate)
+  const servicesSubtotal = serviceLines.reduce((s, l) => s + l.price_cents, 0)
 
-  // No tax on a package: it buys service time, and services are not taxable in
-  // California. Writing 8.35% of it into the order would invent a liability
-  // nobody will ever be asked for.
-  const subtotal = sellingPackage ? (chosenPackage?.price_cents ?? 0) : retailSubtotal
-  const tax = sellingPackage ? 0 : retailTax
-  const total = subtotal + tax
+  // The manager's discount, cents. Preview only — the routes re-verify the
+  // role and cap it; a mistyped value can only make the preview read high.
+  const manualDiscount =
+    canDiscount && !sellingPackage
+      ? Math.max(0, Math.round((Number(discount.replace(/[$,\s]/g, '')) || 0) * 100))
+      : 0
+
+  // No tax on a package or a service: both buy treatment time, and services
+  // are not taxable in California. Products tax what is actually paid — the
+  // discounted figure, integer cents in and out.
+  const subtotal = sellingPackage
+    ? (chosenPackage?.price_cents ?? 0)
+    : sellingServices
+      ? servicesSubtotal
+      : retailSubtotal
+  const afterDiscount = Math.max(subtotal - (sellingPackage ? 0 : manualDiscount), 0)
+  const tax = sellingPackage || sellingServices ? 0 : Math.round(afterDiscount * taxRate)
+  const total = afterDiscount + tax
 
   /**
    * Add one of something, and say so on its tile.
@@ -461,9 +501,66 @@ export function PointOfSale({
     }
   }
 
+  async function ringUpServices() {
+    if (serviceLines.length === 0) {
+      toast.error('Add a service to the sale first.')
+      return
+    }
+    if (!customerId && !walkIn.trim()) {
+      toast.error('Pick a client or type a name for the walk-in.')
+      return
+    }
+
+    setBusy(true)
+    try {
+      const res = await fetch('/api/pos/service-sale', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientId: customerId || null,
+          guestName: customerId ? null : walkIn.trim(),
+          serviceIds: serviceLines.map((l) => l.id),
+          paymentMethod: method,
+          notes: notes.trim() || null,
+          discountCents: manualDiscount,
+        }),
+      })
+      const data = await res.json()
+
+      if (!res.ok) {
+        toast.error(data.message ?? 'Could not complete that sale.')
+        return
+      }
+
+      setReceipt({
+        order_number: null,
+        subtotal_cents: data.subtotal_cents,
+        tax_cents: 0,
+        total_cents: data.total_cents,
+        customer: customerId
+          ? (customers.find((c) => c.id === customerId)?.name ?? 'Client')
+          : walkIn.trim(),
+      })
+      setServiceLines([])
+      setDiscount('')
+      setCustomerId('')
+      setWalkIn('')
+      setNotes('')
+      router.refresh()
+    } catch {
+      toast.error('Could not reach the till. Please try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function ringUp() {
     if (sellingPackage) {
       await ringUpPackage()
+      return
+    }
+    if (sellingServices) {
+      await ringUpServices()
       return
     }
     if (lines.length === 0) {
@@ -486,6 +583,7 @@ export function PointOfSale({
           items: lines.map((l) => ({ productId: l.product.id, qty: l.qty })),
           paymentMethod: method,
           notes: notes.trim() || null,
+          discountCents: manualDiscount,
         }),
       })
       const data = await res.json()
@@ -590,7 +688,7 @@ export function PointOfSale({
       <div>
         {/* Drawn only when there is something behind it. A studio that has
             never priced a package sees the till exactly as it was. */}
-        {packageList.length > 0 && (
+        {(packageList.length > 0 || serviceList.length > 0) && (
           <div
             data-ui="tile"
             role="group"
@@ -599,9 +697,14 @@ export function PointOfSale({
           >
             {(
               [
-                { value: 'retail', label: 'Products', icon: Package },
-                { value: 'prepaid', label: 'Packages', icon: Layers },
-              ] as const
+                { value: 'retail' as const, label: 'Products', icon: Package },
+                ...(serviceList.length > 0
+                  ? [{ value: 'services' as const, label: 'Services', icon: Scissors }]
+                  : []),
+                ...(packageList.length > 0
+                  ? [{ value: 'prepaid' as const, label: 'Packages', icon: Layers }]
+                  : []),
+              ]
             ).map((tab) => {
               const on = mode === tab.value
               const Icon = tab.icon
@@ -627,7 +730,35 @@ export function PointOfSale({
           </div>
         )}
 
-        {sellingPackage ? (
+        {sellingServices ? (
+          <>
+            <p className="max-w-prose text-sm text-[var(--color-muted)]">
+              A treatment rung up at the counter. It lands on the book as a completed
+              visit — stock, points, deals and reports all follow — and no sales tax
+              is charged, because what they are buying is treatment time.
+            </p>
+
+            <ul className="mt-5 grid gap-px border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-2 xl:grid-cols-3">
+              {serviceList.map((svc) => (
+                <li key={svc.id}>
+                  <button
+                    type="button"
+                    onClick={() => setServiceLines((cur) => [...cur, svc])}
+                    className="flex w-full flex-col gap-1 bg-[var(--color-background)] p-4 text-left transition-colors hover:bg-[var(--color-linen)] dark:hover:bg-[var(--color-surface)]"
+                  >
+                    <span className="label-caps text-[0.5625rem] text-[var(--color-muted)]">
+                      {svc.category}
+                    </span>
+                    <span className="text-sm">{svc.name}</span>
+                    <span className="text-xs tabular-nums text-[var(--color-muted)]">
+                      {formatMoney(svc.price_cents)} · {svc.duration_minutes} min
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : sellingPackage ? (
           <>
             <p className="max-w-prose text-sm text-[var(--color-muted)]">
               A course paid for once and drawn down a session at a time. It goes on the
@@ -924,6 +1055,33 @@ export function PointOfSale({
                 </button>
               </div>
             )
+          ) : sellingServices ? (
+            serviceLines.length === 0 ? (
+              <p className="mt-4 text-sm text-[var(--color-muted)]">Nothing added yet.</p>
+            ) : (
+              <ul className="mt-4 space-y-3">
+                {serviceLines.map((svc, i) => (
+                  <li key={`${svc.id}-${i}`} className="flex items-center gap-2.5 text-sm">
+                    <div className="min-w-0 flex-1">
+                      <span className="block truncate">{svc.name}</span>
+                      <span className="text-xs tabular-nums text-[var(--color-muted)]">
+                        {formatMoney(svc.price_cents)}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setServiceLines((cur) => cur.filter((_, idx) => idx !== i))
+                      }
+                      className="flex h-8 w-8 items-center justify-center text-[var(--color-muted)] hover:text-red-700"
+                      aria-label={`Remove ${svc.name}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )
           ) : lines.length === 0 ? (
             <p className="mt-4 text-sm text-[var(--color-muted)]">Nothing added yet.</p>
           ) : (
@@ -995,14 +1153,20 @@ export function PointOfSale({
               <dt className="text-[var(--color-muted)]">Subtotal</dt>
               <dd className="tabular-nums">{formatMoney(subtotal)}</dd>
             </div>
+            {manualDiscount > 0 && (
+              <div className="flex justify-between">
+                <dt className="text-[var(--color-muted)]">Discount</dt>
+                <dd className="tabular-nums">&minus;{formatMoney(Math.min(manualDiscount, subtotal))}</dd>
+              </div>
+            )}
             <div className="flex justify-between">
               <dt className="text-[var(--color-muted)]">
-                {sellingPackage
+                {sellingPackage || sellingServices
                   ? 'Tax'
                   : `Tax ${(taxRate * 100).toFixed(2).replace(/\.?0+$/, '')}%`}
               </dt>
               <dd className="tabular-nums">
-                {sellingPackage ? (
+                {sellingPackage || sellingServices ? (
                   <span className="text-[var(--color-muted)]">Not taxable</span>
                 ) : (
                   formatMoney(tax)
@@ -1014,6 +1178,20 @@ export function PointOfSale({
               <dd className="tabular-nums">{formatMoney(total)}</dd>
             </div>
           </dl>
+
+          {/* The manager's hand on the price — off before tax, re-verified
+              and capped server-side. Absent for everyone else. */}
+          {canDiscount && !sellingPackage && (
+            <Field label="Discount ($)" htmlFor="pos_discount" className="mt-4">
+              <Input
+                id="pos_discount"
+                inputMode="decimal"
+                placeholder="0"
+                value={discount}
+                onChange={(e) => setDiscount(e.target.value)}
+              />
+            </Field>
+          )}
         </div>
 
         <div className="mt-5 space-y-4 border border-[var(--color-border)] bg-[var(--color-surface)] p-5">

@@ -6,7 +6,7 @@ import {
   type SellableProduct,
   type SellablePackage,
 } from '@/components/shared/PointOfSale'
-import { isFrontDesk, type UserRole } from '@/types/database'
+import { isManager, isFrontDesk, type UserRole } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
 
@@ -30,7 +30,7 @@ export default async function SellPage() {
     redirect('/dashboard')
   }
 
-  const [{ data: products }, { data: clients }, { data: rateSetting }, { data: packages }] =
+  const [{ data: products }, { data: clients }, { data: rateSetting }, { data: packages }, { data: services }] =
     await Promise.all([
     supabase
       .from('products')
@@ -62,6 +62,13 @@ export default async function SellPage() {
       .eq('is_active', true)
       .order('sort_order')
       .order('name'),
+    // The counter sells treatments too (services mode of the till).
+    supabase
+      .from('services')
+      .select('id, name, price_cents, duration_minutes, service_categories(name)')
+      .eq('is_active', true)
+      .eq('requires_consultation', false)
+      .order('sort_order')
   ])
 
   const parsedRate = Number(rateSetting?.text_value)
@@ -124,6 +131,15 @@ export default async function SellPage() {
         customers={customers}
         taxRate={taxRate}
         packages={sellablePackages}
+        services={(services ?? []).map((s) => ({
+          id: s.id,
+          name: s.name,
+          price_cents: s.price_cents,
+          duration_minutes: s.duration_minutes,
+          category:
+            (s.service_categories as unknown as { name: string } | null)?.name ?? 'Other',
+        }))}
+        canDiscount={isManager((profile?.role ?? 'provider') as UserRole)}
       />
     </div>
   )

@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { multibuyDiscountCents, multibuyPromo, type PromotionRule } from '@/lib/promotions'
-import { isFrontDesk } from '@/types/database'
+import { isFrontDesk, isManager, type UserRole } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,6 +24,8 @@ const SaleSchema = z
     paymentMethod: z.enum(['cash', 'card', 'apple_pay', 'zelle', 'paypal', 'venmo', 'cashapp', 'other']),
     appointmentId: z.string().uuid().nullish(),
     notes: z.string().trim().max(500).nullish(),
+    /** Manager-only, verified below. Integer cents off before tax. */
+    discountCents: z.number().int().min(0).max(1_000_000).default(0),
   })
   .refine((v) => v.clientId || v.guestName, {
     message: 'Name the customer, even if only as a walk-in.',
@@ -165,12 +167,20 @@ export async function POST(request: NextRequest) {
     .eq('is_active', true)
     .eq('kind', 'product_multibuy')
   const multibuy = multibuyPromo((promoRows ?? []) as PromotionRule[], Date.now())
-  const discount = multibuy
+  const promoDiscount = multibuy
     ? multibuyDiscountCents(
         multibuy,
         lines.flatMap((l) => Array<number>(l.qty).fill(l.unit_price_cents))
       )
     : 0
+
+  // The manager's hand-typed discount rides on top of the running deal but is
+  // verified HERE — a front-desk request simply loses the field, and the sum
+  // can never exceed what is being sold.
+  const manual = isManager(staff.role as UserRole)
+    ? Math.min(parsed.data.discountCents, Math.max(subtotal - promoDiscount, 0))
+    : 0
+  const discount = promoDiscount + manual
 
   const { data: rateSetting } = await admin
     .from('site_settings')
@@ -268,13 +278,13 @@ export async function POST(request: NextRequest) {
 
   // The deal's paper trail — who it was and how much came off. Best effort:
   // the sale stands either way.
-  if (multibuy && discount > 0) {
+  if (multibuy && promoDiscount > 0) {
     const { error: redemptionError } = await admin.from('promotion_redemptions').insert({
       promotion_id: multibuy.id,
       promotion_name: multibuy.name,
       client_id: clientId ?? null,
       order_id: paid.id,
-      discount_cents: discount,
+      discount_cents: promoDiscount,
     })
     if (redemptionError) {
       void logError('pos/sale', redemptionError.message, { step: 'promo_redemption', order_id: paid.id })
