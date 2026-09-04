@@ -212,7 +212,7 @@ export function SiteHeader({ categories }: { categories: NavCategory[] }) {
               <User className="h-5 w-5" strokeWidth={1.5} />
             </Link>
 
-            <ButtonLink href="/book" size="sm" className="hidden h-11 sm:inline-flex">
+            <ButtonLink href="/services" size="sm" className="hidden h-11 sm:inline-flex">
               Book now
             </ButtonLink>
 
@@ -301,7 +301,7 @@ export function SiteHeader({ categories }: { categories: NavCategory[] }) {
               >
                 My account
               </Link>
-              <ButtonLink href="/book" className="w-full" onClick={() => setMobileOpen(false)}>
+              <ButtonLink href="/services" className="w-full" onClick={() => setMobileOpen(false)}>
                 Book now
               </ButtonLink>
             </nav>

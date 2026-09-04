@@ -84,7 +84,7 @@ export default async function HomePage() {
               {hero.sub}
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:mt-10 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
-              <ButtonLink href="/book" size="lg" data-edit-field="cta" className="w-full sm:w-auto">
+              <ButtonLink href="/services" size="lg" data-edit-field="cta" className="w-full sm:w-auto">
                 {hero.cta ?? 'Book an appointment'}
               </ButtonLink>
               <ButtonLink href="/services" variant="outline" size="lg" className="w-full sm:w-auto">
@@ -323,7 +323,7 @@ export default async function HomePage() {
             Appointments only — it is a single-room studio, so booking ahead is the
             only way to hold a slot.
           </p>
-          <ButtonLink href="/book" variant="accent" size="lg" className="mt-10">
+          <ButtonLink href="/services" variant="accent" size="lg" className="mt-10">
             Book an appointment
           </ButtonLink>
         </Container>

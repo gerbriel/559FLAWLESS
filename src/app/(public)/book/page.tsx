@@ -196,31 +196,29 @@ export default async function BookPage({ searchParams }: Props) {
       }
     | null
 
-  // Booking requires an account. The studio holds treatment history, consent
-  // signatures and health answers against a person, and a guest booking has
-  // nowhere to put any of it — the record would start over every visit.
-  // The chosen studio rides along, so signing in does not drop them back to the
-  // location step they just completed.
+  // Booking still requires an account — the studio holds treatment history,
+  // consent and health answers against a person. What changed is WHEN: a
+  // visitor browses services, picks a provider and a time first, and creates
+  // the account at the moment of confirming, inline in the details step.
+  // Bouncing them to /login before they had seen a single open slot was the
+  // funnel's biggest leak.
   const bookingParams = new URLSearchParams()
   if (locationSlug) bookingParams.set('location', locationSlug)
   if (serviceSlug) bookingParams.set('service', serviceSlug)
   if (addSlugs.length > 0) bookingParams.set('add', addSlugs.join(','))
   const bookingUrl = `/book${bookingParams.size ? `?${bookingParams}` : ''}`
-  if (!user) {
-    redirect(`/login?next=${encodeURIComponent(bookingUrl)}`)
-  }
 
   // Signed in but missing the details a booking needs. Same reasoning as the
   // auth callback; this catches the account made before that step existed.
-  if (profile?.role === 'client' && !isProfileComplete(profile)) {
+  if (user && profile?.role === 'client' && !isProfileComplete(profile)) {
     redirect(`/account/complete?next=${encodeURIComponent(bookingUrl)}`)
   }
 
   // First visit? The flow shows the new-client deal only to someone it can
   // apply to. Presentation only — the engine re-derives this at booking, so a
   // stale answer here can never mis-price anyone.
-  let isNewClient = false
-  {
+  let isNewClient = !user
+  if (user) {
     const { count: priorVisits } = await supabase
       .from('appointments')
       .select('id', { count: 'exact', head: true })
@@ -239,7 +237,7 @@ export default async function BookPage({ searchParams }: Props) {
   // skipped; and every failure — policy not applied yet, no events, a service
   // not on this studio's menu — leaves the order exactly as it was.
   let orderedServices = scopedServices
-  if (!serviceSlug) {
+  if (!serviceSlug && user) {
     const interestId = await interestedServiceId(supabase, user.id, requestNow())
     const interestCategoryId =
       interestId !== null

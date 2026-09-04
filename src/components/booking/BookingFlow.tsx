@@ -24,6 +24,7 @@ import {
   formatTimeInTimeZone,
   timeZoneAbbreviation,
 } from '@/lib/time'
+import { createClient } from '@/lib/supabase/client'
 import { trackEvent } from '@/components/shared/AnalyticsTracker'
 import { clearConsidered, rememberConsidered } from '@/lib/interest'
 import { FormRequirementChecker } from '@/components/shared/FormRequirementChecker'
@@ -150,6 +151,12 @@ export function BookingFlow({
   // A friend's referral code (068). Offered to first-time clients only — a
   // returning client's entry would be a silent no-op, so it is not asked for.
   const [referralCode, setReferralCode] = useState('')
+  // The inline account (visitor flow): booking still requires one, but it is
+  // created HERE, at the confirm, after they have seen the open slots —
+  // rather than at a login wall before they saw anything.
+  const [password, setPassword] = useState('')
+  const [terms, setTerms] = useState(false)
+  const [marketing, setMarketing] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirmation, setConfirmation] = useState<{
@@ -354,6 +361,18 @@ export function BookingFlow({
     e.preventDefault()
     if (!hasSelection || !provider || !selectedSlot) return
 
+    // The visitor's account rules, said before anything fires.
+    if (!signedIn) {
+      if (password.length < 8) {
+        setError('Please use a password of at least 8 characters.')
+        return
+      }
+      if (!terms) {
+        setError('Please accept the Terms of Service to continue.')
+        return
+      }
+    }
+
     setSubmitting(true)
     setError(null)
 
@@ -368,6 +387,60 @@ export function BookingFlow({
     })
 
     try {
+      // A visitor becomes an account holder here — then books as one. The
+      // session lands in cookies, so /api/book below attaches the booking to
+      // the account it just created.
+      if (!signedIn) {
+        const supabase = createClient()
+        const email = form.email.trim().toLowerCase()
+        const { data: authData, error: signUpError } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: {
+              first_name: form.first_name.trim(),
+              last_name: form.last_name.trim(),
+              phone: form.phone.trim() || null,
+            },
+          },
+        })
+
+        if (signUpError) {
+          if (/already|registered|exists/i.test(signUpError.message ?? '')) {
+            // Their email, their password field: try the door they already
+            // have before telling them anything is wrong.
+            const { error: signInError } = await supabase.auth.signInWithPassword({
+              email,
+              password,
+            })
+            if (signInError) {
+              setError(
+                'An account with this email already exists, and that password did not match it. Enter its password — or sign in from the account page and come back.'
+              )
+              return
+            }
+          } else {
+            setError('We could not create the account just now. Please try again, or call the studio.')
+            return
+          }
+        } else if (!authData.session) {
+          setError(
+            'Your account was created but needs its email confirmed first. Check your inbox, then come back — your selection will only take a moment to redo.'
+          )
+          return
+        } else {
+          trackMetaEvent('Lead')
+          void fetch('/api/account/consent-evidence', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ marketing, terms }),
+          }).catch(() => {})
+          if (marketing) {
+            await supabase.rpc('subscribe_newsletter', { p_email: email, p_source: 'signup' })
+          }
+        }
+      }
+
       const res = await fetch('/api/book', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1273,6 +1346,73 @@ export function BookingFlow({
               )}
             </div>
 
+            {/* The account, created at the moment it is needed and not a step
+                sooner. Their forms, history and this booking live in it. */}
+            {!signedIn && (
+              <div className="mt-10 border-t border-[var(--color-border)] pt-8">
+                <h3 className="label-caps mb-2 text-[var(--color-accent)]">
+                  Create your account to confirm
+                </h3>
+                <p className="mb-5 text-sm text-[var(--color-muted)]">
+                  Your appointment, forms and history live in it — one password and you
+                  are done. Already have one?{' '}
+                  <Link
+                    href="/login?next=%2Fbook"
+                    className="text-[var(--color-foreground)] underline underline-offset-4"
+                  >
+                    Sign in instead
+                  </Link>
+                  .
+                </p>
+
+                <Field label="Password" htmlFor="bk_password" hint="At least 8 characters.">
+                  <Input
+                    id="bk_password"
+                    type="password"
+                    required
+                    minLength={8}
+                    autoComplete="new-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                </Field>
+
+                <div className="mt-5 space-y-3">
+                  <label className="flex cursor-pointer items-start gap-3 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={marketing}
+                      onChange={(e) => setMarketing(e.target.checked)}
+                      className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
+                    />
+                    <span className="text-[var(--color-muted)]">
+                      I agree to receive marketing emails and offers. Unsubscribe anytime.
+                    </span>
+                  </label>
+                  <label className="flex cursor-pointer items-start gap-3 text-sm">
+                    <input
+                      type="checkbox"
+                      required
+                      checked={terms}
+                      onChange={(e) => setTerms(e.target.checked)}
+                      className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
+                    />
+                    <span>
+                      I have read and agree to the{' '}
+                      <Link href="/terms" target="_blank" className="text-[var(--color-foreground)] underline underline-offset-4">
+                        Terms of Service
+                      </Link>{' '}
+                      and{' '}
+                      <Link href="/privacy" target="_blank" className="text-[var(--color-foreground)] underline underline-offset-4">
+                        Privacy Policy
+                      </Link>
+                      . <span className="text-red-600">*</span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+            )}
+
             {error && (
               <p className="mt-6 border border-red-600/40 bg-red-50 p-4 text-sm text-red-800 dark:bg-transparent dark:text-red-400">
                 {error}
@@ -1295,6 +1435,10 @@ export function BookingFlow({
                     <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
                     Booking…
                   </>
+                ) : !signedIn ? (
+                  depositCents > 0
+                    ? `Create account & book · ${formatMoney(depositCents)} deposit`
+                    : 'Create account & confirm booking'
                 ) : depositCents > 0 ? (
                   `Book · ${formatMoney(depositCents)} deposit`
                 ) : (
