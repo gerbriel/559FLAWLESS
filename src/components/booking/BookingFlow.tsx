@@ -356,6 +356,34 @@ export function BookingFlow({
     void loadSlots(weekStart)
   }, [step, provider, weekStart, loadSlots])
 
+  function continueFromServices() {
+    setStep('provider')
+    void trackEvent('booking_started', {
+      service_ids: selected.map((x) => x.id),
+    })
+    // The first chosen service becomes the home page's "still considering?"
+    // note. The intimate flag is frozen at write time — service OR its
+    // category — so the reader can refuse it without ever needing the
+    // catalogue (interest.ts).
+    const first = selected[0]
+    if (first) {
+      rememberConsidered({
+        slug: first.slug,
+        name: first.name,
+        intimate: first.is_intimate || first.category.is_intimate,
+      })
+    }
+  }
+
+  /** One label for the confirm button, wherever it is drawn. */
+  const confirmLabel = !signedIn
+    ? depositCents > 0
+      ? `Create account & book · ${formatMoney(depositCents)} deposit`
+      : 'Create account & confirm booking'
+    : depositCents > 0
+      ? `Book · ${formatMoney(depositCents)} deposit`
+      : 'Confirm booking'
+
   // ── Submit ───────────────────────────────────────────────
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -1009,24 +1037,7 @@ export function BookingFlow({
 
             <div className="mt-12">
               <Button
-                onClick={() => {
-                  setStep('provider')
-                  void trackEvent('booking_started', {
-                    service_ids: selected.map((x) => x.id),
-                  })
-                  // The first chosen service becomes the home page's "still
-                  // considering?" note. The intimate flag is frozen at write
-                  // time — service OR its category — so the reader can refuse
-                  // it without ever needing the catalogue (interest.ts).
-                  const first = selected[0]
-                  if (first) {
-                    rememberConsidered({
-                      slug: first.slug,
-                      name: first.name,
-                      intimate: first.is_intimate || first.category.is_intimate,
-                    })
-                  }
-                }}
+                onClick={continueFromServices}
                 disabled={!hasSelection || !ageGateSatisfied}
                 size="lg"
               >
@@ -1234,7 +1245,7 @@ export function BookingFlow({
 
         {/* ── Step 4: details ──────────────────────────── */}
         {step === 'details' && (
-          <form onSubmit={submit}>
+          <form id="booking-details" onSubmit={submit}>
             <h2 className="display text-3xl">
               {!signedIn
                 ? 'Your details'
@@ -1435,14 +1446,8 @@ export function BookingFlow({
                     <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
                     Booking…
                   </>
-                ) : !signedIn ? (
-                  depositCents > 0
-                    ? `Create account & book · ${formatMoney(depositCents)} deposit`
-                    : 'Create account & confirm booking'
-                ) : depositCents > 0 ? (
-                  `Book · ${formatMoney(depositCents)} deposit`
                 ) : (
-                  'Confirm booking'
+                  confirmLabel
                 )}
               </Button>
             </div>
@@ -1458,6 +1463,7 @@ export function BookingFlow({
           {!hasSelection ? (
             <p className="text-sm text-[var(--color-muted)]">Choose a service to begin.</p>
           ) : (
+            <>
             <dl className="space-y-4 text-sm">
               <div>
                 <dt className="text-[var(--color-muted)]">
@@ -1527,6 +1533,46 @@ export function BookingFlow({
                 </div>
               )}
             </dl>
+
+            {/* The step's own action, where the eye already is — the rail
+                follows the scroll; a button at the foot of a long menu does
+                not. On the last step this submits the details form (by id,
+                from outside it), so a visitor is walked straight to the
+                create-account fields the browser insists on. */}
+            {step === 'service' && (
+              <Button
+                className="mt-6 w-full"
+                size="lg"
+                disabled={!ageGateSatisfied}
+                onClick={continueFromServices}
+              >
+                Continue
+                <ChevronRight className="h-4 w-4" strokeWidth={2} />
+              </Button>
+            )}
+            {step === 'time' && (
+              <Button
+                className="mt-6 w-full"
+                size="lg"
+                disabled={!selectedSlot}
+                onClick={() => setStep('details')}
+              >
+                Continue
+                <ChevronRight className="h-4 w-4" strokeWidth={2} />
+              </Button>
+            )}
+            {step === 'details' && (
+              <Button
+                type="submit"
+                form="booking-details"
+                className="mt-6 w-full"
+                size="lg"
+                disabled={submitting}
+              >
+                {submitting ? 'Booking…' : confirmLabel}
+              </Button>
+            )}
+            </>
           )}
         </div>
       </aside>
