@@ -125,9 +125,11 @@ export async function dispatchNotificationEmails(): Promise<DispatchResult> {
         await admin.from('notifications').update({ emailed_at: new Date().toISOString() }).eq('id', n.id)
         result.sent += 1
       } else if (now - new Date(n.created_at).getTime() > GIVE_UP_MS) {
+        console.error('notification email abandoned', n.id, res.status, await res.text().catch(() => ''))
         await admin.from('notifications').update({ emailed_at: new Date().toISOString() }).eq('id', n.id)
         result.failed += 1
       } else {
+        console.error('notification email failed', n.id, res.status, await res.text().catch(() => ''))
         result.failed += 1
       }
     } catch {
