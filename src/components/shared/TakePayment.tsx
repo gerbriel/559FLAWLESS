@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Check } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { pingEmailDispatch } from '@/lib/email-ping'
 import { Button } from '@/components/ui/button'
 import { Field, Input, Select } from '@/components/ui/field'
 import { formatMoney } from '@/lib/utils'
@@ -91,6 +92,7 @@ export function TakePayment({
       return
     }
 
+    pingEmailDispatch()
     toast.success(`${formatMoney(cents)} recorded.`)
     setNote('')
     setOpen(false)

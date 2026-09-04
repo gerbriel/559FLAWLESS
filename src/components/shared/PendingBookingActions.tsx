@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { AlertTriangle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { pingEmailDispatch } from '@/lib/email-ping'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/field'
 import { cn, formatMoney } from '@/lib/utils'
@@ -143,6 +144,7 @@ export function PendingBookingActions({
     // client a notification row and the bell in the account header is what
     // renders it; nothing in this app sends mail or SMS. "Has been told" read
     // as "we texted them", which nobody did.
+    pingEmailDispatch()
     toast.success(`Confirmed — ${clientName} has a notification in their account.`)
     router.refresh()
   }
@@ -196,6 +198,7 @@ export function PendingBookingActions({
         { duration: 15000 }
       )
     } else {
+      pingEmailDispatch()
       toast.success('Declined, and the time is back on the calendar.')
     }
 

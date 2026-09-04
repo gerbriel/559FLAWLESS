@@ -655,6 +655,8 @@ export type Notification = {
   appointment_id: string | null
   thread_id: string | null
   read_at: string | null
+  /** When the email mirror sent it (072). Null = still owed an email. */
+  emailed_at: string | null
   created_at: string
 }
 

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { MessageSquare, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { pingEmailDispatch } from '@/lib/email-ping'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/field'
 
@@ -94,6 +95,7 @@ export function MessageClient({
         return
       }
 
+      pingEmailDispatch()
       toast.success(`Sent to ${clientName}.`)
       setBody('')
       setOpen(false)

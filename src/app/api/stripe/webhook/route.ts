@@ -3,6 +3,7 @@ import { logError } from '@/lib/log-error'
 import type Stripe from 'stripe'
 import { getStripe, stripeConfigured } from '@/lib/stripe'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { queueNotificationEmails } from '@/lib/notification-email'
 
 export const dynamic = 'force-dynamic'
 
@@ -258,6 +259,10 @@ export async function POST(request: NextRequest) {
     void logError('stripe/webhook', err, { event_type: event.type, event_id: event.id })
     return NextResponse.json({ error: 'handler_failed' }, { status: 500 })
   }
+
+  // Payments ring bells through triggers (referral settled, and more to
+  // come) — mirror them before acknowledging Stripe.
+  queueNotificationEmails()
 
   return NextResponse.json({ received: true })
 }

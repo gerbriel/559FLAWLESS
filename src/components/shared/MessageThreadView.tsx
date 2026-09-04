@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { Lock, Send } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { trackMetaEvent } from '@/components/shared/MetaPixelEvent'
+import { pingEmailDispatch } from '@/lib/email-ping'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/field'
 import { cn } from '@/lib/utils'
@@ -106,6 +107,7 @@ export function MessageThreadView({
     // its own; this covers the signed-in messenger.
     if (!asStaff) trackMetaEvent('Contact')
 
+    pingEmailDispatch()
     setMessages((m) => (m.some((x) => x.id === data.id) ? m : [...m, data]))
     setBody('')
     router.refresh()

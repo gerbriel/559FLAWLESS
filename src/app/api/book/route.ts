@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { checkRateLimit, rateLimitedResponse } from '@/lib/rate-limit'
 import { z } from 'zod'
 import { createBooking, BOOKING_ERROR_MESSAGES, MAX_ADDONS } from '@/lib/booking'
+import { queueNotificationEmails } from '@/lib/notification-email'
 import { createClient } from '@/lib/supabase/server'
 
 export const dynamic = 'force-dynamic'
@@ -86,6 +87,10 @@ export async function POST(request: NextRequest) {
       { status: outcome.status }
     )
   }
+
+  // The booking's bells (client copy, review queue, referral earned) are all
+  // written by now — mirror them to email without holding the response.
+  queueNotificationEmails()
 
   // `booking.status` rides along and is load-bearing: with approval routing on,
   // the database may have held this for review, and the confirmation screen has

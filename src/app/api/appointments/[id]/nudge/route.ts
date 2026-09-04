@@ -4,6 +4,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { formatMoney } from '@/lib/utils'
 import { isStaff, type UserRole } from '@/types/database'
+import { queueNotificationEmails } from '@/lib/notification-email'
 
 export const dynamic = 'force-dynamic'
 
@@ -207,5 +208,6 @@ export async function POST(
     return NextResponse.json({ error: 'failed', message: error.message }, { status: 500 })
   }
 
+  queueNotificationEmails()
   return NextResponse.json({ ok: true, balance_cents: asking })
 }

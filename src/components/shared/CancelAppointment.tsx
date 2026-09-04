@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
+import { pingEmailDispatch } from '@/lib/email-ping'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/field'
 import type { AppointmentStatus } from '@/types/database'
@@ -96,6 +97,7 @@ export function CancelAppointment({
       return
     }
 
+    pingEmailDispatch()
     toast.success(awaitingApproval ? 'Booking withdrawn.' : 'Appointment cancelled.')
     router.refresh()
   }

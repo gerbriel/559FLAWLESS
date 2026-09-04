@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
+import { pingEmailDispatch } from '@/lib/email-ping'
 import { Select } from '@/components/ui/field'
 import type { Appointment, AppointmentStatus } from '@/types/database'
 
@@ -49,6 +50,7 @@ export function AppointmentStatusControl({
       return
     }
 
+    pingEmailDispatch()
     toast.success('Updated.')
     router.refresh()
   }
