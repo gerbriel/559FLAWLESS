@@ -1,10 +1,11 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { AlertTriangle, Check, MessageSquare, Calendar, Activity } from 'lucide-react'
+import { AlertTriangle, Check, Calendar, Activity } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
 import { ButtonLink } from '@/components/ui/button'
 import { ClientNoteForm } from '@/components/shared/ClientNoteForm'
+import { MessageClient } from '@/components/shared/MessageClient'
 import { ClientBagPanel, type BagItem } from '@/components/shared/ClientBagPanel'
 import { ClientBanPanel } from '@/components/shared/ClientBanPanel'
 import { ClientTagPicker, type ClientTagOption } from '@/components/shared/ClientTagPicker'
@@ -104,7 +105,7 @@ export default async function ClientDetailPage({ params }: Props) {
       .limit(100),
     supabase
       .from('profiles')
-      .select('role')
+      .select('role, first_name, display_name')
       .eq('id', user?.id ?? id)
       .maybeSingle(),
   ])
@@ -400,11 +401,14 @@ export default async function ClientDetailPage({ params }: Props) {
               below is hers to read and write — booking for someone else and
               handling correspondence are not. */}
           {isFrontDesk(role) && (
-            <div className="mt-5 flex gap-3">
-              <ButtonLink href={`/dashboard/messages?client=${id}`} variant="outline" size="sm">
-                <MessageSquare className="h-4 w-4" />
-                Message
-              </ButtonLink>
+            <div className="mt-5 flex flex-wrap items-start gap-3">
+              {/* Composes right here — the inbox link it replaced was an empty
+                  list for anyone nobody had written to yet. */}
+              <MessageClient
+                clientId={id}
+                clientName={client.first_name ?? 'this client'}
+                staffName={viewer?.display_name ?? viewer?.first_name ?? null}
+              />
               <ButtonLink
                 href={`/dashboard/appointments/book-for-client?client=${id}`}
                 variant="primary"
