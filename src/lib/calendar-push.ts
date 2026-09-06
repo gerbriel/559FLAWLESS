@@ -91,7 +91,10 @@ export async function syncAppointmentToCalendar(appointmentId: string): Promise<
       appt.provider_id,
       target.calendarId,
       {
-        summary: `${who} — ${services || 'Appointment'}`,
+        // A held booking is on the calendar — it owns its slot exactly as a
+        // confirmed one does — but the title says so. Approval re-pushes the
+        // same event id and the prefix falls away.
+        summary: `${appt.status === 'pending' ? 'HOLD: ' : ''}${who} — ${services || 'Appointment'}`,
         description: `559 Flawless booking. Open it at /dashboard/appointments/${appt.id}`,
         startsAt: new Date(appt.starts_at),
         endsAt: new Date(appt.ends_at),

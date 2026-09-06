@@ -97,6 +97,16 @@ export function CancelAppointment({
       return
     }
 
+    // The provider's Google event should leave when the work does. The push
+    // route lets the appointment's own client trigger this one mirror; the
+    // helper deletes rather than writes for a cancelled row. Fire-and-forget —
+    // the cancellation above is already the truth.
+    void fetch('/api/calendar/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'appointment', id: appointmentId }),
+    }).catch(() => {})
+
     pingEmailDispatch()
     toast.success(awaitingApproval ? 'Booking withdrawn.' : 'Appointment cancelled.')
     router.refresh()

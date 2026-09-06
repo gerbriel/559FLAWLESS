@@ -144,6 +144,16 @@ export function PendingBookingActions({
     // client a notification row and the bell in the account header is what
     // renders it; nothing in this app sends mail or SMS. "Has been told" read
     // as "we texted them", which nobody did.
+    // Re-title the provider's Google event — the push drops the HOLD: prefix
+    // now that the row reads confirmed. Fire-and-forget: the booking is
+    // decided either way, and the daily sync is not a fallback for pushes, so
+    // a failure here costs only a stale title, not the record.
+    void fetch('/api/calendar/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'appointment', id: appointmentId }),
+    }).catch(() => {})
+
     pingEmailDispatch()
     toast.success(`Confirmed — ${clientName} has a notification in their account.`)
     router.refresh()
@@ -188,6 +198,14 @@ export function PendingBookingActions({
       router.refresh()
       return
     }
+
+    // Take the event off the provider's Google calendar now that it is not
+    // work — the sync helper deletes rather than writes for a cancelled row.
+    void fetch('/api/calendar/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'appointment', id: appointmentId }),
+    }).catch(() => {})
 
     // The card leaves the queue on refresh, so this toast is the last thing
     // standing between the decision and a forgotten refund. It gets the amount

@@ -42,9 +42,10 @@ export async function POST(request: NextRequest) {
     .eq('id', user.id)
     .maybeSingle()
 
-  if (!profile || profile.suspended_at || !isStaff(profile.role)) {
+  if (!profile || profile.suspended_at) {
     return NextResponse.json({ error: 'forbidden' }, { status: 403 })
   }
+  const staff = isStaff(profile.role)
 
   const parsed = PushSchema.safeParse(await request.json().catch(() => null))
   if (!parsed.success) {
@@ -55,8 +56,27 @@ export async function POST(request: NextRequest) {
   const admin = createAdminClient()
 
   if (body.kind === 'appointment') {
+    // Staff, or the appointment's own client — who needs this exactly once,
+    // when cancelling from their account page: the event has to leave the
+    // provider's calendar at the moment it stops being work. The sync itself
+    // only ever mirrors what the appointment row already says.
+    if (!staff) {
+      const { data: appt } = await admin
+        .from('appointments')
+        .select('client_id')
+        .eq('id', body.id)
+        .maybeSingle()
+      // 404 either way — "forbidden" would confirm the id exists.
+      if (!appt || appt.client_id !== user.id) {
+        return NextResponse.json({ error: 'not_found' }, { status: 404 })
+      }
+    }
     await syncAppointmentToCalendar(body.id)
     return NextResponse.json({ ok: true })
+  }
+
+  if (!staff) {
+    return NextResponse.json({ error: 'forbidden' }, { status: 403 })
   }
 
   if (body.kind === 'block') {
