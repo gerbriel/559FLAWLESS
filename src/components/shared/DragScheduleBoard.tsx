@@ -304,25 +304,39 @@ export function DragScheduleBoard({
     [timezone, selectedProviders, schedules, blocks, busy, closures]
   )
 
+  /**
+   * A drop proposes; the dialog commits. Between letting go and Confirm the
+   * card stays where it was — nothing is optimistic about a change the client
+   * is going to be emailed about, and Escape costs nothing.
+   */
+  const [pendingDrop, setPendingDrop] = React.useState<{
+    appointment: CalendarAppointment
+    startsAt: Date
+    providerId: string
+  } | null>(null)
+
   const dropAppointment = React.useCallback(
-    async (
+    (
       appointment: CalendarAppointment,
       dateKey: string,
       time: string,
       providerId: string | null
     ) => {
       const startsAt = zonedTimeToUtc(dateKey, time, timezone)
+      const target = providerId ?? appointment.provider_id
+      if (
+        startsAt.getTime() === new Date(appointment.starts_at).getTime() &&
+        target === appointment.provider_id
+      ) {
+        // Dropped back where it started — nothing to confirm.
+        return
+      }
       announce(
-        `Moving ${clientName(appointment)} to ${dayLabelForDateKey(dateKey)} at ${time}.`
+        `Confirm moving ${clientName(appointment)} to ${dayLabelForDateKey(dateKey)} at ${time}.`
       )
-      await move({
-        appointment,
-        startsAt,
-        providerId: providerId ?? appointment.provider_id,
-        override: allowOutsideHours,
-      })
+      setPendingDrop({ appointment, startsAt, providerId: target })
     },
-    [move, timezone, allowOutsideHours, announce]
+    [timezone, announce]
   )
 
   function handleDrop(
@@ -337,7 +351,7 @@ export function DragScheduleBoard({
     const id = e.dataTransfer.getData(DRAG_MIME) || e.dataTransfer.getData('text/plain')
     const appointment = shown.find((a) => a.id === id)
     if (!appointment) return
-    void dropAppointment(appointment, dateKey, time, providerId)
+    dropAppointment(appointment, dateKey, time, providerId)
   }
 
   /**
@@ -653,15 +667,38 @@ export function DragScheduleBoard({
           timezone={timezone}
           busy={movingId === moveTarget.id}
           onClose={() => setMoveTarget(null)}
-          onSubmit={async (dateKey, time, providerId, override) => {
+          onSubmit={async (dateKey, time, providerId, durationMinutes, override) => {
             const ok = await move({
               appointment: moveTarget,
               startsAt: zonedTimeToUtc(dateKey, time, timezone),
               providerId,
+              durationMinutes,
               override,
             })
             if (ok) setMoveTarget(null)
             return ok
+          }}
+        />
+      )}
+
+      {pendingDrop && (
+        <ConfirmDropDialog
+          drop={pendingDrop}
+          providers={columnProviders}
+          timezone={timezone}
+          busy={movingId === pendingDrop.appointment.id}
+          onCancel={() => {
+            setPendingDrop(null)
+            announce('Move cancelled. Nothing changed.')
+          }}
+          onConfirm={async () => {
+            const ok = await move({
+              appointment: pendingDrop.appointment,
+              startsAt: pendingDrop.startsAt,
+              providerId: pendingDrop.providerId,
+              override: allowOutsideHours,
+            })
+            if (ok) setPendingDrop(null)
           }}
         />
       )}
@@ -710,13 +747,29 @@ function AllDayNotes({
   )
 }
 
+/** Quarter-hour lengths up to the 8-hour bound the services table enforces. */
+const DURATION_CHOICES = Array.from({ length: 32 }, (_, i) => (i + 1) * 15)
+
+function durationLabel(minutes: number): string {
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  if (h === 0) return `${m} min`
+  if (m === 0) return `${h} hr`
+  return `${h} hr ${m} min`
+}
+
 /**
- * Rescheduling without a mouse.
+ * Rescheduling without a mouse — and the only place a booking's LENGTH changes.
  *
  * This is not a courtesy fallback — it is the path that has to work when the
  * drag does not: a trackpad someone struggles with, a screen reader, a hand
  * that shakes, or simply moving a booking three weeks out, which no amount of
  * dragging will reach. It posts to the same route with the same rules.
+ *
+ * Length lives here rather than on a resize handle because cards on this board
+ * are not drawn to their duration — there is no bottom edge that MEANS the end
+ * time, so dragging one would be pantomime. The grip opens this dialog; the
+ * length is a field; the client is told either way.
  */
 function MoveDialog({
   appointment,
@@ -735,6 +788,7 @@ function MoveDialog({
     dateKey: string,
     time: string,
     providerId: string,
+    durationMinutes: number,
     override: boolean
   ) => Promise<boolean>
 }) {
@@ -745,6 +799,7 @@ function MoveDialog({
     return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`
   })
   const [providerId, setProviderId] = React.useState(appointment.provider_id)
+  const [duration, setDuration] = React.useState(() => appointmentMinutes(appointment))
   const [override, setOverride] = React.useState(false)
   const firstField = React.useRef<HTMLInputElement>(null)
 
@@ -779,13 +834,14 @@ function MoveDialog({
         <p className="mt-2 text-sm text-[var(--color-muted)]">
           {clientName(appointment)} — {serviceName(appointment) || 'appointment'}, currently{' '}
           {formatTimeInTimeZone(start, timezone)} on {dayLabelForDateKey(dateKeyInTimeZone(start, timezone))}.
+          The client is notified of any change, in their account and by email.
         </p>
 
         <form
           className="mt-6 space-y-4"
           onSubmit={async (e) => {
             e.preventDefault()
-            await onSubmit(dateKey, time, providerId, override)
+            await onSubmit(dateKey, time, providerId, duration, override)
           }}
         >
           <Field label="Date" htmlFor="move_date">
@@ -799,11 +855,7 @@ function MoveDialog({
             />
           </Field>
 
-          <Field
-            label="Start time"
-            htmlFor="move_time"
-            hint={`${appointmentMinutes(appointment)} minutes, in the studio's clock.`}
-          >
+          <Field label="Start time" htmlFor="move_time" hint="In the studio's clock.">
             <Input
               id="move_time"
               type="time"
@@ -812,6 +864,27 @@ function MoveDialog({
               value={time}
               onChange={(e) => setTime(e.target.value)}
             />
+          </Field>
+
+          <Field
+            label="Length"
+            htmlFor="move_length"
+            hint="Extending blocks more of the calendar; the price stays what was booked."
+          >
+            <Select
+              id="move_length"
+              value={String(duration)}
+              onChange={(e) => setDuration(Number(e.target.value))}
+            >
+              {DURATION_CHOICES.includes(duration) ? null : (
+                <option value={duration}>{durationLabel(duration)} (current)</option>
+              )}
+              {DURATION_CHOICES.map((m) => (
+                <option key={m} value={m}>
+                  {durationLabel(m)}
+                </option>
+              ))}
+            </Select>
           </Field>
 
           {providers.length > 1 && (
@@ -847,7 +920,7 @@ function MoveDialog({
 
           <div className="flex flex-wrap items-center gap-3 pt-2">
             <Button type="submit" size="sm" disabled={busy}>
-              {busy ? 'Moving…' : 'Move'}
+              {busy ? 'Saving…' : 'Confirm change'}
             </Button>
             <Button type="button" size="sm" variant="subtle" onClick={onClose}>
               Cancel
@@ -867,6 +940,98 @@ function MoveDialog({
             )}
           </div>
         </form>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The question between letting go and it being true.
+ *
+ * A drag is easy to fumble — a quarter-hour row is twenty-odd pixels — and the
+ * client is emailed the moment a move commits, so the commit deserves one
+ * deliberate click. Until Confirm, nothing has changed anywhere: not the row,
+ * not the board, not Google, not the client's inbox.
+ */
+function ConfirmDropDialog({
+  drop,
+  providers,
+  timezone,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  drop: { appointment: CalendarAppointment; startsAt: Date; providerId: string }
+  providers: BoardProvider[]
+  timezone: string
+  busy: boolean
+  onCancel: () => void
+  onConfirm: () => Promise<void>
+}) {
+  const { appointment, startsAt } = drop
+  const from = new Date(appointment.starts_at)
+  const reassigned = drop.providerId !== appointment.provider_id
+  const newProvider = providers.find((p) => p.id === drop.providerId)
+
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onCancel])
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onClick={onCancel}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirm_drop_title"
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md border border-[var(--color-border)] bg-[var(--color-surface)] p-6"
+      >
+        <h2 id="confirm_drop_title" className="display text-2xl">
+          Move this appointment?
+        </h2>
+        <p className="mt-3 text-sm">
+          {clientName(appointment)} — {serviceName(appointment) || 'appointment'}
+        </p>
+        <p className="mt-2 text-sm text-[var(--color-muted)]">
+          {dayLabelForDateKey(dateKeyInTimeZone(from, timezone))} at{' '}
+          {formatTimeInTimeZone(from, timezone)}
+          {' → '}
+          <span className="text-[var(--color-foreground)]">
+            {dayLabelForDateKey(dateKeyInTimeZone(startsAt, timezone))} at{' '}
+            {formatTimeInTimeZone(startsAt, timezone)}
+          </span>
+          {reassigned && newProvider && (
+            <>
+              {', with '}
+              <span className="text-[var(--color-foreground)]">{providerName(newProvider)}</span>
+            </>
+          )}
+          .
+        </p>
+        <p className="mt-2 text-xs text-[var(--color-muted)]">
+          The client is notified of the new time, in their account and by email.
+        </p>
+        <div className="mt-6 flex flex-wrap items-center gap-3">
+          <Button
+            autoFocus
+            type="button"
+            size="sm"
+            disabled={busy}
+            onClick={() => void onConfirm()}
+          >
+            {busy ? 'Moving…' : 'Confirm move'}
+          </Button>
+          <Button type="button" size="sm" variant="subtle" onClick={onCancel} disabled={busy}>
+            Keep it where it was
+          </Button>
+        </div>
       </div>
     </div>
   )

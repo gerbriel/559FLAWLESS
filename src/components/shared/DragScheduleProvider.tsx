@@ -36,6 +36,8 @@ export interface MoveRequest {
   /** Absolute instant, already resolved through the provider's zone. */
   startsAt: Date
   providerId?: string
+  /** A new length in minutes — extending or shortening. Omit to keep it. */
+  durationMinutes?: number
   /** Drop it outside published hours. Never bypasses the overlap guard. */
   override?: boolean
 }
@@ -104,15 +106,18 @@ export function useAppointmentMove<T extends MovableAppointment>(
       const { appointment, startsAt } = req
       const providerId = req.providerId ?? appointment.provider_id
 
+      // The row's length unless the request names a new one — a drag changes
+      // when, the dialog may also change how long. The server re-derives both.
+      const rowDurationMs =
+        new Date(appointment.ends_at).getTime() - new Date(appointment.starts_at).getTime()
+      const durationMs =
+        req.durationMinutes != null ? req.durationMinutes * MINUTE_MS : rowDurationMs
+
       const unchanged =
         startsAt.getTime() === new Date(appointment.starts_at).getTime() &&
-        providerId === appointment.provider_id
+        providerId === appointment.provider_id &&
+        durationMs === rowDurationMs
       if (unchanged) return true
-
-      // The card is only ever as long as it already was — a move changes when,
-      // not what, and the server enforces the same thing from the row.
-      const durationMs =
-        new Date(appointment.ends_at).getTime() - new Date(appointment.starts_at).getTime()
 
       const optimistic: PendingMove = {
         from: appointment.starts_at,
@@ -131,6 +136,7 @@ export function useAppointmentMove<T extends MovableAppointment>(
           body: JSON.stringify({
             startsAt: startsAt.toISOString(),
             providerId,
+            durationMinutes: req.durationMinutes,
             overrideAvailability: req.override ?? false,
           }),
         })

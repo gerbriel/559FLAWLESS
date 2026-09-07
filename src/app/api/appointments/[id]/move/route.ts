@@ -5,6 +5,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { loadAvailability } from '@/lib/booking'
 import { generateSlots } from '@/lib/availability'
 import { syncAppointmentToCalendar } from '@/lib/calendar-push'
+import { queueNotificationEmails } from '@/lib/notification-email'
 import { dateKeyInTimeZone, MINUTE_MS } from '@/lib/time'
 import { isFrontDesk, isStaff } from '@/types/database'
 
@@ -17,6 +18,12 @@ const MoveSchema = z.object({
   startsAt: z.string().min(1).max(40),
   /** Reassigning to another provider. Omit to keep the current one. */
   providerId: z.string().uuid().nullish(),
+  /**
+   * A new length, in minutes — extending a facial that ran over, or shortening
+   * one. Omit to keep the current length. Bounds match the services table's own
+   * duration check.
+   */
+  durationMinutes: z.number().int().min(5).max(480).nullish(),
   /**
    * Drop it outside published hours. Squeezing someone in is a normal thing for
    * a studio to do, and this never bypasses the overlap check — the exclusion
@@ -125,7 +132,7 @@ export async function POST(
 
   const { data: appointment } = await admin
     .from('appointments')
-    .select('id, provider_id, starts_at, ends_at, buffer_minutes, status')
+    .select('id, provider_id, client_id, starts_at, ends_at, buffer_minutes, status')
     .eq('id', id)
     .maybeSingle()
 
@@ -151,18 +158,21 @@ export async function POST(
     return NextResponse.json({ error: 'forbidden' }, { status: 403 })
   }
 
-  // Duration and buffer come off the row, never off the request — the same rule
-  // that keeps a booking's price honest. A move changes when, not what.
-  const durationMinutes = Math.round(
+  // Buffer comes off the row, never off the request. Duration too, unless the
+  // request names a new one — extending is a deliberate edit, bounded above,
+  // and the price is untouched either way: what was booked is what is billed.
+  const rowDurationMinutes = Math.round(
     (new Date(appointment.ends_at).getTime() - new Date(appointment.starts_at).getTime()) /
       MINUTE_MS
   )
+  const durationMinutes = parsed.data.durationMinutes ?? rowDurationMinutes
   const bufferMinutes = appointment.buffer_minutes ?? 0
   const endsAt = new Date(requested.getTime() + durationMinutes * MINUTE_MS)
 
   if (
     targetProvider === appointment.provider_id &&
-    requested.getTime() === new Date(appointment.starts_at).getTime()
+    requested.getTime() === new Date(appointment.starts_at).getTime() &&
+    durationMinutes === rowDurationMinutes
   ) {
     // Dropped back where it started. Nothing to write, and nothing to explain.
     return NextResponse.json({
@@ -283,15 +293,52 @@ export async function POST(
 
   // The status trigger only records status changes, so a move would otherwise
   // leave no trace of who put the client at a different time.
+  const changes: string[] = []
+  if (moved.starts_at !== appointment.starts_at) {
+    changes.push(`from ${appointment.starts_at} to ${moved.starts_at}`)
+  }
+  if (durationMinutes !== rowDurationMinutes) {
+    changes.push(`length ${rowDurationMinutes} min → ${durationMinutes} min`)
+  }
+  if (targetProvider !== appointment.provider_id) changes.push('reassigned')
   await admin.from('appointment_events').insert({
     appointment_id: appointment.id,
     event: 'moved',
     actor_id: user.id,
-    detail:
-      targetProvider === appointment.provider_id
-        ? `Rescheduled from ${appointment.starts_at} to ${moved.starts_at}`
-        : `Rescheduled from ${appointment.starts_at} to ${moved.starts_at} and reassigned`,
+    detail: `Rescheduled: ${changes.join(', ')}`,
   })
+
+  // 006's trigger tells the client when starts_at changes; a pure length
+  // change slips past its elsif chain, so it is said here in the same shape
+  // the trigger writes — and only here, so a real move never says it twice.
+  const timeChanged =
+    new Date(moved.starts_at).getTime() !== new Date(appointment.starts_at).getTime()
+  if (!timeChanged && durationMinutes !== rowDurationMinutes && appointment.client_id) {
+    const day = new Intl.DateTimeFormat('en-US', {
+      timeZone: provider.timezone,
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    }).format(new Date(moved.starts_at))
+    const until = new Intl.DateTimeFormat('en-US', {
+      timeZone: provider.timezone,
+      hour: 'numeric',
+      minute: '2-digit',
+    }).format(new Date(moved.ends_at))
+    await admin.from('notifications').insert({
+      user_id: appointment.client_id,
+      type: 'appointment_changed',
+      title: 'Your appointment time was updated',
+      body: `${day} – ${until} (${durationMinutes} minutes)`,
+      link: `/account/appointments/${appointment.id}`,
+      appointment_id: appointment.id,
+    })
+  }
+
+  // The email mirror follows the bell in seconds rather than at tomorrow's
+  // sweep — the person who was moved should not learn it from the daily cron.
+  queueNotificationEmails()
 
   // Keep Google in step. Not awaited into the response: the move is committed
   // and the person who dragged it is watching a card that has already landed.
