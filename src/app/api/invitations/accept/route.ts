@@ -210,6 +210,24 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // Guest bookings become theirs. The desk can book somebody with no account
+  // (guest_* on the appointment, 004), and appointment_match_client only looks
+  // at bookings made AFTER an account exists — so the visit that prompted the
+  // invitation would stay orphaned without this. Matched on the invitation's
+  // email, which the studio chose and this person just proved they control; a
+  // failure loses only the linkage, never the appointment, and the daily-use
+  // paths all survive a guest row staying a guest row.
+  if (!staff) {
+    const { error: linkError } = await admin
+      .from('appointments')
+      .update({ client_id: userId })
+      .is('client_id', null)
+      .ilike('guest_email', invitation.email)
+    if (linkError) {
+      console.error('invitation accept: could not link guest appointments', linkError)
+    }
+  }
+
   // Somewhere for the CRM to hang notes and stats before the first visit, the
   // same as a walk-in created by staff.
   if (!staff) {

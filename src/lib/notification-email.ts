@@ -58,6 +58,74 @@ function emailHtml(title: string, body: string | null, link: string | null): str
 </body></html>`
 }
 
+/**
+ * Email an invitation's claim link, from the studio.
+ *
+ * Separate from the notification mirror on purpose: an invitee has no account,
+ * so there is no notification row to sweep and no bell as the fallback record —
+ * this email IS the delivery. The caller keeps returning the link for staff to
+ * copy, so a bounced or unconfigured send degrades to exactly the behaviour the
+ * invite flow had before email existed.
+ *
+ * Returns whether Resend accepted it; never throws.
+ */
+export async function sendInvitationEmail(opts: {
+  to: string
+  firstName: string | null
+  url: string
+  expiresAt: string
+  note?: string | null
+}): Promise<boolean> {
+  if (!emailConfigured()) return false
+
+  const greeting = opts.firstName?.trim() ? `Hi ${opts.firstName.trim()} — ` : ''
+  const expires = new Date(opts.expiresAt).toLocaleDateString('en-US', {
+    month: 'long',
+    day: 'numeric',
+  })
+
+  const html = `<!doctype html>
+<html><body style="margin:0;padding:0;background:#faf7f5;">
+  <div style="max-width:560px;margin:0 auto;padding:40px 24px;font-family:Georgia,'Times New Roman',serif;color:#2b2320;">
+    <p style="font-size:13px;letter-spacing:0.18em;text-transform:uppercase;color:#a08573;margin:0 0 28px;">559 Flawless</p>
+    <h1 style="font-size:26px;font-weight:normal;margin:0 0 16px;">Your account is waiting</h1>
+    <p style="font-size:16px;line-height:1.6;color:#5c5049;margin:0 0 16px;font-family:Helvetica,Arial,sans-serif;">
+      ${esc(greeting)}the studio set up an account for you at 559 Flawless. Claim it to see your
+      appointments, sign forms ahead of your visit, and book online.
+    </p>
+    ${opts.note ? `<p style="font-size:15px;line-height:1.6;color:#5c5049;margin:0 0 16px;font-family:Helvetica,Arial,sans-serif;font-style:italic;">&ldquo;${esc(opts.note)}&rdquo;</p>` : ''}
+    <a href="${esc(opts.url)}" style="display:inline-block;background:#2b2320;color:#faf7f5;text-decoration:none;padding:14px 28px;font-size:13px;letter-spacing:0.14em;text-transform:uppercase;font-family:Helvetica,Arial,sans-serif;">Claim your account</a>
+    <p style="font-size:12px;color:#a08573;margin:36px 0 0;font-family:Helvetica,Arial,sans-serif;">
+      This link is yours alone and expires on ${esc(expires)}. If you were not expecting this,
+      you can ignore it — nothing happens without you.
+    </p>
+  </div>
+</body></html>`
+
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: emailFrom(),
+        to: opts.to,
+        subject: 'Claim your 559 Flawless account',
+        html,
+      }),
+    })
+    if (!res.ok) {
+      console.error('invitation email failed', res.status, await res.text().catch(() => ''))
+    }
+    return res.ok
+  } catch (err) {
+    console.error('invitation email failed', err)
+    return false
+  }
+}
+
 export interface DispatchResult {
   sent: number
   skipped: number

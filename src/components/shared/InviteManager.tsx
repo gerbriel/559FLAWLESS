@@ -82,7 +82,12 @@ export function InviteManager({
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [issued, setIssued] = useState<{ email: string; role: UserRole; url: string } | null>(null)
+  const [issued, setIssued] = useState<{
+    email: string
+    role: UserRole
+    url: string
+    emailed: boolean
+  } | null>(null)
   const [copied, setCopied] = useState(false)
   const [form, setForm] = useState({
     email: '',
@@ -124,7 +129,7 @@ export function InviteManager({
     }).catch(() => null)
 
     const body = (await res?.json().catch(() => null)) as
-      | { ok?: true; url?: string; message?: string }
+      | { ok?: true; url?: string; message?: string; emailed?: boolean }
       | null
 
     setBusy(false)
@@ -134,7 +139,12 @@ export function InviteManager({
       return
     }
 
-    setIssued({ email: payload.email.trim().toLowerCase(), role: payload.role, url: body.url })
+    setIssued({
+      email: payload.email.trim().toLowerCase(),
+      role: payload.role,
+      url: body.url,
+      emailed: body.emailed === true,
+    })
     setOpen(false)
     setForm({ email: '', first_name: '', last_name: '', role: 'client', expires_in_days: 7, note: '' })
     router.refresh()
@@ -172,8 +182,8 @@ export function InviteManager({
         <div>
           <h2 className="display text-2xl">Invitations</h2>
           <p className="mt-2 max-w-2xl text-sm text-[var(--color-muted)]">
-            Invite someone to set up their own account and password. Nothing is emailed — you
-            get a link to send them yourself.
+            Invite someone to set up their own account and password. The claim link is
+            emailed to them from the studio, and you get a copy to pass on yourself.
             {pendingCount > 0 && ` ${pendingCount} outstanding.`}
           </p>
         </div>
@@ -185,10 +195,24 @@ export function InviteManager({
       {/* The one and only time this link can be read. */}
       {issued && (
         <div className="mt-6 border border-[var(--color-accent)] bg-[var(--color-surface)] p-6">
-          <p className="label-caps text-[var(--color-accent)]">Link ready</p>
+          <p className="label-caps text-[var(--color-accent)]">
+            {issued.emailed ? 'Invitation sent' : 'Link ready'}
+          </p>
           <p className="mt-2 text-sm">
-            Send this to <span className="font-medium">{issued.email}</span>. It sets them up as{' '}
-            {ROLE_LABELS[issued.role].toLowerCase()}, works once, and cannot be shown again.
+            {issued.emailed ? (
+              <>
+                Emailed to <span className="font-medium">{issued.email}</span>. This is your
+                copy of the link in case it does not arrive — it sets them up as{' '}
+                {ROLE_LABELS[issued.role].toLowerCase()}, works once, and cannot be shown again.
+              </>
+            ) : (
+              <>
+                The email could not be sent, so send this to{' '}
+                <span className="font-medium">{issued.email}</span> yourself. It sets them up
+                as {ROLE_LABELS[issued.role].toLowerCase()}, works once, and cannot be shown
+                again.
+              </>
+            )}
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <input

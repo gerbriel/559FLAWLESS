@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { NextResponse, type NextRequest } from 'next/server'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
+import { sendInvitationEmail } from '@/lib/notification-email'
 import { isAdmin, isFrontDesk } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
@@ -33,9 +34,11 @@ const InviteSchema = z.object({
  * caller. The checks below exist to return a readable 403 instead of an opaque
  * RLS rejection, not to be the boundary.
  *
- * There is no email provider wired into this app, so nothing is sent. The
- * response carries the one and only copy of the link; the studio passes it on
- * themselves. See the note in `InviteManager`.
+ * The claim link is emailed to the invitee from the studio when Resend is
+ * configured (072 wired it in; this route predates it). The response still
+ * carries the one and only readable copy of the link either way — email can
+ * bounce, and the studio passing it on by text has to stay possible. `emailed`
+ * on the response says which world the staff member is in.
  *
  * `client_stub_id` (051) is the only addition since: an invitation may name
  * somebody already on the studio's list, and accepting it claims that record
@@ -238,5 +241,15 @@ export async function POST(request: NextRequest) {
   const origin = process.env.NEXT_PUBLIC_SITE_URL || request.nextUrl.origin
   const url = `${origin.replace(/\/$/, '')}/invite/${token}`
 
-  return NextResponse.json({ ok: true, invitation, url }, { status: 201 })
+  // Awaited, not fired-and-forgotten: the response tells the staff member
+  // whether the invitee has the link already or still needs it handed over.
+  const emailed = await sendInvitationEmail({
+    to: email,
+    firstName: invitation.first_name,
+    url,
+    expiresAt: invitation.expires_at,
+    note: invitation.note,
+  })
+
+  return NextResponse.json({ ok: true, invitation, url, emailed }, { status: 201 })
 }

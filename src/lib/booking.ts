@@ -909,8 +909,18 @@ export const BOOKING_ERROR_MESSAGES: Record<BookingError, string> = {
 
 // ── Staff bookings ──────────────────────────────────────────
 
+/** Somebody the desk is booking who has no account yet — a name is enough. */
+export interface StaffBookingGuest {
+  firstName: string
+  lastName: string | null
+  email: string | null
+  phone: string | null
+}
+
 export interface StaffBookingRequest {
-  clientId: string
+  /** An existing client — or null, with `guest` naming who the visit is for. */
+  clientId: string | null
+  guest?: StaffBookingGuest
   providerId: string
   /** One or more services, booked as a single continuous appointment. */
   serviceIds: number[]
@@ -949,14 +959,19 @@ export async function createStaffBooking(req: StaffBookingRequest): Promise<Book
   if (Number.isNaN(requested.getTime())) return failure('invalid_request', 400)
   if (req.addonIds.length > MAX_ADDONS) return failure('invalid_request', 400)
 
-  const { data: client } = await supabase
-    .from('profiles')
-    .select('id')
-    .eq('id', req.clientId)
-    .eq('role', 'client')
-    .maybeSingle()
+  if (req.clientId) {
+    const { data: client } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('id', req.clientId)
+      .eq('role', 'client')
+      .maybeSingle()
 
-  if (!client) return failure('invalid_request', 404)
+    if (!client) return failure('invalid_request', 404)
+  } else if (!req.guest?.firstName.trim()) {
+    // No account and no name is a booking for nobody.
+    return failure('invalid_request', 400)
+  }
 
   // Same server-side pricing as a public booking: the caller names the service,
   // never what it costs.
@@ -1005,6 +1020,14 @@ export async function createStaffBooking(req: StaffBookingRequest): Promise<Book
     .insert({
       provider_id: req.providerId,
       client_id: req.clientId,
+      // The guest columns 004 has carried all along. If the email or phone
+      // matches an existing profile, appointment_match_client backfills
+      // client_id on the way in — the desk does not have to know the person
+      // already signed up. An invitation accepted later claims the rest.
+      guest_first_name: req.clientId ? null : req.guest!.firstName.trim(),
+      guest_last_name: req.clientId ? null : req.guest!.lastName?.trim() || null,
+      guest_email: req.clientId ? null : req.guest!.email?.trim().toLowerCase() || null,
+      guest_phone: req.clientId ? null : req.guest!.phone?.trim() || null,
       starts_at: requested.toISOString(),
       ends_at: endsAt.toISOString(),
       buffer_minutes: bufferMinutes,

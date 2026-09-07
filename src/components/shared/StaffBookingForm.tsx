@@ -16,7 +16,7 @@ import {
   minutesToTime,
   zonedParts,
 } from '@/lib/time'
-import { Search, AlertTriangle } from 'lucide-react'
+import { Search, AlertTriangle, UserPlus } from 'lucide-react'
 
 /** Only a fallback: every bookable provider row carries its own zone. */
 const FALLBACK_TZ = 'America/Los_Angeles'
@@ -95,6 +95,12 @@ export function StaffBookingForm({
   })
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null)
   const [clientNotes, setClientNotes] = useState('')
+  // Booking somebody who has no account yet. A name is enough — the visit is
+  // written with the appointment's guest columns, and email (when there is
+  // one) sends them an invitation to claim the account afterwards.
+  const [newClient, setNewClient] = useState(false)
+  const [guest, setGuest] = useState({ firstName: '', lastName: '', email: '', phone: '' })
+  const [sendInvite, setSendInvite] = useState(true)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [formWarnings, setFormWarnings] = useState<string[]>([])
@@ -272,7 +278,8 @@ export function StaffBookingForm({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
-    if (!selectedClient || serviceIds.length === 0 || !providerId || !activeSlot) {
+    const guestReady = newClient && guest.firstName.trim().length > 0
+    if ((!selectedClient && !guestReady) || serviceIds.length === 0 || !providerId || !activeSlot) {
       setError('Please complete all required fields')
       return
     }
@@ -281,11 +288,20 @@ export function StaffBookingForm({
     setError(null)
 
     try {
+      const guestEmail = guest.email.trim().toLowerCase()
       const response = await fetch('/api/book/staff', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          clientId: selectedClient.id,
+          clientId: selectedClient?.id ?? null,
+          guest: selectedClient
+            ? null
+            : {
+                firstName: guest.firstName.trim(),
+                lastName: guest.lastName.trim() || null,
+                email: guestEmail || null,
+                phone: guest.phone.trim() || null,
+              },
           serviceIds,
           providerId,
           startsAt: activeSlot,
@@ -298,6 +314,52 @@ export function StaffBookingForm({
 
       if (!response.ok) {
         throw new Error(data.message || data.error || 'Booking failed')
+      }
+
+      // A new person also joins the studio's list. The stub is CRM presence
+      // (051) and the invitation is their way in; both are best-effort — the
+      // appointment above is already booked, and losing either costs a chore,
+      // not the visit. The unclaimed-email unique index makes the stub insert
+      // fail loudly for someone already on the list; the invitation still
+      // goes out, aimed at the stub that already exists.
+      if (!selectedClient) {
+        const supabase = createClient()
+        let stubId: number | undefined
+        const { data: stub } = await supabase
+          .from('client_stubs')
+          .insert({
+            first_name: guest.firstName.trim(),
+            last_name: guest.lastName.trim() || null,
+            email: guestEmail || null,
+            phone: guest.phone.trim() || null,
+            source: 'walk_in',
+          })
+          .select('id')
+          .maybeSingle()
+        stubId = stub?.id
+        if (!stubId && guestEmail) {
+          const { data: existing } = await supabase
+            .from('client_stubs')
+            .select('id')
+            .ilike('email', guestEmail)
+            .is('claimed_by', null)
+            .maybeSingle()
+          stubId = existing?.id
+        }
+
+        if (sendInvite && guestEmail) {
+          await fetch('/api/invitations/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: guestEmail,
+              first_name: guest.firstName.trim() || null,
+              last_name: guest.lastName.trim() || null,
+              role: 'client',
+              client_stub_id: stubId,
+            }),
+          }).catch(() => {})
+        }
       }
 
       router.push(`/dashboard/appointments/${data.booking.id}`)
@@ -373,6 +435,67 @@ export function StaffBookingForm({
                 Change
               </Button>
             </div>
+          ) : newClient ? (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-[var(--color-muted)]">
+                  Somebody new. Only a name is needed to book — contact details
+                  let the studio reach them and invite them to their account.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setNewClient(false)}
+                >
+                  Back to search
+                </Button>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="First name" htmlFor="guest_first">
+                  <Input
+                    id="guest_first"
+                    required
+                    value={guest.firstName}
+                    onChange={(e) => setGuest({ ...guest, firstName: e.target.value })}
+                  />
+                </Field>
+                <Field label="Last name" htmlFor="guest_last">
+                  <Input
+                    id="guest_last"
+                    value={guest.lastName}
+                    onChange={(e) => setGuest({ ...guest, lastName: e.target.value })}
+                  />
+                </Field>
+                <Field label="Email" htmlFor="guest_email" hint="Optional.">
+                  <Input
+                    id="guest_email"
+                    type="email"
+                    value={guest.email}
+                    onChange={(e) => setGuest({ ...guest, email: e.target.value })}
+                  />
+                </Field>
+                <Field label="Phone" htmlFor="guest_phone" hint="Optional.">
+                  <Input
+                    id="guest_phone"
+                    type="tel"
+                    value={guest.phone}
+                    onChange={(e) => setGuest({ ...guest, phone: e.target.value })}
+                  />
+                </Field>
+              </div>
+              {guest.email.trim() && (
+                <label className="flex cursor-pointer items-center gap-2.5 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={sendInvite}
+                    onChange={(e) => setSendInvite(e.target.checked)}
+                    className="h-4 w-4 accent-[var(--color-accent)]"
+                  />
+                  Email them an invitation to claim their account
+                </label>
+              )}
+            </div>
           ) : (
             <div>
               <div className="relative">
@@ -385,7 +508,7 @@ export function StaffBookingForm({
                   className="pl-10"
                 />
               </div>
-              
+
               {searchResults.length > 0 && (
                 <ul className="mt-2 divide-y divide-[var(--color-border)] border border-[var(--color-border)]">
                   {searchResults.map((client) => (
@@ -415,13 +538,40 @@ export function StaffBookingForm({
                 </ul>
               )}
 
-              {searchTerm && searchResults.length === 0 && (
-                <p className="mt-2 text-sm text-[var(--color-muted)]">
-                  No clients found. <Button variant="ghost" size="sm" type="button">Create new client profile</Button>
-                </p>
-              )}
+              <button
+                type="button"
+                onClick={() => {
+                  // Whatever they typed looking for this person is probably
+                  // the person's name — carry it over instead of retyping.
+                  const words = searchTerm.trim().split(/\s+/).filter(Boolean)
+                  setGuest({
+                    ...guest,
+                    firstName: guest.firstName || words[0] || '',
+                    lastName: guest.lastName || words.slice(1).join(' ') || '',
+                  })
+                  setNewClient(true)
+                  setSearchTerm('')
+                }}
+                className="mt-3 flex min-h-11 items-center gap-2 text-sm text-[var(--color-muted)] underline underline-offset-4 hover:text-[var(--color-accent)]"
+              >
+                <UserPlus className="h-4 w-4" strokeWidth={1.5} />
+                {searchTerm && searchResults.length === 0
+                  ? 'Nobody by that name — book them as a new client'
+                  : 'New client'}
+              </button>
             </div>
           )}
+
+          {newClient &&
+            services.some((s) => serviceIds.includes(s.id) && s.requires_age_verification) && (
+              <div className="mt-4 flex items-start gap-2 border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                <p>
+                  This service requires the client to be 18+. There is no account to
+                  check against — verify in person.
+                </p>
+              </div>
+            )}
 
           {formWarnings.length > 0 && selectedClient && (
             <div className="mt-4 space-y-2">

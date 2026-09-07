@@ -9,7 +9,17 @@ export const dynamic = 'force-dynamic'
 const MAX_BODY_BYTES = 16_384
 
 const StaffBookingSchema = z.object({
-  clientId: z.string().uuid(),
+  // An existing client — or absent, with `guest` naming who the visit is for.
+  // Exactly one of the two: both is ambiguous, neither is a booking for nobody.
+  clientId: z.string().uuid().nullish(),
+  guest: z
+    .object({
+      firstName: z.string().trim().min(1).max(80),
+      lastName: z.string().trim().max(80).nullish(),
+      email: z.string().trim().email().max(254).nullish(),
+      phone: z.string().trim().min(7).max(40).nullish(),
+    })
+    .nullish(),
   providerId: z.string().uuid(),
   // A list, so staff can book several services as one appointment. A bare
   // number is still accepted so an older client build keeps working.
@@ -22,6 +32,8 @@ const StaffBookingSchema = z.object({
   notes: z.string().trim().max(2000).nullish(),
   /** Squeeze someone in outside published hours. Never bypasses overlap. */
   overrideAvailability: z.boolean().default(false),
+}).refine((b) => Boolean(b.clientId) !== Boolean(b.guest), {
+  message: 'Name a client or a guest, not both and not neither.',
 })
 
 /**
@@ -77,7 +89,15 @@ export async function POST(request: NextRequest) {
 
   const body = result.data
   const outcome = await createStaffBooking({
-    clientId: body.clientId,
+    clientId: body.clientId ?? null,
+    guest: body.guest
+      ? {
+          firstName: body.guest.firstName,
+          lastName: body.guest.lastName ?? null,
+          email: body.guest.email ?? null,
+          phone: body.guest.phone ?? null,
+        }
+      : undefined,
     providerId: body.providerId,
     serviceIds: body.serviceIds,
     addonIds: body.addonIds,
