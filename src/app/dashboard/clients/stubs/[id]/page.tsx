@@ -9,6 +9,7 @@ import {
   StubInviteManager,
   type StubInvitationRow,
 } from '@/components/shared/StubInviteManager'
+import { StubEditor } from '@/components/shared/StubEditor'
 import { formatDateInTimeZone, requestNow } from '@/lib/time'
 import { isFrontDesk, isStaff, type UserRole } from '@/types/database'
 
@@ -203,6 +204,20 @@ export default async function ClientStubPage({ params }: Props) {
               />
               {addedBy && <Row label="Added by" value={addedBy} />}
             </dl>
+            {isFrontDesk(role) && !stub.claimed_by && (
+              <div className="mt-5 border-t border-[var(--color-border)] pt-4">
+                <StubEditor
+                  stub={{
+                    id: stub.id,
+                    first_name: stub.first_name,
+                    last_name: stub.last_name,
+                    email: stub.email,
+                    phone: stub.phone,
+                    note: stub.note,
+                  }}
+                />
+              </div>
+            )}
           </Panel>
 
           {!stub.claimed_by && (

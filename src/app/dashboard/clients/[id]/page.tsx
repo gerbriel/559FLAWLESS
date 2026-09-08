@@ -25,6 +25,7 @@ import {
   type UserRole,
 } from '@/types/database'
 import { MergeClients } from '@/components/shared/MergeClients'
+import { EditClientDetails } from '@/components/shared/EditClientDetails'
 import {
   averageTicketCents,
   noShowRatePct,
@@ -382,11 +383,18 @@ export default async function ClientDetailPage({ params }: Props) {
             {liveBan && <Badge tone="danger">Not taking bookings</Badge>}
           </div>
 
-          <p className="mt-2 text-sm text-[var(--color-muted)]">
-            {client.email}
-            {client.phone && ` · ${client.phone}`}
-            {client.pronouns && ` · ${client.pronouns}`}
-          </p>
+          <EditClientDetails
+            client={{
+              id: client.id,
+              first_name: client.first_name,
+              last_name: client.last_name,
+              email: client.email,
+              phone: client.phone,
+              pronouns: client.pronouns,
+              date_of_birth: client.date_of_birth,
+            }}
+            canEdit={isFrontDesk(role)}
+          />
 
           <div className="mt-4">
             <ClientTagPicker
