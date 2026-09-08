@@ -17,12 +17,14 @@ import { PhotoReminderPrompt } from '@/components/shared/PhotoReminderPrompt'
 import { formatMoney } from '@/lib/utils'
 import { requestNow } from '@/lib/time'
 import {
+  isAdmin,
   isFrontDesk,
   isManager,
   type IntakeQuestion,
   type Json,
   type UserRole,
 } from '@/types/database'
+import { MergeClients } from '@/components/shared/MergeClients'
 import {
   averageTicketCents,
   noShowRatePct,
@@ -880,6 +882,21 @@ export default async function ClientDetailPage({ params }: Props) {
               </div>
             )}
           </section>
+
+          {isAdmin(role) && (
+            <MergeClients
+              current={{
+                id: client.id,
+                first_name: client.first_name,
+                last_name: client.last_name,
+                email: client.email,
+                phone: client.phone,
+                created_at: client.created_at,
+                visit_count: stats.visit_count,
+                lifetime_value_cents: stats.lifetime_value_cents,
+              }}
+            />
+          )}
         </aside>
       </div>
     </div>

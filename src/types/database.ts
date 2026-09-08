@@ -2641,6 +2641,18 @@ export type Database = {
         Returns: boolean
       }
 
+      // ── Added in 074 ────────────────────────────────────────
+      /** Fold one client account into another. Admin only, checked inside;
+       *  call with the admin's own session, never the service role. */
+      merge_client_accounts: {
+        Args: {
+          p_loser: string
+          p_survivor: string
+          p_reason?: string | null
+        }
+        Returns: Json
+      }
+
       // ── Added in 014–016 ────────────────────────────────────
       /** Append-only audit trail for role changes, logins, resets. */
       log_user_activity: {
