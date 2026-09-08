@@ -28,7 +28,7 @@ import { CalendarToolbar } from './CalendarToolbar'
 // by the one toolbar above them, which is why the swap lives here rather than
 // inside a wrapper of its own.
 import { DragScheduleBoard } from './DragScheduleBoard'
-import { useAppointmentMove, useDragCapable } from './DragScheduleProvider'
+import { useAppointmentMove } from './DragScheduleProvider'
 import { MoveAppointmentDialog } from './MoveAppointmentDialog'
 import { AppointmentModal } from './AppointmentModal'
 
@@ -142,9 +142,8 @@ export function CalendarClient({
   const [selectedProviders, setSelectedProviders] = React.useState<string[]>(initialProviders)
   const [moveTarget, setMoveTarget] = React.useState<CalendarAppointment | null>(null)
 
-  const canDrag = useDragCapable()
-  // For the Move dialog on the surfaces without a drag. The board holds its
-  // own instance; only one surface renders at a time, so they never disagree.
+  // For the Move dialog opened from the appointment popup. The board holds
+  // its own instance; a move commits through one route either way.
   const { move, movingId } = useAppointmentMove(initialAppointments)
 
   /**
@@ -264,8 +263,10 @@ export function CalendarClient({
     router.push(`/dashboard/appointments/${id}?action=note`)
   }
 
-  // Month, or a touch screen: the calendar grid. Otherwise the drag board.
-  const onBoard = canDrag && view !== 'month'
+  // Day and week live on the board everywhere: it drags with a mouse, lifts
+  // on a long press under a finger, and its Move dialog covers everything
+  // else. Month stays on the calendar grid — an overview, not a work surface.
+  const onBoard = view !== 'month'
 
   const filtered =
     selectedProviders.length === 0

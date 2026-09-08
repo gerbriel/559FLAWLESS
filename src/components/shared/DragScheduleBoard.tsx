@@ -177,6 +177,41 @@ export function DragScheduleBoard({
   const [allowOutsideHours, setAllowOutsideHours] = React.useState(false)
   const [moveTarget, setMoveTarget] = React.useState<CalendarAppointment | null>(null)
 
+  /**
+   * Touch: hold a card ~a third of a second and it lifts; drag the ghost, let
+   * go on a quarter-hour, and the same confirm dialog asks the same question.
+   *
+   * HTML5 drag-and-drop simply does not exist on touch, so this is pointer
+   * events end to end. The long press is what keeps scrolling honest: a finger
+   * that moves early is a scroll and cancels the press (the browser's own
+   * scroll fires pointercancel); a finger that holds still earns the lift, and
+   * only THEN is native scrolling suppressed — via a non-passive touchmove
+   * preventDefault, because pointer capture alone cannot stop a pan the
+   * browser has decided to start.
+   *
+   * `x`/`y` are the lift point, written once for the ghost's first paint; the
+   * per-pixel follow mutates the ghost's style directly so a 364-cell board is
+   * not re-rendered per finger movement. Only crossing into a different
+   * quarter-hour touches state.
+   */
+  const [touchDrag, setTouchDrag] = React.useState<{
+    appointment: CalendarAppointment
+    x: number
+    y: number
+    over: { key: string; dateKey: string; time: string; providerId: string | null } | null
+  } | null>(null)
+  const touchPress = React.useRef<{
+    pointerId: number
+    x: number
+    y: number
+    timer: number
+  } | null>(null)
+  const ghostRef = React.useRef<HTMLDivElement | null>(null)
+  /** When a touch drag last ended — the click that follows pointerup must not
+   *  open the appointment somebody just finished moving. */
+  const dragEndedAt = React.useRef(0)
+
+
   const days = React.useMemo(
     () =>
       view === 'day'
@@ -335,8 +370,73 @@ export function DragScheduleBoard({
       )
       setPendingDrop({ appointment, startsAt, providerId: target })
     },
-    [timezone, announce]
+    // setPendingDrop listed for the React Compiler: it infers setters as
+    // dependencies and refuses to preserve a memo whose list disagrees.
+    [timezone, announce, setPendingDrop]
   )
+
+  // The touch drag's document-level half. Attached only while a card is
+  // lifted; re-attached when the hovered quarter changes, which is the only
+  // time `touchDrag` itself changes mid-drag.
+  React.useEffect(() => {
+    if (!touchDrag) return
+    const { appointment, over } = touchDrag
+
+    const move = (e: PointerEvent) => {
+      const g = ghostRef.current
+      if (g) {
+        g.style.left = `${e.clientX}px`
+        g.style.top = `${e.clientY}px`
+      }
+      // Google-style edge scroll: the grid is taller than the screen, and the
+      // finger holding the card cannot also scroll.
+      if (e.clientY < 90) window.scrollBy(0, -14)
+      else if (e.clientY > window.innerHeight - 90) window.scrollBy(0, 14)
+
+      const el = document.elementFromPoint(e.clientX, e.clientY)
+      const cell = (el?.closest?.('[data-drop-cell]') ?? null) as HTMLElement | null
+      if (!cell) {
+        if (over) {
+          setTouchDrag((d) => (d ? { ...d, over: null } : d))
+          setHoverKey(null)
+        }
+        return
+      }
+      const key = cell.dataset.dropCell!
+      if (over?.key === key) return
+      const next = {
+        key,
+        dateKey: cell.dataset.dropDate!,
+        time: cell.dataset.dropTime!,
+        providerId: cell.dataset.dropProvider || null,
+      }
+      setTouchDrag((d) => (d ? { ...d, over: next } : d))
+      setHoverKey(key)
+    }
+
+    const finish = (commit: boolean) => {
+      dragEndedAt.current = Date.now()
+      setTouchDrag(null)
+      setHoverKey(null)
+      if (commit && over) {
+        dropAppointment(appointment, over.dateKey, over.time, over.providerId)
+      }
+    }
+    const up = () => finish(true)
+    const cancel = () => finish(false)
+    const prevent = (e: TouchEvent) => e.preventDefault()
+
+    document.addEventListener('pointermove', move)
+    document.addEventListener('pointerup', up)
+    document.addEventListener('pointercancel', cancel)
+    document.addEventListener('touchmove', prevent, { passive: false })
+    return () => {
+      document.removeEventListener('pointermove', move)
+      document.removeEventListener('pointerup', up)
+      document.removeEventListener('pointercancel', cancel)
+      document.removeEventListener('touchmove', prevent)
+    }
+  }, [touchDrag, dropAppointment])
 
   function handleDrop(
     e: React.DragEvent,
@@ -389,15 +489,61 @@ export function DragScheduleBoard({
           setDraggingId(null)
           setHoverKey(null)
         }}
-        className={`group relative border-l-4 ${colorFor(a.provider_id)} ${
+        onPointerDown={(e) => {
+          // Long-press to lift, touch only. A finger that moves early is a
+          // scroll: the slop check below and the browser's own pointercancel
+          // both clear the timer before it fires.
+          if (e.pointerType !== 'touch' || !movable) return
+          const x = e.clientX
+          const y = e.clientY
+          const timer = window.setTimeout(() => {
+            touchPress.current = null
+            navigator.vibrate?.(15)
+            setTouchDrag({ appointment: a, x, y, over: null })
+            announce(`Picked up ${clientName(a)}. Drag to a time and let go.`)
+          }, 350)
+          touchPress.current = { pointerId: e.pointerId, x, y, timer }
+        }}
+        onPointerMove={(e) => {
+          const p = touchPress.current
+          if (!p || e.pointerId !== p.pointerId) return
+          if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > 10) {
+            clearTimeout(p.timer)
+            touchPress.current = null
+          }
+        }}
+        onPointerUp={() => {
+          const p = touchPress.current
+          if (p) {
+            clearTimeout(p.timer)
+            touchPress.current = null
+          }
+        }}
+        onPointerCancel={() => {
+          const p = touchPress.current
+          if (p) {
+            clearTimeout(p.timer)
+            touchPress.current = null
+          }
+        }}
+        onContextMenu={(e) => {
+          // iOS long-press menu would land in the middle of the lift.
+          if (touchPress.current || touchDrag) e.preventDefault()
+        }}
+        className={`group relative select-none border-l-4 [-webkit-touch-callout:none] ${colorFor(a.provider_id)} ${
           pending ? PENDING_CARD_CLASS : ''
-        } ${draggingId === a.id ? 'opacity-40' : ''} ${
+        } ${draggingId === a.id || touchDrag?.appointment.id === a.id ? 'opacity-40' : ''} ${
           inFlight ? 'animate-pulse' : ''
         } ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
       >
         <button
           type="button"
-          onClick={() => onAppointmentClick(a)}
+          onClick={() => {
+            // The click that trails a touch drag's pointerup is not a tap on
+            // the card — it is the finger letting go of a move.
+            if (Date.now() - dragEndedAt.current < 400) return
+            onAppointmentClick(a)
+          }}
           // `pr-8` either way: the Move button below is `w-8` and absolutely
           // placed at the right edge, so anything less than 2rem of reserved
           // padding lets the grip sit on top of the client's name.
@@ -580,7 +726,10 @@ export function DragScheduleBoard({
                           // — 24px, so 96px an hour and 1248px a day — which is
                           // the number that made the book feel zoomed in.
                           style={{ minHeight: metrics.quarterPx }}
+                          data-drop-cell={key}
+                          data-drop-date={c.dateKey}
                           data-drop-time={time}
+                          data-drop-provider={c.providerId ?? ''}
                         >
                           {here.length === 0 && onSlotClick ? (
                             <button
@@ -652,6 +801,36 @@ export function DragScheduleBoard({
               below it to push down, so the zoom buys nothing here and these
               cards say everything regardless of it. */}
           <div className="mt-3 space-y-2">{offGrid.map((a) => card(a, true))}</div>
+        </div>
+      )}
+
+      {!canDrag && (
+        <p className="mt-3 text-xs text-[var(--color-muted)]">
+          Hold a booking for a moment to pick it up, then drag it to a new time.
+          Tapping it opens the details, where Move or extend does the same as a form.
+        </p>
+      )}
+
+      {/* The card under the finger. Position is mutated directly by the drag
+          effect — state only changes when the hovered quarter does. */}
+      {touchDrag && (
+        <div
+          ref={ghostRef}
+          className="pointer-events-none fixed z-[60] -translate-x-1/2 -translate-y-[130%]"
+          style={{ left: touchDrag.x, top: touchDrag.y }}
+        >
+          <div
+            className={`border border-[var(--color-border)] border-l-4 ${colorFor(
+              touchDrag.appointment.provider_id
+            )} bg-[var(--color-surface)] px-3 py-2 shadow-xl`}
+          >
+            <p className="text-sm font-medium">{clientName(touchDrag.appointment)}</p>
+            <p className="text-xs tabular-nums text-[var(--color-muted)]">
+              {touchDrag.over
+                ? `${dayLabelForDateKey(touchDrag.over.dateKey)} · ${touchDrag.over.time}`
+                : 'Drag to a time'}
+            </p>
+          </div>
         </div>
       )}
 
