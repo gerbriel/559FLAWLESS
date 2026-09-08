@@ -146,6 +146,45 @@ function isMovable(a: CalendarAppointment): boolean {
   return a.status !== 'cancelled' && a.status !== 'completed' && a.status !== 'no_show'
 }
 
+/**
+ * Google's column-splitting, in miniature: appointments that overlap in time
+ * share the column side by side instead of burying one another. A sweep over
+ * start-sorted intervals assigns each the lowest free lane; a "cluster" is a
+ * run with no gap of silence, and everyone in it divides the width by the
+ * cluster's widest moment, so cards in the same visual group line up.
+ */
+function assignLanes(
+  appts: Array<{ id: string; startMs: number; endMs: number }>
+): Map<string, { lane: number; lanes: number }> {
+  const result = new Map<string, { lane: number; lanes: number }>()
+  const sorted = [...appts].sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs)
+
+  let active: Array<{ endMs: number; lane: number }> = []
+  let cluster: string[] = []
+  let clusterLanes = 0
+
+  const flush = () => {
+    for (const id of cluster) result.get(id)!.lanes = clusterLanes
+    cluster = []
+    clusterLanes = 0
+  }
+
+  for (const a of sorted) {
+    active = active.filter((x) => x.endMs > a.startMs)
+    if (active.length === 0 && cluster.length > 0) flush()
+    const used = new Set(active.map((x) => x.lane))
+    let lane = 0
+    while (used.has(lane)) lane++
+    active.push({ endMs: a.endMs, lane })
+    result.set(a.id, { lane, lanes: 1 })
+    cluster.push(a.id)
+    clusterLanes = Math.max(clusterLanes, lane + 1)
+  }
+  if (cluster.length > 0) flush()
+
+  return result
+}
+
 export function DragScheduleBoard({
   view,
   currentDate,
@@ -255,6 +294,7 @@ export function DragScheduleBoard({
     return all.length > 0 ? all : providers.slice(0, 1)
   }, [providers, selectedProviders, visible])
 
+
   const colorFor = React.useCallback(
     (providerId: string) => {
       const index = providers.findIndex((p) => p.id === providerId)
@@ -295,6 +335,30 @@ export function DragScheduleBoard({
           })),
     [view, columnProviders, days, currentDate]
   )
+
+  /**
+   * Side-by-side lanes for overlapping cards, per column. Keyed by the
+   * column's own key because "overlapping" is a per-column question: on a day
+   * view two providers' 2pms are different columns and never share a lane.
+   */
+  const laneByColumn = React.useMemo(() => {
+    const out = new Map<string, Map<string, { lane: number; lanes: number }>>()
+    for (const c of columns) {
+      const colAppts = visible
+        .filter(
+          (a) =>
+            (!c.providerId || a.provider_id === c.providerId) &&
+            dateKeyInTimeZone(new Date(a.starts_at), timezone) === c.dateKey
+        )
+        .map((a) => ({
+          id: a.id,
+          startMs: new Date(a.starts_at).getTime(),
+          endMs: new Date(a.ends_at).getTime(),
+        }))
+      if (colAppts.length > 0) out.set(c.key, assignLanes(colAppts))
+    }
+    return out
+  }, [columns, visible, timezone])
 
   /**
    * One template for the header row and every hour, so they cannot fall out of
@@ -462,7 +526,7 @@ export function DragScheduleBoard({
    * is enough to drop the service and the price. The off-grid list below is
    * neither, so it asks for the full card whatever the zoom says.
    */
-  const card = (a: CalendarAppointment, full: boolean) => {
+  const card = (a: CalendarAppointment, full: boolean, heightPx?: number) => {
     const movable = isMovable(a)
     const draggable = canDrag && movable
     const inFlight = movingId === a.id
@@ -471,13 +535,20 @@ export function DragScheduleBoard({
     // one does, so anything that made it read as faint would invite a
     // double-booking. What changes is shape, texture and words.
     const pending = isAwaitingApproval(a)
+    // Drawn to its minutes now, so a 15-minute card at a compact zoom is a
+    // sliver: one line, and the tooltip carries what the sliver cannot.
+    const oneLine = heightPx !== undefined && heightPx < 36
 
     return (
       <div
         key={a.id}
         draggable={draggable}
         style={pending ? PENDING_HATCH : undefined}
-        title={pending ? PENDING_TITLE : undefined}
+        title={
+          pending
+            ? PENDING_TITLE
+            : `${formatTimeInTimeZone(new Date(a.starts_at), timezone)} · ${appointmentMinutes(a)} min — ${clientName(a)}`
+        }
         onDragStart={(e) => {
           e.dataTransfer.setData(DRAG_MIME, a.id)
           e.dataTransfer.setData('text/plain', a.id)
@@ -530,7 +601,7 @@ export function DragScheduleBoard({
           // iOS long-press menu would land in the middle of the lift.
           if (touchPress.current || touchDrag) e.preventDefault()
         }}
-        className={`group relative select-none border-l-4 [-webkit-touch-callout:none] ${colorFor(a.provider_id)} ${
+        className={`group relative h-full select-none overflow-hidden border-l-4 [-webkit-touch-callout:none] ${colorFor(a.provider_id)} ${
           pending ? PENDING_CARD_CLASS : ''
         } ${draggingId === a.id || touchDrag?.appointment.id === a.id ? 'opacity-40' : ''} ${
           inFlight ? 'animate-pulse' : ''
@@ -547,35 +618,48 @@ export function DragScheduleBoard({
           // `pr-8` either way: the Move button below is `w-8` and absolutely
           // placed at the right edge, so anything less than 2rem of reserved
           // padding lets the grip sit on top of the client's name.
-          className={`block w-full text-left ${full ? 'p-2 pr-8' : 'px-1.5 py-1 pr-8'}`}
+          className={`block h-full w-full text-left ${
+            oneLine ? 'px-1.5 py-px pr-7' : full ? 'p-2 pr-8' : 'px-1.5 py-1 pr-8'
+          }`}
         >
-          <span
-            className={`flex items-center gap-1 tabular-nums text-[var(--color-muted)] ${
-              full ? 'text-xs' : 'text-[0.6875rem] leading-tight'
-            }`}
-          >
-            {/* The duration stays at every zoom. A card is not drawn to its
-                length on this board, so "20 min" is the only thing telling you
-                a brow wax is not a 90-minute peel. */}
-            <span className="min-w-0 truncate">
-              {formatTimeInTimeZone(new Date(a.starts_at), timezone)}
-              {' · '}
-              {appointmentMinutes(a)} min
+          {oneLine ? (
+            <span className="flex min-w-0 items-center gap-1 text-[0.6875rem] leading-tight">
+              <span className="shrink-0 tabular-nums text-[var(--color-muted)]">
+                {formatTimeInTimeZone(new Date(a.starts_at), timezone)}
+              </span>
+              <span className="min-w-0 truncate">{clientName(a)}</span>
+              {pending && <PendingMark showLabel={false} className="ml-auto" />}
             </span>
-            {pending && !full && <PendingMark showLabel={false} className="ml-auto" />}
-          </span>
-          <span className={`mt-0.5 block truncate ${full ? 'text-sm' : 'text-xs leading-tight'}`}>
-            {clientName(a)}
-          </span>
-          {full && (
-            <span className="mt-0.5 block truncate text-xs text-[var(--color-muted)]">
-              {serviceName(a)}
-            </span>
-          )}
-          {full && (
-            <span className="mt-1 block text-xs tabular-nums text-[var(--color-muted)]">
-              {formatMoney(a.total_cents)}
-            </span>
+          ) : (
+            <>
+              <span
+                className={`flex items-center gap-1 tabular-nums text-[var(--color-muted)] ${
+                  full ? 'text-xs' : 'text-[0.6875rem] leading-tight'
+                }`}
+              >
+                {/* The minutes stay even though the card is now drawn to its
+                    length — a height is a shape, "80 min" is a fact. */}
+                <span className="min-w-0 truncate">
+                  {formatTimeInTimeZone(new Date(a.starts_at), timezone)}
+                  {' · '}
+                  {appointmentMinutes(a)} min
+                </span>
+                {pending && !full && <PendingMark showLabel={false} className="ml-auto" />}
+              </span>
+              <span className={`mt-0.5 block truncate ${full ? 'text-sm' : 'text-xs leading-tight'}`}>
+                {clientName(a)}
+              </span>
+              {full && (
+                <span className="mt-0.5 block truncate text-xs text-[var(--color-muted)]">
+                  {serviceName(a)}
+                </span>
+              )}
+              {full && (
+                <span className="mt-1 block text-xs tabular-nums text-[var(--color-muted)]">
+                  {formatMoney(a.total_cents)}
+                </span>
+              )}
+            </>
           )}
         </button>
 
@@ -585,7 +669,7 @@ export function DragScheduleBoard({
             both take it away, and there the label rides the time line above
             instead, leaving the dashed ring, the hatch and the tooltip to carry
             a distinction that costs the card no height. */}
-        {pending && full && <PendingMark className="px-2 pb-2" />}
+        {pending && full && !oneLine && <PendingMark className="px-2 pb-2" />}
 
         {movable && (
           <button
@@ -659,10 +743,10 @@ export function DragScheduleBoard({
             <div
               key={hour}
               // `relative` so the current-time line is positioned against THIS
-              // hour. A row is four quarter-hour drop cells at `quarterPx`, but
-              // only until a card lands in one and pushes it taller — a line
-              // measured from the top of the board would slide off its own hour
-              // on any day with bookings above it.
+              // hour. Cards are absolutely positioned now, so a row really is
+              // four quarter-hour drop cells at `quarterPx` — the axis stays
+              // true whatever lands on it, which is also what lets a card's
+              // height mean its minutes.
               className="relative grid border-b border-[var(--color-border)] last:border-b-0"
               style={{ gridTemplateColumns: template }}
             >
@@ -717,7 +801,7 @@ export function DragScheduleBoard({
                           }}
                           onDragLeave={() => setHoverKey((k) => (k === key ? null : k))}
                           onDrop={(e) => handleDrop(e, c.dateKey, time, c.providerId)}
-                          className={`flex flex-col border-t border-dashed border-transparent px-1 ${
+                          className={`relative flex flex-col border-t border-dashed border-transparent px-1 ${
                             hoverKey === key
                               ? 'bg-[var(--color-accent)]/15 border-[var(--color-accent)]'
                               : ''
@@ -757,7 +841,46 @@ export function DragScheduleBoard({
                               <span aria-hidden>+ book</span>
                             </button>
                           ) : null}
-                          {here.map((a) => card(a, view === 'day' && metrics.roomForDetail))}
+                          {here.map((a) => {
+                            // Drawn to its minutes, Google-style: top from the
+                            // start's offset inside this quarter, height from
+                            // the duration, width split with anything it
+                            // overlaps. The wrapper is solid surface so grid
+                            // lines don't read through the card's tint, and it
+                            // goes inert while a drag is in flight so drops
+                            // and elementFromPoint reach the cells beneath.
+                            const wall = wallMinutes(new Date(a.starts_at), timezone)
+                            const offsetPx =
+                              ((wall - (hour * 60 + q * DROP_STEP_MINUTES)) /
+                                DROP_STEP_MINUTES) *
+                              metrics.quarterPx
+                            const heightPx = Math.max(
+                              (appointmentMinutes(a) / DROP_STEP_MINUTES) *
+                                metrics.quarterPx -
+                                2,
+                              14
+                            )
+                            const lay = laneByColumn.get(c.key)?.get(a.id) ?? {
+                              lane: 0,
+                              lanes: 1,
+                            }
+                            return (
+                              <div
+                                key={a.id}
+                                className={`absolute z-10 bg-[var(--color-surface)] ${
+                                  draggingId || touchDrag ? 'pointer-events-none' : ''
+                                }`}
+                                style={{
+                                  top: offsetPx,
+                                  height: heightPx,
+                                  left: `${(lay.lane / lay.lanes) * 100}%`,
+                                  width: `calc(${100 / lay.lanes}% - 2px)`,
+                                }}
+                              >
+                                {card(a, view === 'day' && metrics.roomForDetail, heightPx)}
+                              </div>
+                            )
+                          })}
                         </div>
                       )
                     })}
