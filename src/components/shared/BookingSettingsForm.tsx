@@ -16,6 +16,7 @@ import type { BookingSettings } from '@/types/database'
  */
 const LEAD_PRESETS = [
   { minutes: 0, label: 'None — same-day booking is fine' },
+  { minutes: 30, label: '30 minutes' },
   { minutes: 60, label: '1 hour' },
   { minutes: 120, label: '2 hours' },
   { minutes: 240, label: '4 hours' },
@@ -42,7 +43,17 @@ export function BookingSettingsForm({ settings }: { settings: BookingSettings })
         : (settings.default_deposit_cents / 100).toFixed(2),
     cancellation_policy: settings.cancellation_policy ?? '',
     late_policy: settings.late_policy ?? '',
+    // 075's two-tier notice. Postgres `time` reads back 'HH:MM:SS'; the
+    // inputs speak 'HH:MM'.
+    early_enabled: Boolean(settings.early_slot_boundary && settings.early_cutoff),
+    early_slot_boundary: (settings.early_slot_boundary ?? '11:00').slice(0, 5),
+    early_cutoff: (settings.early_cutoff ?? '21:00').slice(0, 5),
   })
+
+  // Until migration 075 reaches the database, the columns do not exist:
+  // offering the control would make every save fail. `in` on the row the
+  // server actually returned is what knows the difference.
+  const supportsEarlyCutoff = 'early_cutoff' in settings
 
   async function save(e: React.FormEvent) {
     e.preventDefault()
@@ -65,6 +76,12 @@ export function BookingSettingsForm({ settings }: { settings: BookingSettings })
         default_deposit_cents: depositCents,
         cancellation_policy: form.cancellation_policy.trim() || null,
         late_policy: form.late_policy.trim() || null,
+        ...(supportsEarlyCutoff
+          ? {
+              early_slot_boundary: form.early_enabled ? form.early_slot_boundary : null,
+              early_cutoff: form.early_enabled ? form.early_cutoff : null,
+            }
+          : {}),
       })
       .eq('id', 1)
 
@@ -116,6 +133,62 @@ export function BookingSettingsForm({ settings }: { settings: BookingSettings })
             )}
           </Select>
         </Field>
+
+        {supportsEarlyCutoff && (
+          <div className="sm:col-span-2 space-y-4 border-l-2 border-[var(--color-border)] pl-4">
+            <label className="flex cursor-pointer items-start gap-2.5 text-sm">
+              <input
+                type="checkbox"
+                checked={form.early_enabled}
+                onChange={(e) => setForm({ ...form, early_enabled: e.target.checked })}
+                className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
+              />
+              <span>
+                Morning slots close the night before
+                <span className="block text-xs text-[var(--color-muted)]">
+                  Early appointments need to be settled the previous evening; the notice
+                  above then only governs the rest of the day. Staff can always book past
+                  either rule.
+                </span>
+              </span>
+            </label>
+
+            {form.early_enabled && (
+              <div className="grid gap-5 sm:grid-cols-2">
+                <Field
+                  label="Slots starting before"
+                  htmlFor="early_boundary"
+                  hint="Appointments earlier than this count as morning."
+                >
+                  <Input
+                    id="early_boundary"
+                    type="time"
+                    step={900}
+                    required
+                    value={form.early_slot_boundary}
+                    onChange={(e) =>
+                      setForm({ ...form, early_slot_boundary: e.target.value })
+                    }
+                  />
+                </Field>
+                <Field
+                  label="Must be booked by"
+                  htmlFor="early_cutoff"
+                  hint="The evening-before deadline, in the studio's clock."
+                >
+                  <Input
+                    id="early_cutoff"
+                    type="time"
+                    step={900}
+                    required
+                    value={form.early_cutoff}
+                    onChange={(e) => setForm({ ...form, early_cutoff: e.target.value })}
+                  />
+                </Field>
+              </div>
+            )}
+          </div>
+        )}
 
         <Field
           label="Book ahead (days)"

@@ -172,7 +172,10 @@ export async function loadAvailability(opts: {
   ] = await Promise.all([
     supabase
       .from('booking_settings')
-      .select('min_lead_minutes, max_advance_days')
+      // '*', not a column list: 075's cutoff columns may not exist yet on a
+      // database the migration has not reached, and naming them would turn
+      // that lag into an error. Absent keys read as undefined → rule off.
+      .select('*')
       .eq('id', 1)
       .maybeSingle(),
     supabase
@@ -264,6 +267,10 @@ export async function loadAvailability(opts: {
     durationMinutes: opts.durationMinutes,
     bufferMinutes: opts.bufferMinutes,
     minLeadMinutes: Math.max(0, (settings?.min_lead_minutes ?? 120) - LEAD_SLACK_MINUTES),
+    // 075's two-tier notice: mornings close the evening before. No slack
+    // applied — a deadline that reads "9pm" should mean 9pm.
+    earlySlotBoundary: settings?.early_slot_boundary ?? null,
+    earlyCutoff: settings?.early_cutoff ?? null,
     maxAdvanceDays: settings?.max_advance_days ?? 90,
     now,
   }
@@ -1006,6 +1013,14 @@ export async function createStaffBooking(req: StaffBookingRequest): Promise<Book
     return failure('service_unavailable', 503)
   }
   if (!availability) return failure('provider_not_bookable', 409)
+
+    // Notice rules — the flat lead and 075's morning cutoff — are rules about
+    // how much warning a CLIENT owes the studio. The desk booking someone in
+    // for eleven-this-morning IS the studio deciding its morning; the same
+    // exemption the move route makes, for the same reason.
+    availability.minLeadMinutes = 0
+    availability.earlySlotBoundary = null
+    availability.earlyCutoff = null
 
     const [day] = generateSlots(availability, dateKey, 1)
     const offered = day?.slots.some((s) => s.getTime() === requested.getTime()) ?? false

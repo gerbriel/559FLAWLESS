@@ -1,10 +1,11 @@
 /**
  * Slot generation — the single source of truth for "is this time bookable".
  *
- * Mirrored into supabase/functions/_shared/availability.ts, which the
- * booking-create function uses to RE-DERIVE the requested slot server-side.
- * The browser's chosen time is only ever *matched* against this output, never
- * believed. Keep the two files in step.
+ * The booking engine RE-DERIVES the requested slot through this module
+ * server-side: the browser's chosen time is only ever *matched* against this
+ * output, never believed. (An edge-function mirror of this file once existed;
+ * it is gone, exactly as the project rules say it should be — one
+ * implementation, in one runtime.)
  */
 
 import {
@@ -67,6 +68,17 @@ export interface AvailabilityInput {
   bufferMinutes: number
   /** Earliest bookable instant, from booking_settings.min_lead_minutes. */
   minLeadMinutes: number
+  /**
+   * ── Early-morning cutoff (075) ─────────────────────────────
+   * Slots STARTING before `earlySlotBoundary` ('HH:MM' wall clock in
+   * `timeZone`) must be requested by `earlyCutoff` ('HH:MM') on the previous
+   * day — the studio wants its morning knowable the night before. Both set or
+   * the rule is off; null/undefined is a no-op, like every optional here.
+   * Staff callers zero these alongside minLeadMinutes: the notice is a rule
+   * about clients.
+   */
+  earlySlotBoundary?: string | null
+  earlyCutoff?: string | null
   maxAdvanceDays: number
   /** Injected so callers control "now" and tests stay deterministic. */
   now: Date
@@ -163,6 +175,14 @@ export function generateSlots(
   const earliest = now.getTime() + minLeadMinutes * MINUTE_MS
   const latest = now.getTime() + maxAdvanceDays * 86_400_000
 
+  // Wall-clock minutes for the morning boundary, resolved once. The cutoff
+  // instant itself is per-day (it names "the evening before THAT day") and is
+  // computed inside the loop, where the day is known.
+  const earlyBoundaryMin =
+    input.earlySlotBoundary && input.earlyCutoff
+      ? timeToMinutes(input.earlySlotBoundary.slice(0, 5))
+      : null
+
   const minGap = Math.max(0, input.minGapMinutes ?? 0)
   const maxGap = input.maxGapMinutes ?? null
   const minFragment = Math.max(0, input.minFragmentMinutes ?? 0)
@@ -249,6 +269,17 @@ export function generateSlots(
         const endMs = startMs + totalMinutes * MINUTE_MS
 
         if (startMs < earliest || startMs > latest) continue
+
+        // A morning slot after its evening-before deadline is not late, it is
+        // gone: 10am is only offerable while last night's 9pm has not passed.
+        if (earlyBoundaryMin !== null && m < earlyBoundaryMin) {
+          const cutoff = zonedTimeToUtc(
+            addDaysToDateKey(dateKey, -1),
+            input.earlyCutoff!.slice(0, 5),
+            timeZone
+          )
+          if (now.getTime() > cutoff.getTime()) continue
+        }
 
         const candidate: Interval = { start: startMs, end: endMs }
         if (dayBlocks.some((b) => overlaps(candidate, b))) continue

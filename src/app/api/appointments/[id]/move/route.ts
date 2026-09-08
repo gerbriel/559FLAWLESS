@@ -260,6 +260,10 @@ export async function POST(
     // to three is not a late booking, and holding them to it would make the
     // calendar unusable on the day it matters most.
     availability.minLeadMinutes = 0
+    // 075's morning cutoff is a client-notice rule too; staff moving the book
+    // around is the studio managing its own morning.
+    availability.earlySlotBoundary = null
+    availability.earlyCutoff = null
 
     const [day] = generateSlots(availability, dateKey, 1)
     const offered = day?.slots.some((s) => s.getTime() === requested.getTime()) ?? false

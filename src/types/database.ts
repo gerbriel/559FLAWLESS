@@ -391,6 +391,11 @@ export type BookingSettings = {
   default_deposit_cents: number
   cancellation_policy: string | null
   late_policy: string | null
+  /** 075: slots starting before this wall-clock time ('HH:MM:SS') must be
+   *  booked by early_cutoff the previous day. Null (or absent, before the
+   *  migration runs) disables the rule — readers guard with `??`. */
+  early_slot_boundary: string | null
+  early_cutoff: string | null
   updated_at: string
 }
 
