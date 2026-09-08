@@ -4,6 +4,7 @@ import { AlertTriangle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
 import { AppointmentStatusControl } from '@/components/shared/AppointmentStatusControl'
+import { MoveAppointmentButton } from '@/components/shared/MoveAppointmentButton'
 import { ClientNoteForm } from '@/components/shared/ClientNoteForm'
 import { TakePayment, type PaymentRecord } from '@/components/shared/TakePayment'
 import { PackageVisitCredit } from '@/components/shared/PackageVisitCredit'
@@ -60,6 +61,16 @@ export default async function StaffAppointmentPage({ params }: Props) {
     promotion_id: number | null
     sort_order: number
   }[]).sort((a, b) => a.sort_order - b.sort_order)
+
+  // Who the Move dialog may hand this appointment to. Same shape and filter
+  // as the booking page's provider list.
+  const { data: bookableProviders } = await supabase
+    .from('profiles')
+    .select('id, first_name, last_name, display_name')
+    .neq('role', 'client')
+    .eq('accepts_online_booking', true)
+    .is('suspended_at', null)
+    .order('first_name')
 
   // Every payment against this appointment — the Stripe deposit and anything
   // taken at the counter. The balance is the arithmetic, not a stored flag.
@@ -207,10 +218,32 @@ export default async function StaffAppointmentPage({ params }: Props) {
           )}
         </div>
 
-        <AppointmentStatusControl
-          appointmentId={appointment.id}
-          status={appointment.status as AppointmentStatus}
-        />
+        <div className="flex flex-col items-end gap-3">
+          <AppointmentStatusControl
+            appointmentId={appointment.id}
+            status={appointment.status as AppointmentStatus}
+          />
+          {!['cancelled', 'completed', 'no_show'].includes(appointment.status) && (
+            <MoveAppointmentButton
+              appointment={{
+                id: appointment.id,
+                starts_at: appointment.starts_at,
+                ends_at: appointment.ends_at,
+                provider_id: appointment.provider_id,
+                status: appointment.status as AppointmentStatus,
+              }}
+              clientLabel={
+                (client
+                  ? `${client.first_name ?? ''} ${client.last_name ?? ''}`.trim()
+                  : `${appointment.guest_first_name ?? ''} ${appointment.guest_last_name ?? ''}`.trim()) ||
+                'Guest'
+              }
+              serviceLabel={lines[0]?.name_snapshot ?? ''}
+              providers={bookableProviders ?? []}
+              timezone={STUDIO_TZ}
+            />
+          )}
+        </div>
       </div>
 
       {(intake?.flags.length ?? 0) > 0 && !intake?.reviewed_at && (

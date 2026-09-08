@@ -1,10 +1,8 @@
 'use client'
 
 import * as React from 'react'
-import { GripVertical, CalendarClock } from 'lucide-react'
+import { GripVertical } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Field, Input, Select } from '@/components/ui/field'
 import { formatMoney } from '@/lib/utils'
 import {
   addDaysToDateKey,
@@ -50,6 +48,7 @@ import {
   appointmentMinutes,
   DROP_STEP_MINUTES,
 } from './DragScheduleProvider'
+import { MoveAppointmentDialog } from './MoveAppointmentDialog'
 
 /**
  * The day and week grid you can drag on.
@@ -661,8 +660,10 @@ export function DragScheduleBoard({
       </p>
 
       {moveTarget && (
-        <MoveDialog
+        <MoveAppointmentDialog
           appointment={moveTarget}
+          clientLabel={clientName(moveTarget)}
+          serviceLabel={serviceName(moveTarget)}
           providers={columnProviders}
           timezone={timezone}
           busy={movingId === moveTarget.id}
@@ -744,204 +745,6 @@ function AllDayNotes({
         </li>
       ))}
     </ul>
-  )
-}
-
-/** Quarter-hour lengths up to the 8-hour bound the services table enforces. */
-const DURATION_CHOICES = Array.from({ length: 32 }, (_, i) => (i + 1) * 15)
-
-function durationLabel(minutes: number): string {
-  const h = Math.floor(minutes / 60)
-  const m = minutes % 60
-  if (h === 0) return `${m} min`
-  if (m === 0) return `${h} hr`
-  return `${h} hr ${m} min`
-}
-
-/**
- * Rescheduling without a mouse — and the only place a booking's LENGTH changes.
- *
- * This is not a courtesy fallback — it is the path that has to work when the
- * drag does not: a trackpad someone struggles with, a screen reader, a hand
- * that shakes, or simply moving a booking three weeks out, which no amount of
- * dragging will reach. It posts to the same route with the same rules.
- *
- * Length lives here rather than on a resize handle because cards on this board
- * are not drawn to their duration — there is no bottom edge that MEANS the end
- * time, so dragging one would be pantomime. The grip opens this dialog; the
- * length is a field; the client is told either way.
- */
-function MoveDialog({
-  appointment,
-  providers,
-  timezone,
-  busy,
-  onClose,
-  onSubmit,
-}: {
-  appointment: CalendarAppointment
-  providers: BoardProvider[]
-  timezone: string
-  busy: boolean
-  onClose: () => void
-  onSubmit: (
-    dateKey: string,
-    time: string,
-    providerId: string,
-    durationMinutes: number,
-    override: boolean
-  ) => Promise<boolean>
-}) {
-  const start = new Date(appointment.starts_at)
-  const [dateKey, setDateKey] = React.useState(dateKeyInTimeZone(start, timezone))
-  const [time, setTime] = React.useState(() => {
-    const minutes = wallMinutes(start, timezone)
-    return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`
-  })
-  const [providerId, setProviderId] = React.useState(appointment.provider_id)
-  const [duration, setDuration] = React.useState(() => appointmentMinutes(appointment))
-  const [override, setOverride] = React.useState(false)
-  const firstField = React.useRef<HTMLInputElement>(null)
-
-  React.useEffect(() => {
-    firstField.current?.focus()
-  }, [])
-
-  React.useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      onClick={onClose}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="move_dialog_title"
-        onClick={(e) => e.stopPropagation()}
-        className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto border border-[var(--color-border)] bg-[var(--color-surface)] p-6"
-      >
-        <h2 id="move_dialog_title" className="display flex items-center gap-2 text-2xl">
-          <CalendarClock className="h-5 w-5 text-[var(--color-muted)]" strokeWidth={1.5} aria-hidden />
-          Move appointment
-        </h2>
-        <p className="mt-2 text-sm text-[var(--color-muted)]">
-          {clientName(appointment)} — {serviceName(appointment) || 'appointment'}, currently{' '}
-          {formatTimeInTimeZone(start, timezone)} on {dayLabelForDateKey(dateKeyInTimeZone(start, timezone))}.
-          The client is notified of any change, in their account and by email.
-        </p>
-
-        <form
-          className="mt-6 space-y-4"
-          onSubmit={async (e) => {
-            e.preventDefault()
-            await onSubmit(dateKey, time, providerId, duration, override)
-          }}
-        >
-          <Field label="Date" htmlFor="move_date">
-            <Input
-              ref={firstField}
-              id="move_date"
-              type="date"
-              required
-              value={dateKey}
-              onChange={(e) => setDateKey(e.target.value)}
-            />
-          </Field>
-
-          <Field label="Start time" htmlFor="move_time" hint="In the studio's clock.">
-            <Input
-              id="move_time"
-              type="time"
-              step={DROP_STEP_MINUTES * 60}
-              required
-              value={time}
-              onChange={(e) => setTime(e.target.value)}
-            />
-          </Field>
-
-          <Field
-            label="Length"
-            htmlFor="move_length"
-            hint="Extending blocks more of the calendar; the price stays what was booked."
-          >
-            <Select
-              id="move_length"
-              value={String(duration)}
-              onChange={(e) => setDuration(Number(e.target.value))}
-            >
-              {DURATION_CHOICES.includes(duration) ? null : (
-                <option value={duration}>{durationLabel(duration)} (current)</option>
-              )}
-              {DURATION_CHOICES.map((m) => (
-                <option key={m} value={m}>
-                  {durationLabel(m)}
-                </option>
-              ))}
-            </Select>
-          </Field>
-
-          {providers.length > 1 && (
-            <Field label="Provider" htmlFor="move_provider">
-              <Select
-                id="move_provider"
-                value={providerId}
-                onChange={(e) => setProviderId(e.target.value)}
-              >
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {providerName(p)}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-          )}
-
-          <label className="flex cursor-pointer items-start gap-2.5 text-sm">
-            <input
-              type="checkbox"
-              checked={override}
-              onChange={(e) => setOverride(e.target.checked)}
-              className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
-            />
-            <span>
-              Outside published hours
-              <span className="block text-xs text-[var(--color-muted)]">
-                Squeezing someone in. It still cannot land on top of another booking.
-              </span>
-            </span>
-          </label>
-
-          <div className="flex flex-wrap items-center gap-3 pt-2">
-            <Button type="submit" size="sm" disabled={busy}>
-              {busy ? 'Saving…' : 'Confirm change'}
-            </Button>
-            <Button type="button" size="sm" variant="subtle" onClick={onClose}>
-              Cancel
-            </Button>
-            {/* Named, not spelled out of the enum: "pending" in a neutral chip
-                reads like a payment state, and the one thing whoever is moving
-                this needs to know is that the client has not been told they
-                have this booking at all. Moving it does send them "your
-                appointment has moved" (038), which is why it is worth saying
-                here rather than after. */}
-            {isAwaitingApproval(appointment) ? (
-              <Badge tone="warning" title={PENDING_TITLE}>
-                Awaiting approval
-              </Badge>
-            ) : (
-              <Badge tone="neutral">{appointment.status.replace('_', ' ')}</Badge>
-            )}
-          </div>
-        </form>
-      </div>
-    </div>
   )
 }
 

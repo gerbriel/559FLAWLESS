@@ -424,7 +424,7 @@ export function AppointmentModal({
               size="sm"
               onClick={() => onReschedule(appointment.id)}
             >
-              Reschedule
+              Move or extend
             </Button>
           )}
           {onAddNote && (

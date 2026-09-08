@@ -7,7 +7,7 @@ import { CircleDashed } from 'lucide-react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Badge } from '@/components/ui/badge'
 import { formatMoney } from '@/lib/utils'
-import { addDaysToDateKey, dayLabelForDateKey } from '@/lib/time'
+import { addDaysToDateKey, dayLabelForDateKey, zonedTimeToUtc } from '@/lib/time'
 import type {
   ProviderSchedule,
   AvailabilityBlockRow,
@@ -28,7 +28,8 @@ import { CalendarToolbar } from './CalendarToolbar'
 // by the one toolbar above them, which is why the swap lives here rather than
 // inside a wrapper of its own.
 import { DragScheduleBoard } from './DragScheduleBoard'
-import { useDragCapable } from './DragScheduleProvider'
+import { useAppointmentMove, useDragCapable } from './DragScheduleProvider'
+import { MoveAppointmentDialog } from './MoveAppointmentDialog'
 import { AppointmentModal } from './AppointmentModal'
 
 interface Provider {
@@ -139,8 +140,12 @@ export function CalendarClient({
   const [currentDate, setCurrentDate] = React.useState(initialDate)
   const [selectedAppointment, setSelectedAppointment] = React.useState<CalendarAppointment | null>(null)
   const [selectedProviders, setSelectedProviders] = React.useState<string[]>(initialProviders)
+  const [moveTarget, setMoveTarget] = React.useState<CalendarAppointment | null>(null)
 
   const canDrag = useDragCapable()
+  // For the Move dialog on the surfaces without a drag. The board holds its
+  // own instance; only one surface renders at a time, so they never disagree.
+  const { move, movingId } = useAppointmentMove(initialAppointments)
 
   /**
    * How tightly the book is drawn, saved per browser like the view is.
@@ -240,8 +245,15 @@ export function CalendarClient({
     router.push(`/dashboard/appointments/${id}?action=cancel`)
   }
 
+  // In place, not a navigation: `?action=reschedule` used to land on the
+  // appointment page and find nothing there. The same dialog the drag board
+  // opens serves every surface — which is the whole reason a phone, where
+  // dragging fights the scroll, is not second-class for rescheduling.
   const handleReschedule = (id: string) => {
-    router.push(`/dashboard/appointments/${id}?action=reschedule`)
+    const target = initialAppointments.find((a) => a.id === id)
+    if (!target) return
+    setSelectedAppointment(null)
+    setMoveTarget(target)
   }
 
   const handleComplete = (id: string) => {
@@ -362,6 +374,34 @@ export function CalendarClient({
           />
         )}
       </div>
+
+      {moveTarget && (
+        <MoveAppointmentDialog
+          appointment={moveTarget}
+          clientLabel={
+            (moveTarget.profiles
+              ? `${moveTarget.profiles.first_name ?? ''} ${moveTarget.profiles.last_name ?? ''}`.trim()
+              : `${moveTarget.guest_first_name ?? ''} ${moveTarget.guest_last_name ?? ''}`.trim()) ||
+            'Guest'
+          }
+          serviceLabel={moveTarget.appointment_services?.[0]?.name_snapshot ?? ''}
+          providers={providers}
+          timezone={timezone}
+          busy={movingId === moveTarget.id}
+          onClose={() => setMoveTarget(null)}
+          onSubmit={async (dateKey, time, providerId, durationMinutes, override) => {
+            const ok = await move({
+              appointment: moveTarget,
+              startsAt: zonedTimeToUtc(dateKey, time, timezone),
+              providerId,
+              durationMinutes,
+              override,
+            })
+            if (ok) setMoveTarget(null)
+            return ok
+          }}
+        />
+      )}
 
       {selectedAppointment && (
         <AppointmentModal
