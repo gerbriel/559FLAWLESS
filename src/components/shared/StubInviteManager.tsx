@@ -54,9 +54,10 @@ const STATUS_TONE = {
  * stranger's link to somebody else's studio record. So the address is read
  * back, in full, with the name it belongs to, before anything is created.
  *
- * Nothing is emailed — there is no transactional email provider in this app,
- * exactly as `InviteManager` says on the staff screen. The link appears once
- * and cannot be shown again; only its SHA-256 is stored (031).
+ * The claim link is emailed from the studio when Resend is configured — the
+ * create route does the sending and answers whether it went. The link still
+ * appears once for staff to copy, because email bounces and texting it has to
+ * stay possible; only its SHA-256 is stored (031).
  */
 export function StubInviteManager({
   stub,
@@ -79,7 +80,11 @@ export function StubInviteManager({
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<{ message: string; clientId?: string | null } | null>(null)
-  const [issued, setIssued] = useState<{ email: string; url: string } | null>(null)
+  const [issued, setIssued] = useState<{
+    email: string
+    url: string
+    emailed: boolean
+  } | null>(null)
   const [copied, setCopied] = useState(false)
   const [form, setForm] = useState({
     email: stub.email ?? '',
@@ -110,7 +115,7 @@ export function StubInviteManager({
     }).catch(() => null)
 
     const body = (await res?.json().catch(() => null)) as
-      | { ok?: true; url?: string; message?: string; clientId?: string | null }
+      | { ok?: true; url?: string; message?: string; clientId?: string | null; emailed?: boolean }
       | null
 
     setBusy(false)
@@ -124,7 +129,11 @@ export function StubInviteManager({
       return
     }
 
-    setIssued({ email: form.email.trim().toLowerCase(), url: body.url })
+    setIssued({
+      email: form.email.trim().toLowerCase(),
+      url: body.url,
+      emailed: body.emailed === true,
+    })
     setOpen(false)
     setConfirming(false)
     router.refresh()
@@ -170,11 +179,24 @@ export function StubInviteManager({
       {/* The one and only time this link can be read. */}
       {issued && (
         <div className="mt-6 border border-[var(--color-accent)] bg-[var(--color-linen)] p-5 dark:bg-[var(--color-background)]">
-          <p className="label-caps text-[var(--color-accent)]">Link ready</p>
+          <p className="label-caps text-[var(--color-accent)]">
+            {issued.emailed ? 'Invitation emailed' : 'Link ready'}
+          </p>
           <p className="mt-2 text-sm">
-            Send this to <span className="font-medium">{issued.email}</span>. It works
-            once, and it cannot be shown again — if it goes astray, issue a new one and
-            this stops working.
+            {issued.emailed ? (
+              <>
+                Sent to <span className="font-medium">{issued.email}</span> from the
+                studio. This is your copy in case it does not arrive — it works once,
+                and it cannot be shown again.
+              </>
+            ) : (
+              <>
+                The email could not be sent, so send this to{' '}
+                <span className="font-medium">{issued.email}</span> yourself. It works
+                once, and it cannot be shown again — if it goes astray, issue a new one
+                and this stops working.
+              </>
+            )}
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <input
@@ -338,7 +360,8 @@ export function StubInviteManager({
             This creates an invitation for <span className="font-medium">{name}</span> at{' '}
             <span className="font-medium">{form.email.trim().toLowerCase()}</span>. Whoever
             opens the link claims this record — their visits, their notes, their history.
-            Nothing is emailed automatically; you get the link to send yourself.
+            The link is emailed to them from the studio, and you also get a copy to send
+            yourself.
           </p>
           {live && (
             <p className="mt-2 text-sm text-[var(--color-muted)]">
