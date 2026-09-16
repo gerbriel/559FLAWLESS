@@ -8,7 +8,7 @@ import { Modal } from '@/components/ui/modal'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Field, Input, Select, Textarea } from '@/components/ui/field'
-import { formatMoney } from '@/lib/utils'
+import { formatMoney, slugify } from '@/lib/utils'
 
 export interface EditablePackage {
   id: number
@@ -38,14 +38,6 @@ function toCents(dollars: string): number | null {
 }
 
 const money = (cents: number) => (cents / 100).toFixed(2)
-
-/** A slug the URL can carry: lowercase, hyphens, nothing else. */
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
 
 const BLANK: Omit<EditablePackage, 'id'> = {
   name: '',
@@ -130,7 +122,8 @@ export function PackageEditor({
 
     const payload = {
       name: form.name.trim(),
-      slug: form.slug.trim() || slugify(form.name),
+      // Typed slugs go through slugify too — see ServiceEditor for the '+' story.
+      slug: slugify(form.slug.trim() || form.name),
       description: form.description?.trim() || null,
       service_id: form.service_id,
       session_count: form.session_count,

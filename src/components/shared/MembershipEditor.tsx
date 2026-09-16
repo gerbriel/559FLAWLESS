@@ -8,7 +8,7 @@ import { Modal } from '@/components/ui/modal'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Field, Input, Select, Textarea } from '@/components/ui/field'
-import { formatMoney } from '@/lib/utils'
+import { formatMoney, slugify } from '@/lib/utils'
 import {
   describeMembershipBenefit,
   membershipPeriodLabel,
@@ -29,13 +29,6 @@ function toCents(dollars: string): number | null {
 }
 
 const money = (cents: number) => (cents / 100).toFixed(2)
-
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
 
 type Draft = Omit<Membership, 'id' | 'created_at' | 'updated_at' | 'stripe_price_id'>
 
@@ -139,7 +132,8 @@ export function MembershipEditor({
 
     const payload = {
       name: form.name.trim(),
-      slug: form.slug.trim() || slugify(form.name),
+      // Typed slugs go through slugify too — see ServiceEditor for the '+' story.
+      slug: slugify(form.slug.trim() || form.name),
       description: form.description?.trim() || null,
       price_cents: cents,
       period_months: form.period_months,

@@ -10,6 +10,7 @@ import { Modal } from '@/components/ui/modal'
 import { Field, Input, Select, Textarea } from '@/components/ui/field'
 import { ImageField } from '@/components/shared/ImageField'
 import { describe, serviceBlockers, serviceBookingCount } from '@/lib/catalog-delete'
+import { slugify } from '@/lib/utils'
 import { formLinkForService, formLinkIsInherited } from '@/lib/forms'
 
 export interface EditableService {
@@ -78,14 +79,6 @@ function toCents(dollars: string): number | null {
 }
 
 const money = (cents: number) => (cents / 100).toFixed(2)
-
-/** A slug the URL can carry: lowercase, hyphens, nothing else. */
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
 
 const BLANK: Omit<EditableService, 'id'> = {
   category_id: 0,
@@ -437,7 +430,10 @@ export function ServiceEditor({
       return
     }
 
-    const slug = form.slug.trim() || slugify(form.name)
+    // Through slugify EVEN when typed by hand. A verbatim slug field is how
+    // a '+' reached production once — in a PostgREST query string that reads
+    // as a space, so the service's own page could never find it (service 28).
+    const slug = slugify(form.slug.trim() || form.name)
     const payload = {
       category_id: form.category_id,
       name: form.name.trim(),
