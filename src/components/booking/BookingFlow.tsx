@@ -356,8 +356,30 @@ export function BookingFlow({
     void loadSlots(weekStart)
   }, [step, provider, weekStart, loadSlots])
 
+  /**
+   * Everything that happens when a provider is settled on — by a tap on the
+   * provider step, or by there being nobody else to choose.
+   */
+  function chooseProvider(p: BookableProvider, auto: boolean) {
+    setProvider(p)
+    // Seed the week to "today in the provider's zone" here, not in the effect
+    // that loads slots.
+    setWeekStart(dateKeyInTimeZone(new Date(), p.timezone))
+    setSelectedSlot(null)
+    setLoadingSlots(true)
+    setStep('time')
+    void trackEvent('provider_selected', { provider_id: p.id, auto })
+  }
+
   function continueFromServices() {
-    setStep('provider')
+    // One person offers what was picked: asking "who?" is a step with one
+    // answer, so it is not asked. Nobody or several, and the provider step
+    // does what it always did — including saying so when it is nobody.
+    if (eligibleProviders.length === 1) {
+      chooseProvider(eligibleProviders[0], true)
+    } else {
+      setStep('provider')
+    }
     void trackEvent('booking_started', {
       service_ids: selected.map((x) => x.id),
     })
@@ -757,14 +779,23 @@ export function BookingFlow({
     )
   }
 
-  const stepIndex = STEPS.findIndex((s) => s.key === step)
+  // The rail shows the steps this booking actually has. With one eligible
+  // provider the provider step is never visited, so it is not listed either —
+  // a numbered stop the client sails past reads as a page that failed to load.
+  // Before anything is picked, the whole roster answers the same question, so
+  // the rail does not change length the moment the first service is ticked.
+  const soloProvider = hasSelection
+    ? eligibleProviders.length === 1
+    : providers.length === 1
+  const visibleSteps = soloProvider ? STEPS.filter((s) => s.key !== 'provider') : STEPS
+  const stepIndex = visibleSteps.findIndex((s) => s.key === step)
 
   return (
     <div className="grid gap-12 lg:grid-cols-[1fr_20rem]">
       <div>
         {/* Step rail */}
         <ol className="mb-12 flex flex-wrap gap-x-8 gap-y-2">
-          {STEPS.map((s, i) => (
+          {visibleSteps.map((s, i) => (
             <li
               key={s.key}
               className={cn(
@@ -1076,16 +1107,7 @@ export function BookingFlow({
                   <button
                     key={p.id}
                     type="button"
-                    onClick={() => {
-                      setProvider(p)
-                      // Seed the week to "today in the provider's zone" here,
-                      // not in the effect that loads slots.
-                      setWeekStart(dateKeyInTimeZone(new Date(), p.timezone))
-                      setSelectedSlot(null)
-                      setLoadingSlots(true)
-                      setStep('time')
-                      void trackEvent('provider_selected', { provider_id: p.id })
-                    }}
+                    onClick={() => chooseProvider(p, false)}
                     className={cn(
                       'p-6 text-left transition-colors',
                       provider?.id === p.id
@@ -1231,7 +1253,12 @@ export function BookingFlow({
             )}
 
             <div className="mt-10 flex items-center gap-4">
-              <Button variant="ghost" className="px-0" onClick={() => setStep('provider')}>
+              <Button
+                variant="ghost"
+                className="px-0"
+                // Back goes to the step that was actually shown before this one.
+                onClick={() => setStep(soloProvider ? 'service' : 'provider')}
+              >
                 <ChevronLeft className="h-4 w-4" strokeWidth={2} />
                 Back
               </Button>
