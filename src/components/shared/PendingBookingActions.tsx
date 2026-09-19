@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { AlertTriangle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { pingEmailDispatch } from '@/lib/email-ping'
+import { approveBooking } from '@/lib/approve-booking'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/field'
 import { cn, formatMoney } from '@/lib/utils'
@@ -102,37 +103,24 @@ export function PendingBookingActions({
   }
 
   /*
-   * Both writes below ask for the changed row back.
-   *
-   * Without `.select()`, supabase-js sends `Prefer: return=minimal`, and a WHERE
-   * that matched NOTHING comes back `{ data: null, error: null }` — the same
-   * shape as success. Two guards on these updates can produce exactly that: the
-   * `.eq('status','pending')` losing a race with whoever answered the booking
-   * first, and an update the 004 policies do not admit, which RLS filters to
-   * zero rows rather than rejecting.
-   *
-   * These toasts are load-bearing. One claims a notification that only exists
-   * if the status actually changed — `appointment_notify_review` fires on the
-   * transition, not on the request — and the other is the last thing standing
-   * between the decision and a refund somebody owes. Neither may be printed on
-   * the strength of a write that did not happen.
+   * Both writes below ask for the changed row back — see the note in
+   * src/lib/approve-booking.ts for why a missing `.select()` makes a write
+   * that did not happen read exactly like one that did. The toasts here are
+   * what that rule protects: one claims a notification that only exists if the
+   * status actually changed, and the other is the last thing standing between
+   * the decision and a refund somebody owes.
    */
   async function approve() {
     setBusy(true)
-    const { data, error } = await createClient()
-      .from('appointments')
-      .update({ status: 'confirmed', approval_reason: null })
-      .eq('id', appointmentId)
-      .eq('status', 'pending')
-      .select('id')
+    const outcome = await approveBooking(appointmentId)
     setBusy(false)
 
-    if (error) {
+    if (outcome === 'failed') {
       toast.error('Could not confirm that booking.')
       return
     }
 
-    if (!data || data.length === 0) {
+    if (outcome === 'already_answered') {
       // Nothing was written, so nothing was sent. Refresh rather than explain —
       // whatever this booking is now, the queue is about to show it.
       toast.error('That booking is no longer waiting — someone else has answered it.')
@@ -144,17 +132,6 @@ export function PendingBookingActions({
     // client a notification row and the bell in the account header is what
     // renders it; nothing in this app sends mail or SMS. "Has been told" read
     // as "we texted them", which nobody did.
-    // Re-title the provider's Google event — the push drops the HOLD: prefix
-    // now that the row reads confirmed. Fire-and-forget: the booking is
-    // decided either way, and the daily sync is not a fallback for pushes, so
-    // a failure here costs only a stale title, not the record.
-    void fetch('/api/calendar/push', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: 'appointment', id: appointmentId }),
-    }).catch(() => {})
-
-    pingEmailDispatch()
     toast.success(`Confirmed — ${clientName} has a notification in their account.`)
     router.refresh()
   }

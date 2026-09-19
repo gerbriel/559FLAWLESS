@@ -48,7 +48,11 @@ export default async function DashboardLayout({
    */
   const navCollapsed = (await cookies()).get('dash_nav')?.value === 'rail'
 
-  const [{ count: unreadNotifications }, { count: unreadThreads }] = await Promise.all([
+  const [
+    { count: unreadNotifications },
+    { count: unreadThreads },
+    { count: pendingApprovals },
+  ] = await Promise.all([
     supabase
       .from('notifications')
       .select('id', { count: 'exact', head: true })
@@ -59,6 +63,14 @@ export default async function DashboardLayout({
       .select('id', { count: 'exact', head: true })
       .eq('staff_unread', true)
       .neq('status', 'archived'),
+    // What is waiting on a person. Unscoped on purpose: the SELECT policies in
+    // 004 are what decide whose queue this is — a provider counts her own, front
+    // desk and up count the studio — which is the same line the queue's own
+    // page draws.
+    supabase
+      .from('appointments')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'pending'),
   ])
 
   return (
@@ -86,7 +98,11 @@ export default async function DashboardLayout({
             {/* One tap to clock in or out. Self-contained; renders nothing for
                 anyone with no shift to punch. */}
             <TimeClockPanel compact />
-            <NotificationBell count={unreadNotifications ?? 0} />
+            <NotificationBell
+              count={unreadNotifications ?? 0}
+              pendingCount={pendingApprovals ?? 0}
+              canApprove
+            />
             <Link
               href="/"
               className="label-caps hidden text-[var(--color-muted)] hover:text-[var(--color-accent)] sm:block"
