@@ -56,6 +56,14 @@ export default async function TimesheetsPage({ searchParams }: Props) {
 
   if (!profile || profile.suspended_at) redirect('/account')
 
+  const { data: studioSettings } = await supabase
+    .from('booking_settings')
+    .select('time_clock_enabled')
+    .eq('id', 1)
+    .maybeSingle()
+  // Switched off (077): the history stays readable, nobody punches.
+  const clockOn = studioSettings?.time_clock_enabled ?? true
+
   const role = profile.role as UserRole
   const canSeeEveryone = isManager(role)
 
@@ -149,22 +157,32 @@ export default async function TimesheetsPage({ searchParams }: Props) {
         </span>
       </div>
 
-      {params.remind === 'clock_in' && (
+      {!clockOn && (
+        <p className="mt-6 border-l-2 border-[var(--color-border)] bg-[var(--color-surface)] p-4 text-sm text-[var(--color-muted)]">
+          The time clock is switched off for the studio, so nobody clocks in or out and no
+          reminders go out. Hours already recorded are below. A manager can switch it back on
+          under Settings.
+        </p>
+      )}
+
+      {clockOn && params.remind === 'clock_in' && (
         <p className="mt-6 border-l-2 border-[var(--color-accent)] bg-[var(--color-clay-soft)] p-4 text-sm dark:bg-[var(--color-background)]">
           Your shift has started and you are not on the clock. Punch in below — or if you
           started earlier than this, ask a manager to correct it rather than guessing.
         </p>
       )}
-      {params.remind === 'clock_out' && (
+      {clockOn && params.remind === 'clock_out' && (
         <p className="mt-6 border-l-2 border-[var(--color-accent)] bg-[var(--color-clay-soft)] p-4 text-sm dark:bg-[var(--color-background)]">
           You are still on the clock from an earlier shift. Clock out below so your hours
           are right.
         </p>
       )}
 
-      <div className="mt-8">
-        <TimeClockPanel />
-      </div>
+      {clockOn && (
+        <div className="mt-8">
+          <TimeClockPanel />
+        </div>
+      )}
 
       {/* ── Filters ── */}
       <form method="get" className="mt-10 flex flex-wrap items-end gap-4">

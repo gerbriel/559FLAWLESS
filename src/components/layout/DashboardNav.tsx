@@ -408,17 +408,17 @@ type Resolved =
  * - a container with exactly one child left *becomes* that child, rather than
  *   asking someone to open a drawer to find a single thing in it.
  */
-function resolve(entries: NavEntry[], role: UserRole): Resolved[] {
+function resolve(entries: NavEntry[], role: UserRole, hidden: ReadonlySet<string>): Resolved[] {
   const out: Resolved[] = []
 
   for (const entry of entries) {
     if (!isGroup(entry)) {
-      if (entry.visible(role)) out.push({ kind: 'item', item: entry })
+      if (entry.visible(role) && !hidden.has(entry.href)) out.push({ kind: 'item', item: entry })
       continue
     }
 
     if (entry.visible && !entry.visible(role)) continue
-    const children = entry.children.filter((child) => child.visible(role))
+    const children = entry.children.filter((child) => child.visible(role) && !hidden.has(child.href))
 
     if (entry.href) {
       out.push(
@@ -856,6 +856,8 @@ export function DashboardNav({
   unreadThreads,
   userName,
   initialCollapsed,
+  timeClock = true,
+  myHours = true,
 }: {
   role: UserRole
   unreadThreads: number
@@ -866,10 +868,18 @@ export function DashboardNav({
    * nothing to flash.
    */
   initialCollapsed: boolean
+  /** The studio's time clock switch (077). Off drops Timesheets from the menu. */
+  timeClock?: boolean
+  /** The studio's My hours switch (077). Off drops My hours from the menu. */
+  myHours?: boolean
 }) {
   const pathname = usePathname()
-  const top = resolve(TREE, role)
-  const bottom = resolve(BOTTOM, role)
+  const hidden = new Set([
+    ...(timeClock ? [] : ['/dashboard/calendar/timesheets']),
+    ...(myHours ? [] : ['/dashboard/calendar/hours']),
+  ])
+  const top = resolve(TREE, role, hidden)
+  const bottom = resolve(BOTTOM, role, hidden)
 
   // Every destination the menu offers this role, parents and children in one
   // list. `isActive` has always needed to see all of them at once — a parent

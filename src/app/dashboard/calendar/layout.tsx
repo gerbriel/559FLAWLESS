@@ -1,4 +1,5 @@
 import { SectionTabs } from '@/components/layout/SectionTabs'
+import { createClient } from '@/lib/supabase/server'
 
 /**
  * Time, in one place.
@@ -12,15 +13,24 @@ import { SectionTabs } from '@/components/layout/SectionTabs'
  * the scope-and-zone label). The diary has none, so the active tab is the only
  * thing that needs to name it — a second "Calendar" 40px below was repetition.
  *
- * Nothing is fetched here either. Two of the three tabs would pay for a query
- * they never read, and the tabs themselves are visible to every staff member —
- * the sidebar entries these replaced were all ungated.
+ * One thing is fetched: the studio's two switches (077). With the clock off,
+ * Timesheets is not a tab; with My hours off, neither is My hours. The tabs are otherwise visible to every staff
+ * member — the sidebar entries these replaced were all ungated.
  */
-export default function CalendarSectionLayout({
+export default async function CalendarSectionLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
+  const supabase = await createClient()
+  const { data: settings } = await supabase
+    .from('booking_settings')
+    .select('time_clock_enabled, my_hours_enabled')
+    .eq('id', 1)
+    .maybeSingle()
+  const timeClock = settings?.time_clock_enabled ?? true
+  const myHours = settings?.my_hours_enabled ?? true
+
   return (
     <div>
       <SectionTabs
@@ -28,8 +38,8 @@ export default function CalendarSectionLayout({
         root="/dashboard/calendar"
         tabs={[
           { href: '/dashboard/calendar', label: 'Calendar' },
-          { href: '/dashboard/calendar/hours', label: 'My hours' },
-          { href: '/dashboard/calendar/timesheets', label: 'Timesheets' },
+          ...(myHours ? [{ href: '/dashboard/calendar/hours', label: 'My hours' }] : []),
+          ...(timeClock ? [{ href: '/dashboard/calendar/timesheets', label: 'Timesheets' }] : []),
         ]}
       />
 

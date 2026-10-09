@@ -52,6 +52,7 @@ export default async function DashboardLayout({
     { count: unreadNotifications },
     { count: unreadThreads },
     { count: pendingApprovals },
+    { data: studioSettings },
   ] = await Promise.all([
     supabase
       .from('notifications')
@@ -71,7 +72,12 @@ export default async function DashboardLayout({
       .from('appointments')
       .select('id', { count: 'exact', head: true })
       .eq('status', 'pending'),
+    supabase.from('booking_settings').select('time_clock_enabled, my_hours_enabled').eq('id', 1).maybeSingle(),
   ])
+
+  // The studio's switch (077). Absent row or column reads as on — the default.
+  const timeClock = studioSettings?.time_clock_enabled ?? true
+  const myHours = studioSettings?.my_hours_enabled ?? true
 
   return (
     // `dash` is the scope that softens this side of the app — rounded panels,
@@ -96,8 +102,9 @@ export default async function DashboardLayout({
             {/* Renders nothing at all while there is one studio. */}
             <LocationSwitcher />
             {/* One tap to clock in or out. Self-contained; renders nothing for
-                anyone with no shift to punch. */}
-            <TimeClockPanel compact />
+                anyone with no shift to punch — or for anyone at all when the
+                studio has switched the clock off in Settings. */}
+            {timeClock && <TimeClockPanel compact />}
             <NotificationBell
               count={unreadNotifications ?? 0}
               pendingCount={pendingApprovals ?? 0}
@@ -123,6 +130,8 @@ export default async function DashboardLayout({
           unreadThreads={unreadThreads ?? 0}
           userName={profile.display_name || profile.first_name || 'Team member'}
           initialCollapsed={navCollapsed}
+          timeClock={timeClock}
+          myHours={myHours}
         />
         <main className="min-w-0 flex-1 px-6 py-10 lg:px-10">{children}</main>
       </div>

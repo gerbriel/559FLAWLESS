@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { BookingSettingsForm } from '@/components/shared/BookingSettingsForm'
 import { SalesTaxForm } from '@/components/shared/SalesTaxForm'
+import { StaffToolsForm } from '@/components/shared/StaffToolsForm'
 import { ScheduledJobs } from '@/components/shared/ScheduledJobs'
 import {
   StaffVisibility,
@@ -575,6 +576,33 @@ export default async function SettingsPage() {
               </p>
             )}
           </div>
+        </section>
+      )}
+
+      {/* The two staff tools a small studio may switch off (077). Managers and
+          up write booking_settings (029), so that is who sees the switches. */}
+      {userIsManager && settings && (
+        <section className="mt-14">
+          <h2 className="display text-2xl">Staff tools</h2>
+          <p className="mt-2 max-w-prose text-sm text-[var(--color-muted)]">
+            Switch off what the studio does not use, and it leaves the menu for everyone.
+          </p>
+          <div className="mt-6">
+            <StaffToolsForm
+              timeClock={settings.time_clock_enabled ?? true}
+              myHours={settings.my_hours_enabled ?? true}
+            />
+          </div>
+          {settings.my_hours_enabled === false && (
+            <p className="mt-4 text-sm">
+              <Link href="/dashboard/calendar/hours" className="underline hover:text-[var(--color-accent)]">
+                Open My hours
+              </Link>{' '}
+              <span className="text-[var(--color-muted)]">
+                — working hours and Google Calendar, while it is hidden from the menu.
+              </span>
+            </p>
+          )}
         </section>
       )}
 

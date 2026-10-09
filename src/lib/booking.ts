@@ -24,6 +24,7 @@
 import 'server-only'
 import { logError } from '@/lib/log-error'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { after } from 'next/server'
 import { syncAppointmentToCalendar } from '@/lib/calendar-push'
 import { applyMembershipBenefit } from '@/lib/memberships'
 import { generateSlots, type AvailabilityInput } from '@/lib/availability'
@@ -869,9 +870,11 @@ export async function createBooking(req: BookingRequest): Promise<BookingOutcome
 
   // Mirror it into the provider's Google Calendar. Deliberately not awaited
   // into the response path: the booking is already committed and the client is
-  // waiting. If Google is slow or down, the next sync reconciles rather than
-  // the client seeing an error for a slot they successfully took.
-  void syncAppointmentToCalendar(appointment.id)
+  // waiting, and Google being slow or down must not turn a slot they took into
+  // an error. `after()`, not a bare `void`: on Vercel a promise left running
+  // when the response goes out can be frozen with the function, and nothing
+  // re-pushes a missed booking later — the daily sync only pulls busy time.
+  after(() => syncAppointmentToCalendar(appointment.id))
 
   return {
     ok: true,
@@ -1123,7 +1126,8 @@ export async function createStaffBooking(req: StaffBookingRequest): Promise<Book
     now,
   })
 
-  void syncAppointmentToCalendar(appointment.id)
+  // See createBooking: after(), so the push outlives the response.
+  after(() => syncAppointmentToCalendar(appointment.id))
 
   // No notification is written here: the appointment_notify trigger already
   // tells the client and the provider. Doing it again sent two.

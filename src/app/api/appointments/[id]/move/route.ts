@@ -1,4 +1,4 @@
-import { NextResponse, type NextRequest } from 'next/server'
+import { NextResponse, after, type NextRequest } from 'next/server'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -346,7 +346,9 @@ export async function POST(
 
   // Keep Google in step. Not awaited into the response: the move is committed
   // and the person who dragged it is watching a card that has already landed.
-  void syncAppointmentToCalendar(appointment.id)
+  // after(), not void: a promise still running when the response goes out can
+  // be frozen with the function, and the move would never reach Google.
+  after(() => syncAppointmentToCalendar(appointment.id))
 
   return NextResponse.json({
     ok: true,
