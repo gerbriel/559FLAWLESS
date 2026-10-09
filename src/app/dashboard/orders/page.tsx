@@ -3,6 +3,7 @@ import { AlertTriangle, Package, Scissors, Store, Globe } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
 import { OrderStatusControl } from '@/components/shared/OrderStatusControl'
+import { ItemizeOrder, type ItemizeOption } from '@/components/shared/ItemizeOrder'
 import { formatMoney } from '@/lib/utils'
 import { formatDateTimeInTimeZone } from '@/lib/time'
 import type { OrderStatus, AppointmentStatus } from '@/types/database'
@@ -58,7 +59,7 @@ export default async function DashboardOrdersPage({ searchParams }: Props) {
     supabase
       .from('orders')
       .select(
-        'id, order_number, status, channel, payment_method, fulfillment, total_cents, created_at, paid_at, guest_name, guest_email, client_id, profiles!orders_client_id_fkey(first_name, last_name), order_items(id, name_snapshot, qty)'
+        'id, order_number, status, channel, payment_method, fulfillment, total_cents, created_at, paid_at, guest_name, guest_email, client_id, profiles!orders_client_id_fkey(first_name, last_name), order_items(id, name_snapshot, qty, kind, unit_price_cents)'
       )
       .neq('status', 'cart')
       .order('created_at', { ascending: false })
@@ -107,7 +108,13 @@ export default async function DashboardOrdersPage({ searchParams }: Props) {
         o.profiles as { first_name: string | null; last_name: string | null } | null,
         o.guest_name ?? o.guest_email ?? 'Guest'
       ),
-      items: (o.order_items ?? []) as { id: number; name_snapshot: string; qty: number }[],
+      items: (o.order_items ?? []) as {
+        id: number
+        name_snapshot: string
+        qty: number
+        kind: 'product' | 'custom' | 'service'
+        unit_price_cents: number
+      }[],
       balance: billable ? Math.max(o.total_cents - taken, 0) : 0,
     }
   })
@@ -132,6 +139,44 @@ export default async function DashboardOrdersPage({ searchParams }: Props) {
       billable,
     }
   })
+
+  // Counter sales rung up as a typed-in amount and not yet (fully) itemised.
+  const openAmount = (o: (typeof orderRows)[number]) =>
+    o.status === 'completed' && o.channel === 'in_store'
+      ? o.items.filter((i) => i.kind === 'custom').reduce((s, i) => s + i.unit_price_cents * i.qty, 0)
+      : 0
+  const toItemise = orderRows.filter((o) => openAmount(o) > 0)
+
+  // The picker for "Assign items" — only fetched when something needs it.
+  let itemizeOptions: ItemizeOption[] = []
+  if (active === 'products' && toItemise.length > 0) {
+    const [{ data: products }, { data: services }] = await Promise.all([
+      supabase
+        .from('products')
+        .select('id, name, price_cents, stock_qty')
+        .eq('is_active', true)
+        .eq('is_retail', true)
+        .is('archived_at', null)
+        .gt('price_cents', 0)
+        .order('name'),
+      supabase.from('services').select('id, name, price_cents').eq('is_active', true).order('sort_order'),
+    ])
+    itemizeOptions = [
+      ...(products ?? []).map((p) => ({
+        key: `p:${p.id}`,
+        name: p.name,
+        price_cents: p.price_cents,
+        kind: 'product' as const,
+        stock: Number(p.stock_qty),
+      })),
+      ...(services ?? []).map((s) => ({
+        key: `s:${s.id}`,
+        name: s.name,
+        price_cents: s.price_cents,
+        kind: 'service' as const,
+      })),
+    ]
+  }
 
   const owedAppointments = appointmentRows.filter((a) => a.balance > 0)
   const owedOrders = orderRows.filter((o) => o.balance > 0)
@@ -174,7 +219,9 @@ export default async function DashboardOrdersPage({ searchParams }: Props) {
               ? owedAppointments.length + owedOrders.length
               : v.key === 'fulfil'
                 ? toShip.length
-                : 0
+                : v.key === 'products'
+                  ? toItemise.length
+                  : 0
           return (
             <Link
               key={v.key}
@@ -359,6 +406,13 @@ export default async function DashboardOrdersPage({ searchParams }: Props) {
                   </div>
 
                   <span className="w-24 text-right tabular-nums">{formatMoney(o.total_cents)}</span>
+
+                  {openAmount(o) > 0 && (
+                    <div className="flex w-full flex-wrap items-center gap-3 sm:pl-38">
+                      <Badge tone="warning">{formatMoney(openAmount(o))} not itemised</Badge>
+                      <ItemizeOrder orderId={o.id} openCents={openAmount(o)} options={itemizeOptions} />
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>

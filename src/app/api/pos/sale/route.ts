@@ -19,16 +19,43 @@ const SaleSchema = z
           qty: z.number().int().positive().max(999),
         })
       )
-      .min(1)
-      .max(50),
+      .max(50)
+      .default([]),
+    /**
+     * An amount typed in at the till — an add-on, a touch-up, a debt from
+     * before the app, or the whole sale before anyone has listed what it was
+     * for. Products and services can be put against it later from Orders.
+     *
+     * With `applyToAppointments`, the amount pays off what those visits still
+     * owe first, and only what is left over becomes the custom line.
+     *
+     * The one place a price comes from the browser, on purpose: it is the
+     * desk's own figure, it is front desk and up only (checked below), and the
+     * order records who rang it up.
+     */
+    custom: z
+      .object({
+        description: z.string().trim().min(1).max(120),
+        amountCents: z.number().int().min(1).max(1_000_000),
+        taxable: z.boolean().default(false),
+      })
+      .nullish(),
     paymentMethod: z.enum(['cash', 'card', 'apple_pay', 'zelle', 'paypal', 'venmo', 'cashapp', 'other']),
     appointmentId: z.string().uuid().nullish(),
+    /** The client's own visits whose balance the custom amount settles first. */
+    applyToAppointments: z.array(z.string().uuid()).max(10).default([]),
     notes: z.string().trim().max(500).nullish(),
     /** Manager-only, verified below. Integer cents off before tax. */
     discountCents: z.number().int().min(0).max(1_000_000).default(0),
   })
   .refine((v) => v.clientId || v.guestName, {
     message: 'Name the customer, even if only as a walk-in.',
+  })
+  .refine((v) => v.items.length > 0 || v.custom, {
+    message: 'Add something to the sale first.',
+  })
+  .refine((v) => v.applyToAppointments.length === 0 || (v.custom && v.clientId), {
+    message: 'Only a custom amount for a named client can go against their balance.',
   })
 
 /** Fresno County's combined rate, unless the studio has set its own. */
@@ -74,8 +101,101 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  const { clientId, guestName, items, paymentMethod, appointmentId, notes } = parsed.data
+  const { clientId, guestName, items, custom, paymentMethod, appointmentId, applyToAppointments, notes } =
+    parsed.data
   const admin = createAdminClient()
+
+  // ── What the typed amount settles first ──────────────────────
+  // Balances are re-derived here from `payments`, the same arithmetic as the
+  // Orders page: the browser says WHICH visits, never how much they owe.
+  const applied: { appointmentId: string; cents: number; kind: 'deposit' | 'service' }[] = []
+  if (custom && clientId && applyToAppointments.length > 0) {
+    const [{ data: visits, error: visitError }, { data: paidRows, error: paidError }] = await Promise.all([
+      admin
+        .from('appointments')
+        .select('id, starts_at, status, total_cents')
+        .in('id', applyToAppointments)
+        .eq('client_id', clientId)
+        .not('status', 'in', '(cancelled,no_show)')
+        .order('starts_at', { ascending: true }),
+      admin
+        .from('payments')
+        .select('appointment_id, amount_cents')
+        .in('appointment_id', applyToAppointments)
+        .eq('status', 'succeeded'),
+    ])
+
+    if (visitError || paidError || !visits) {
+      return NextResponse.json(
+        { error: 'lookup_failed', message: 'Could not read what that client owes.' },
+        { status: 500 }
+      )
+    }
+
+    let left = custom.amountCents
+    for (const v of visits) {
+      if (left <= 0) break
+      const taken = (paidRows ?? [])
+        .filter((p) => p.appointment_id === v.id)
+        .reduce((sum, p) => sum + p.amount_cents, 0)
+      const owed = Math.max(v.total_cents - taken, 0)
+      const cents = Math.min(owed, left)
+      if (cents <= 0) continue
+      // Same rule as TakePayment: a first, partial payment is the deposit.
+      applied.push({
+        appointmentId: v.id,
+        cents,
+        kind: taken === 0 && cents < v.total_cents ? 'deposit' : 'service',
+      })
+      left -= cents
+    }
+  }
+  const appliedCents = applied.reduce((sum, a) => sum + a.cents, 0)
+  // What is left of the typed amount after the balances — the custom line.
+  const extraCents = (custom?.amountCents ?? 0) - appliedCents
+
+  /**
+   * Record the balance payments. Run as the signed-in staff member, not the
+   * service role, so `processed_by` says who took the money.
+   */
+  async function settleBalances(): Promise<string | null> {
+    for (const a of applied) {
+      const { error } = await supabase.rpc('record_payment', {
+        p_amount_cents: a.cents,
+        p_kind: a.kind,
+        p_method: paymentMethod,
+        p_appointment: a.appointmentId,
+        p_note: notes ?? null,
+      })
+      if (error) {
+        void logError('pos/sale', error.message, { step: 'settle_balance', appointment_id: a.appointmentId })
+        return a.appointmentId
+      }
+    }
+    return null
+  }
+
+  // The whole amount went on balances: nothing left to sell, so no order.
+  if (custom && extraCents <= 0 && items.length === 0) {
+    const failed = await settleBalances()
+    if (failed && failed === applied[0]?.appointmentId) {
+      return NextResponse.json(
+        { error: 'sale_failed', message: 'Could not record that payment. Nothing was taken.' },
+        { status: 500 }
+      )
+    }
+    return NextResponse.json(
+      {
+        ok: true,
+        order: null,
+        applied,
+        applied_cents: appliedCents,
+        total_cents: appliedCents,
+        ...(failed ? { warning: 'Part of that payment did not record — check the visit under Orders.' } : {}),
+      },
+      { status: 201 }
+    )
+  }
 
   // Merge duplicate lines so two scans of the same product are one line of two,
   // and so the stock check below sees the true quantity.
@@ -84,10 +204,13 @@ export async function POST(request: NextRequest) {
     wanted.set(it.productId, (wanted.get(it.productId) ?? 0) + it.qty)
   }
 
-  const { data: products, error: productError } = await admin
-    .from('products')
-    .select('id, name, sku, price_cents, stock_qty, is_active, is_retail, external_url')
-    .in('id', [...wanted.keys()])
+  const { data: products, error: productError } =
+    wanted.size === 0
+      ? { data: [], error: null }
+      : await admin
+          .from('products')
+          .select('id, name, sku, price_cents, stock_qty, is_active, is_retail, external_url')
+          .in('id', [...wanted.keys()])
 
   if (productError || !products) {
     return NextResponse.json(
@@ -154,7 +277,8 @@ export async function POST(request: NextRequest) {
     })
   }
 
-  const subtotal = lines.reduce((sum, l) => sum + l.unit_price_cents * l.qty, 0)
+  const productSubtotal = lines.reduce((sum, l) => sum + l.unit_price_cents * l.qty, 0)
+  const customCents = custom ? extraCents : 0
 
   // The multibuy deal (068): "buy 2 get the 3rd half off". Computed from the
   // whole basket, cheapest units first, before the order exists — the items
@@ -176,9 +300,10 @@ export async function POST(request: NextRequest) {
 
   // The manager's hand-typed discount rides on top of the running deal but is
   // verified HERE — a front-desk request simply loses the field, and the sum
-  // can never exceed what is being sold.
+  // can never exceed the products being sold. A custom amount is already the
+  // desk's own figure; discounting it as well would be the same thing twice.
   const manual = isManager(staff.role as UserRole)
-    ? Math.min(parsed.data.discountCents, Math.max(subtotal - promoDiscount, 0))
+    ? Math.min(parsed.data.discountCents, Math.max(productSubtotal - promoDiscount, 0))
     : 0
   const discount = promoDiscount + manual
 
@@ -192,8 +317,12 @@ export async function POST(request: NextRequest) {
   const parsedRate = Number(rateSetting?.text_value)
   const taxRate =
     Number.isFinite(parsedRate) && parsedRate >= 0 && parsedRate < 1 ? parsedRate : DEFAULT_TAX_RATE
-  // Tax follows what the customer actually pays, not the pre-deal figure.
-  const tax = Math.round(Math.max(subtotal - discount, 0) * taxRate)
+  // Tax follows what the customer actually pays, not the pre-deal figure. A
+  // custom amount is taxed only when the desk says it is goods — an add-on
+  // treatment or an old balance is not.
+  const taxableCents =
+    Math.max(productSubtotal - discount, 0) + (custom?.taxable ? customCents : 0)
+  const tax = Math.round(taxableCents * taxRate)
 
   const { data: order, error: orderError } = await admin
     .from('orders')
@@ -205,7 +334,9 @@ export async function POST(request: NextRequest) {
       fulfillment: 'pickup',
       payment_method: paymentMethod,
       sold_by: user.id,
-      appointment_id: appointmentId ?? null,
+      // A custom amount that settled a visit's balance belongs to that visit,
+      // which is also what the attach-rate figure reads.
+      appointment_id: appointmentId ?? applied[0]?.appointmentId ?? null,
       staff_notes: notes ?? null,
       tax_cents: tax,
       discount_cents: discount,
@@ -221,9 +352,22 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  const { error: itemsError } = await admin
-    .from('order_items')
-    .insert(lines.map((l) => ({ ...l, order_id: order.id })))
+  const { error: itemsError } = await admin.from('order_items').insert([
+    ...lines.map((l) => ({ ...l, order_id: order.id })),
+    ...(custom && customCents > 0
+      ? [
+          {
+            order_id: order.id,
+            kind: 'custom' as const,
+            product_id: null,
+            name_snapshot: custom.description,
+            sku_snapshot: null,
+            unit_price_cents: custom.amountCents,
+            qty: 1,
+          },
+        ]
+      : []),
+  ])
 
   if (itemsError) {
     // Nothing has been paid or decremented yet, so removing the shell is clean.
@@ -291,5 +435,20 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({ ok: true, order: paid, discount_cents: discount }, { status: 201 })
+  // The balances last, once the sale is certain: a failed order must not
+  // leave money recorded against a visit for a sale that never happened.
+  const failed = applied.length > 0 ? await settleBalances() : null
+
+  return NextResponse.json(
+    {
+      ok: true,
+      order: paid,
+      discount_cents: discount,
+      applied,
+      applied_cents: appliedCents,
+      total_cents: paid.total_cents + appliedCents,
+      ...(failed ? { warning: 'The balance payment did not record — take it on the visit instead.' } : {}),
+    },
+    { status: 201 }
+  )
 }

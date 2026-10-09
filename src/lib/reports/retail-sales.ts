@@ -55,7 +55,7 @@ const SALE_STATUSES = [
 const ORDER_COLS =
   'id, order_number, location_id, status, channel, payment_method, sold_by, guest_name, appointment_id, subtotal_cents, discount_cents, tax_cents, shipping_cents, total_cents, paid_at, created_at'
 const ORDER_ITEM_COLS =
-  'id, order_id, product_id, name_snapshot, sku_snapshot, unit_price_cents, qty, line_total_cents, cost_snapshot_cents'
+  'id, order_id, product_id, kind, service_id, name_snapshot, sku_snapshot, unit_price_cents, qty, line_total_cents, cost_snapshot_cents'
 const PAYMENT_COLS = 'id, order_id, amount_cents, kind, status, created_at'
 const PRODUCT_COLS = 'id, sku, name, brand_id, category_id, cost_cents, is_retail, is_professional, external_url'
 const APPOINTMENT_COLS = 'id, location_id, provider_id, status, starts_at'
@@ -406,8 +406,26 @@ export const retailSalesReport: ReportModule = {
         // `order_items.product_id` is ON DELETE SET NULL, so a product removed
         // from the catalogue leaves its sales behind with only a name snapshot.
         // Those lines are real sales and must not be dropped.
-        const key = line.product_id === null ? `gone:${line.name_snapshot}` : `p:${line.product_id}`
-        const name = product?.name ?? line.name_snapshot
+        //
+        // Custom and service lines (076) have no product by design: a typed-in
+        // amount at the till, and a treatment it was later put against. They
+        // are money on a counter order, so they stay in the totals — under
+        // their own names, not mistaken for deleted products.
+        const isProductLine = line.kind === 'product'
+        const key =
+          line.kind === 'custom'
+            ? 'custom'
+            : line.kind === 'service'
+              ? `svc:${line.service_id ?? line.name_snapshot}`
+              : line.product_id === null
+                ? `gone:${line.name_snapshot}`
+                : `p:${line.product_id}`
+        const name =
+          line.kind === 'custom'
+            ? 'Custom amounts (not itemised)'
+            : line.kind === 'service'
+              ? `Service: ${line.name_snapshot}`
+              : (product?.name ?? line.name_snapshot)
 
         const bucket = touch(byProduct, key, name)
         bucket.sku = product?.sku ?? line.sku_snapshot
@@ -418,21 +436,27 @@ export const retailSalesReport: ReportModule = {
         // reachable for pre-043 rows the backfill could not match and for
         // products deleted since — both are counted and declared.
         let unitCost = line.cost_snapshot_cents
-        if (unitCost === null) {
+        if (!isProductLine) {
+          // Nothing came off a shelf, so there is no cost to fall back to.
+        } else if (unitCost === null) {
           unitCost = product?.cost_cents ?? null
           fallbackLines += 1
         } else {
           snapshotLines += 1
         }
-        if (line.product_id === null) orphanLines += 1
-        if (unitCost === null || unitCost === 0) zeroCostLines += 1
+        if (isProductLine && line.product_id === null) orphanLines += 1
+        if (isProductLine && (unitCost === null || unitCost === 0)) zeroCostLines += 1
 
         const lineCost = (unitCost ?? 0) * line.qty
         const billed = billedShares[i]
         const revenue = revenueShares[i]
 
-        if (unitCost === null || unitCost === 0) bucket.flags.add('no cost')
-        if (line.product_id === null) bucket.flags.add('product deleted')
+        if (line.kind === 'custom') bucket.flags.add('custom amount')
+        else if (line.kind === 'service') bucket.flags.add('service')
+        else {
+          if (unitCost === null || unitCost === 0) bucket.flags.add('no cost')
+          if (line.product_id === null) bucket.flags.add('product deleted')
+        }
 
         const apply = (b: Bucket) => {
           b.units += line.qty

@@ -396,6 +396,10 @@ export type BookingSettings = {
    *  migration runs) disables the rule — readers guard with `??`. */
   early_slot_boundary: string | null
   early_cutoff: string | null
+  /** 077: the staff time clock and Timesheets are on. Defaults true. */
+  time_clock_enabled: boolean
+  /** 077: "My hours" is in the menu. Off only hides it — hours still drive booking. */
+  my_hours_enabled: boolean
   updated_at: string
 }
 
@@ -793,6 +797,14 @@ export type OrderItem = {
   id: number
   order_id: number
   product_id: number | null
+  /**
+   * product: off the shelf. custom: an amount typed in at the till, not yet
+   * itemised (at most one per order). service: a treatment the money was put
+   * against afterwards by itemize_order(). Added in 076.
+   */
+  kind: 'product' | 'custom' | 'service'
+  /** Set only on a `service` line. */
+  service_id: number | null
   /**
    * What the unit cost the studio, captured at sale by a trigger (043) — the
    * cost counterpart to unit_price_cents. Null on rows written before 043;
@@ -1804,6 +1816,7 @@ export type Database = {
         [
           Rel<'order_items_order_id_fkey', ['order_id'], 'orders', ['id']>,
           Rel<'order_items_product_id_fkey', ['product_id'], 'products', ['id']>,
+          Rel<'order_items_service_id_fkey', ['service_id'], 'services', ['id']>,
         ]
       >
       announcements: TableDef<Announcement>
@@ -2207,6 +2220,18 @@ export type Database = {
       client_photo_status: { Row: ClientPhotoStatus; Relationships: [] }
     }
     Functions: {
+      /**
+       * Assign products and services to the custom amount on a completed
+       * counter sale. Prices come from the catalogue; the order total never
+       * moves. Front desk and up. Added in 076.
+       */
+      itemize_order: {
+        Args: {
+          p_order: number
+          p_lines: ({ product_id: number; qty: number } | { service_id: number; qty: number })[]
+        }
+        Returns: { assigned_cents: number; unassigned_cents: number; over_cents: number }
+      }
       /** The single entry point for changing stock. See 007_inventory.sql. */
       adjust_stock: {
         Args: {

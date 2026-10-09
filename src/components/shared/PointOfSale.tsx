@@ -15,12 +15,14 @@ import {
   Package,
   Layers,
   Scissors,
+  PenLine,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Field, Input, Select } from '@/components/ui/field'
 import { createClient } from '@/lib/supabase/client'
 import { cn, formatMoney } from '@/lib/utils'
+import { formatDateTimeInTimeZone } from '@/lib/time'
 import { sellPackage } from '@/app/dashboard/packages/actions'
 import { packageErrorMessage } from '@/app/dashboard/packages/errors'
 import {
@@ -81,6 +83,16 @@ export interface CustomerOption {
   email: string | null
 }
 
+/** A visit of the picked client's with money still owed on it. */
+interface OpenBalance {
+  id: string
+  starts_at: string
+  services: string
+  owed_cents: number
+}
+
+const STUDIO_TZ = 'America/Los_Angeles'
+
 interface Line {
   product: SellableProduct
   qty: number
@@ -94,6 +106,10 @@ interface Receipt {
   customer: string
   /** Set when the sale was a package rather than things off the shelf. */
   prepaid?: { name: string; sessions: number; expiresAt: string | null } | null
+  /** Set when the sale was a typed-in amount, to be itemised later. */
+  custom?: boolean
+  /** How much of a custom amount went on the client's visit balances. */
+  applied_cents?: number
 }
 
 /**
@@ -219,7 +235,73 @@ export function PointOfSale({
   }, [packages])
 
   const packageList = packages ?? fetchedPackages ?? []
-  const [mode, setMode] = useState<'retail' | 'services' | 'prepaid'>('retail')
+  const [mode, setMode] = useState<'retail' | 'services' | 'prepaid' | 'custom'>('retail')
+  // Custom mode: a figure typed in at the counter, itemised later if at all.
+  const [customDesc, setCustomDesc] = useState('')
+  const [customAmount, setCustomAmount] = useState('')
+  const [customTaxable, setCustomTaxable] = useState(false)
+  // What the picked client still owes, and which of it this payment settles.
+  const [balances, setBalances] = useState<OpenBalance[]>([])
+  const [applyTo, setApplyTo] = useState<string[]>([])
+
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      if (!customerId) {
+        if (alive) {
+          setBalances([])
+          setApplyTo([])
+        }
+        return
+      }
+      const supabase = createClient()
+      const { data: visits } = await supabase
+        .from('appointments')
+        .select('id, starts_at, total_cents, appointment_services(name_snapshot, sort_order)')
+        .eq('client_id', customerId)
+        .not('status', 'in', '(cancelled,no_show)')
+        .order('starts_at', { ascending: true })
+        .limit(50)
+      const ids = (visits ?? []).map((v) => v.id)
+      const { data: paid } =
+        ids.length === 0
+          ? { data: [] }
+          : await supabase
+              .from('payments')
+              .select('appointment_id, amount_cents')
+              .in('appointment_id', ids)
+              .eq('status', 'succeeded')
+      if (!alive) return
+
+      const open = (visits ?? [])
+        .map((v) => {
+          const taken = (paid ?? [])
+            .filter((p) => p.appointment_id === v.id)
+            .reduce((sum, p) => sum + p.amount_cents, 0)
+          return {
+            id: v.id,
+            starts_at: v.starts_at,
+            services: ((v.appointment_services ?? []) as { name_snapshot: string; sort_order: number }[])
+              .sort((a, b) => a.sort_order - b.sort_order)
+              .map((x) => x.name_snapshot)
+              .join(' + '),
+            owed_cents: Math.max(v.total_cents - taken, 0),
+          }
+        })
+        .filter((v) => v.owed_cents > 0)
+
+      setBalances(open)
+      // Today's visit and anything already past are what the desk is usually
+      // settling; a booking next month is left for them to tick.
+      const endOfToday = Date.now() + 12 * 60 * 60 * 1000
+      setApplyTo(open.filter((v) => new Date(v.starts_at).getTime() <= endOfToday).map((v) => v.id))
+    })()
+    return () => {
+      alive = false
+    }
+  }, [customerId])
+
+  const owedTotal = balances.reduce((sum, b) => sum + b.owed_cents, 0)
   // Services mode: each tap adds one line; two facials really are two lines.
   const [serviceLines, setServiceLines] = useState<SellableService[]>([])
   // The manager's discount, in dollars as typed. Parsed at use, capped server-side.
@@ -231,6 +313,17 @@ export function PointOfSale({
   const sellingPackage = packageList.length > 0 && mode === 'prepaid'
   const serviceList = services ?? []
   const sellingServices = serviceList.length > 0 && mode === 'services'
+  const sellingCustom = mode === 'custom'
+  const customCents = Math.max(
+    0,
+    Math.round((Number(customAmount.replace(/[$,\s]/g, '')) || 0) * 100)
+  )
+  // Preview of the split. The server re-derives every balance; this only reads.
+  const owedSelected = balances
+    .filter((b) => applyTo.includes(b.id))
+    .reduce((sum, b) => sum + b.owed_cents, 0)
+  const towardBalance = sellingCustom ? Math.min(owedSelected, customCents) : 0
+  const customExtra = customCents - towardBalance
 
   // One cue at a time, cleared a beat after the animation ends. Guarded by seq
   // so a later tap's timer is the only one that can retire it.
@@ -264,7 +357,7 @@ export function PointOfSale({
   // The manager's discount, cents. Preview only — the routes re-verify the
   // role and cap it; a mistyped value can only make the preview read high.
   const manualDiscount =
-    canDiscount && !sellingPackage
+    canDiscount && !sellingPackage && !sellingCustom
       ? Math.max(0, Math.round((Number(discount.replace(/[$,\s]/g, '')) || 0) * 100))
       : 0
 
@@ -275,10 +368,14 @@ export function PointOfSale({
     ? (chosenPackage?.price_cents ?? 0)
     : sellingServices
       ? servicesSubtotal
-      : retailSubtotal
-  const afterDiscount = Math.max(subtotal - (sellingPackage ? 0 : manualDiscount), 0)
-  const tax = sellingPackage || sellingServices ? 0 : Math.round(afterDiscount * taxRate)
-  const total = afterDiscount + tax
+      : sellingCustom
+        ? customExtra
+        : retailSubtotal
+  const afterDiscount = Math.max(subtotal - manualDiscount, 0)
+  // A custom amount is taxed only when the desk ticks that it is goods.
+  const untaxed = sellingPackage || sellingServices || (sellingCustom && !customTaxable)
+  const tax = untaxed ? 0 : Math.round(afterDiscount * taxRate)
+  const total = afterDiscount + tax + towardBalance
 
   /**
    * Add one of something, and say so on its tile.
@@ -429,7 +526,7 @@ export function PointOfSale({
     // a new sale behind it. Neither should one while a package is on the
     // counter — a package has nothing to scan, and a stray keystroke burst
     // should not silently switch what is being sold.
-    enabled: !receipt && !camera && !sellingPackage,
+    enabled: !receipt && !camera && !sellingPackage && !sellingCustom,
     onScan: (scan) => {
       void handleScan(scan.code)
     },
@@ -554,7 +651,82 @@ export function PointOfSale({
     }
   }
 
+  /**
+   * Ring up a typed-in amount. Same endpoint as the shelf, so the order, the
+   * ledger row and the client's history are written exactly the same way.
+   */
+  async function ringUpCustom() {
+    if (!customDesc.trim() && customExtra > 0) {
+      toast.error('Say what the extras are for — it goes on the receipt.')
+      return
+    }
+    if (customCents <= 0) {
+      toast.error('Enter an amount.')
+      return
+    }
+    if (!customerId && !walkIn.trim()) {
+      toast.error('Pick a client or type a name for the walk-in.')
+      return
+    }
+
+    setBusy(true)
+    try {
+      const res = await fetch('/api/pos/sale', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientId: customerId || null,
+          guestName: customerId ? null : walkIn.trim(),
+          items: [],
+          custom: {
+            description: customDesc.trim() || 'Visit balance',
+            amountCents: customCents,
+            taxable: customTaxable,
+          },
+          applyToAppointments: customerId ? applyTo : [],
+          paymentMethod: method,
+          notes: notes.trim() || null,
+        }),
+      })
+      const data = await res.json()
+
+      if (!res.ok) {
+        toast.error(data.message ?? 'Could not complete that sale.')
+        return
+      }
+
+      if (data.warning) toast.warning(data.warning)
+
+      setReceipt({
+        order_number: data.order?.order_number ?? null,
+        subtotal_cents: data.order?.subtotal_cents ?? 0,
+        tax_cents: data.order?.tax_cents ?? 0,
+        total_cents: data.total_cents,
+        customer: customerId
+          ? (customers.find((c) => c.id === customerId)?.name ?? 'Client')
+          : walkIn.trim(),
+        custom: (data.order?.subtotal_cents ?? 0) > 0,
+        applied_cents: data.applied_cents ?? 0,
+      })
+      setCustomDesc('')
+      setCustomAmount('')
+      setCustomTaxable(false)
+      setCustomerId('')
+      setWalkIn('')
+      setNotes('')
+      router.refresh()
+    } catch {
+      toast.error('Could not reach the server.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function ringUp() {
+    if (sellingCustom) {
+      await ringUpCustom()
+      return
+    }
     if (sellingPackage) {
       await ringUpPackage()
       return
@@ -628,8 +800,16 @@ export function PointOfSale({
             <dt className="text-[var(--color-muted)]">Order</dt>
             <dd className="tabular-nums">{receipt.order_number ?? '—'}</dd>
           </div>
+          {(receipt.applied_cents ?? 0) > 0 && (
+            <div className="flex justify-between">
+              <dt className="text-[var(--color-muted)]">Toward visit balance</dt>
+              <dd className="tabular-nums">{formatMoney(receipt.applied_cents ?? 0)}</dd>
+            </div>
+          )}
           <div className="flex justify-between">
-            <dt className="text-[var(--color-muted)]">Subtotal</dt>
+            <dt className="text-[var(--color-muted)]">
+              {(receipt.applied_cents ?? 0) > 0 ? 'Extras' : 'Subtotal'}
+            </dt>
             <dd className="tabular-nums">{formatMoney(receipt.subtotal_cents)}</dd>
           </div>
           {/* A package carries no sales tax, so the line would read $0 and say
@@ -662,6 +842,16 @@ export function PointOfSale({
                 : ', with no expiry'}
               . Spend one at checkout and it comes off what that visit owes.
             </>
+          ) : !receipt.custom && (receipt.applied_cents ?? 0) > 0 ? (
+            <>The whole amount went on {receipt.customer}&rsquo;s visit balance.</>
+          ) : receipt.custom ? (
+            <>
+              {(receipt.applied_cents ?? 0) > 0 &&
+                `${formatMoney(receipt.applied_cents ?? 0)} went on their visit balance. `}
+              This is on the customer&rsquo;s history. To record what it was for, open it
+              under Orders &rarr; Products and choose <em>Assign items</em> &mdash; the
+              total stays what was paid.
+            </>
           ) : (
             <>Stock has been updated and this is on the customer&rsquo;s history.</>
           )}
@@ -674,7 +864,7 @@ export function PointOfSale({
               <Button variant="subtle">Balances</Button>
             </Link>
           ) : (
-            <Link href="/dashboard/orders">
+            <Link href="/dashboard/orders?view=products">
               <Button variant="subtle">All orders</Button>
             </Link>
           )}
@@ -686,14 +876,13 @@ export function PointOfSale({
   return (
     <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_22rem]">
       <div>
-        {/* Drawn only when there is something behind it. A studio that has
-            never priced a package sees the till exactly as it was. */}
-        {(packageList.length > 0 || serviceList.length > 0) && (
+        {/* Always drawn, since a typed-in amount is always on offer. Services
+            and Packages appear only when there is something behind them. */}
           <div
             data-ui="tile"
             role="group"
             aria-label="What is being sold"
-            className="mb-6 inline-flex border border-[var(--color-border)] p-1"
+            className="mb-6 inline-flex flex-wrap border border-[var(--color-border)] p-1"
           >
             {(
               [
@@ -704,6 +893,7 @@ export function PointOfSale({
                 ...(packageList.length > 0
                   ? [{ value: 'prepaid' as const, label: 'Packages', icon: Layers }]
                   : []),
+                { value: 'custom' as const, label: 'Custom amount', icon: PenLine },
               ]
             ).map((tab) => {
               const on = mode === tab.value
@@ -728,9 +918,83 @@ export function PointOfSale({
               )
             })}
           </div>
-        )}
 
-        {sellingServices ? (
+        {sellingCustom ? (
+          <div className="max-w-xl">
+            <p className="max-w-prose text-sm text-[var(--color-muted)]">
+              Type in the whole amount being paid. If the client owes on a visit, that is
+              settled first; whatever is left over — add-ons, extra products — goes on the
+              sale, and what it covered can be assigned afterwards from Orders without
+              changing what was paid.
+            </p>
+
+            <div className="mt-6 space-y-4 border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
+              {balances.length > 0 && (
+                <fieldset className="space-y-2">
+                  <legend className="label-caps mb-2 text-[var(--color-muted)]">
+                    Pay off first
+                  </legend>
+                  {balances.map((b) => (
+                    <label key={b.id} className="flex items-start gap-3 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={applyTo.includes(b.id)}
+                        onChange={(e) =>
+                          setApplyTo((cur) =>
+                            e.target.checked ? [...cur, b.id] : cur.filter((id) => id !== b.id)
+                          )
+                        }
+                        className="mt-1 h-4 w-4 accent-[var(--color-accent)]"
+                      />
+                      <span className="min-w-0 flex-1">
+                        {b.services || 'Visit'}
+                        <span className="block text-xs text-[var(--color-muted)]">
+                          {formatDateTimeInTimeZone(new Date(b.starts_at), STUDIO_TZ)}
+                        </span>
+                      </span>
+                      <span className="tabular-nums">{formatMoney(b.owed_cents)}</span>
+                    </label>
+                  ))}
+                </fieldset>
+              )}
+
+              <Field label="What it's for" htmlFor="pos_custom_desc" hint="Shows on the receipt and in their history.">
+                <Input
+                  id="pos_custom_desc"
+                  maxLength={120}
+                  placeholder="e.g. Brow tint add-on"
+                  value={customDesc}
+                  onChange={(e) => setCustomDesc(e.target.value)}
+                />
+              </Field>
+
+              <Field label="Amount ($)" htmlFor="pos_custom_amount">
+                <Input
+                  id="pos_custom_amount"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={customAmount}
+                  onChange={(e) => setCustomAmount(e.target.value)}
+                />
+              </Field>
+
+              <label className="flex items-start gap-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={customTaxable}
+                  onChange={(e) => setCustomTaxable(e.target.checked)}
+                  className="mt-1 h-4 w-4 accent-[var(--color-accent)]"
+                />
+                <span>
+                  Charge sales tax
+                  <span className="block text-xs text-[var(--color-muted)]">
+                    Tick only if the extras are products. Visit balances and services are never taxed.
+                  </span>
+                </span>
+              </label>
+            </div>
+          </div>
+        ) : sellingServices ? (
           <>
             <p className="max-w-prose text-sm text-[var(--color-muted)]">
               A treatment rung up at the counter. It lands on the book as a completed
@@ -1027,7 +1291,28 @@ export function PointOfSale({
         <div className="border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
           <h2 className="label-caps text-[var(--color-muted)]">This sale</h2>
 
-          {sellingPackage ? (
+          {sellingCustom ? (
+            customCents === 0 ? (
+              <p className="mt-4 text-sm text-[var(--color-muted)]">Type a description and an amount.</p>
+            ) : (
+              <div className="mt-4 flex items-start gap-2.5 text-sm">
+                <span
+                  data-ui="tile"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center bg-[var(--color-linen)] dark:bg-[var(--color-background)]"
+                >
+                  <PenLine className="h-4 w-4 text-[var(--color-muted)]" strokeWidth={1.25} aria-hidden />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <span className="block truncate">{customDesc.trim() || 'Visit balance'}</span>
+                  <span className="text-xs tabular-nums text-[var(--color-muted)]">
+                    {towardBalance > 0
+                      ? `${formatMoney(towardBalance)} on visit balance · ${formatMoney(customExtra)} extras`
+                      : `${formatMoney(customCents)} · custom amount`}
+                  </span>
+                </div>
+              </div>
+            )
+          ) : sellingPackage ? (
             chosenPackage === null ? (
               <p className="mt-4 text-sm text-[var(--color-muted)]">No package picked yet.</p>
             ) : (
@@ -1149,8 +1434,14 @@ export function PointOfSale({
           )}
 
           <dl className="mt-5 space-y-1.5 border-t border-[var(--color-border)] pt-4 text-sm">
+            {towardBalance > 0 && (
+              <div className="flex justify-between">
+                <dt className="text-[var(--color-muted)]">Toward visit balance</dt>
+                <dd className="tabular-nums">{formatMoney(towardBalance)}</dd>
+              </div>
+            )}
             <div className="flex justify-between">
-              <dt className="text-[var(--color-muted)]">Subtotal</dt>
+              <dt className="text-[var(--color-muted)]">{towardBalance > 0 ? 'Extras' : 'Subtotal'}</dt>
               <dd className="tabular-nums">{formatMoney(subtotal)}</dd>
             </div>
             {manualDiscount > 0 && (
@@ -1161,12 +1452,12 @@ export function PointOfSale({
             )}
             <div className="flex justify-between">
               <dt className="text-[var(--color-muted)]">
-                {sellingPackage || sellingServices
+                {untaxed
                   ? 'Tax'
                   : `Tax ${(taxRate * 100).toFixed(2).replace(/\.?0+$/, '')}%`}
               </dt>
               <dd className="tabular-nums">
-                {sellingPackage || sellingServices ? (
+                {untaxed ? (
                   <span className="text-[var(--color-muted)]">Not taxable</span>
                 ) : (
                   formatMoney(tax)
@@ -1181,7 +1472,7 @@ export function PointOfSale({
 
           {/* The manager's hand on the price — off before tax, re-verified
               and capped server-side. Absent for everyone else. */}
-          {canDiscount && !sellingPackage && (
+          {canDiscount && !sellingPackage && !sellingCustom && (
             <Field label="Discount ($)" htmlFor="pos_discount" className="mt-4">
               <Input
                 id="pos_discount"
@@ -1218,6 +1509,15 @@ export function PointOfSale({
               ))}
             </Select>
           </Field>
+
+          {customerId && owedTotal > 0 && !sellingCustom && (
+            <p className="text-xs leading-relaxed text-amber-700 dark:text-amber-400">
+              They owe {formatMoney(owedTotal)} on{' '}
+              {balances.length === 1 ? 'a visit' : `${balances.length} visits`}. This sale does not
+              settle it — use <em>Custom amount</em> to take it together, or Take payment on the
+              visit.
+            </p>
+          )}
 
           {!customerId && !sellingPackage && (
             <Field label="Walk-in name" htmlFor="pos_walkin">
@@ -1259,7 +1559,16 @@ export function PointOfSale({
 
           <Button
             onClick={ringUp}
-            disabled={busy || (sellingPackage ? chosenPackage === null : lines.length === 0)}
+            disabled={
+              busy ||
+              (sellingCustom
+                ? customCents === 0 || (customExtra > 0 && !customDesc.trim())
+                : sellingPackage
+                  ? chosenPackage === null
+                  : sellingServices
+                    ? serviceLines.length === 0
+                    : lines.length === 0)
+            }
             className="w-full"
           >
             {busy ? 'Ringing up…' : `Take ${formatMoney(total)}`}
