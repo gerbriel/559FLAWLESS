@@ -353,7 +353,7 @@ export default async function SettingsPage() {
 
               The client-facing string quoted below is STATUS_LABEL.pending in
               src/app/account/appointments/page.tsx; the queue is
-              /dashboard/appointments/pending, "Waiting on you" in the sidebar. */}
+              "Waiting on you" at the top of Today (PendingQueue). */}
           <div className="mt-6 border-l-2 border-[var(--color-accent)] pl-5">
             <h3 className="label-caps text-[var(--color-muted)]">
               Holding bookings for approval
@@ -390,7 +390,7 @@ export default async function SettingsPage() {
                 The provider whose time was booked and the front desk are both told, and the
                 booking lands in{' '}
                 <Link
-                  href="/dashboard/appointments/pending"
+                  href="/dashboard#waiting"
                   className="text-[var(--color-foreground)] underline"
                 >
                   Waiting on you
@@ -648,7 +648,7 @@ export default async function SettingsPage() {
           is already tighter than the database requires. Left where it is: the
           brief here is to subtract for providers and the front desk, and widening
           it to manager would add a section a manager does not see today. */}
-      {userIsAdmin && <ScheduledJobs />}
+      {userIsAdmin && <ScheduledJobs timeClock={settings?.time_clock_enabled ?? true} />}
 
       {/* Read-only for everybody — 003 makes closures publicly readable and
           admin-writable, and there is no control here to be wrong about. A day

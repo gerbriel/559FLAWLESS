@@ -141,7 +141,7 @@ export default async function SchedulingSettingsPage({ searchParams }: Props) {
       <div className="flex flex-wrap items-baseline justify-between gap-4">
         <h1 className="display text-3xl">Scheduling</h1>
         <Link
-          href="/dashboard/appointments/pending"
+          href="/dashboard#waiting"
           className="label-caps text-[var(--color-muted)] hover:text-[var(--color-accent)]"
         >
           Waiting on you

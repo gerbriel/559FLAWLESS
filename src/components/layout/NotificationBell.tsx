@@ -224,7 +224,7 @@ export function NotificationBell({
             {/* The queue, not the list. Survives Clear all on purpose. */}
             {canApprove && waiting > 0 && (
               <Link
-                href="/dashboard/appointments/pending"
+                href="/dashboard#waiting"
                 onClick={() => setOpen(false)}
                 className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-linen)] px-4 py-3 text-sm transition-colors hover:text-[var(--color-accent)] dark:bg-[var(--color-background)]"
               >
@@ -293,7 +293,7 @@ export function NotificationBell({
                             {busyId === String(n.id) ? 'Confirming…' : 'Approve'}
                           </button>
                           <Link
-                            href="/dashboard/appointments/pending"
+                            href="/dashboard#waiting"
                             onClick={() => setOpen(false)}
                             className="label-caps text-[var(--color-muted)] hover:text-[var(--color-foreground)]"
                           >

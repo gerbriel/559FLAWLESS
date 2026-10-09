@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 import { AlertTriangle, TrendingUp, Users, DollarSign } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
+import { PendingQueue } from '@/components/shared/PendingQueue'
 import { formatMoney } from '@/lib/utils'
 import { dateKeyInTimeZone, formatTimeInTimeZone, zonedTimeToUtc, addDaysToDateKey , requestNow } from '@/lib/time'
 import { isFrontDesk, isManager, type UserRole } from '@/types/database'
@@ -146,6 +147,10 @@ export default async function DashboardHome() {
           </ul>
         </div>
       )}
+
+      {/* ── Waiting on you ────────────────────────────── */}
+      {/* The approval queue. Renders nothing when nothing is waiting. */}
+      <PendingQueue variant="today" />
 
       {/* ── Today's book ──────────────────────────────── */}
       <section className="mt-12">

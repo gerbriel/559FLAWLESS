@@ -1,4 +1,5 @@
 import { cookies } from 'next/headers'
+import { PendingQueue } from '@/components/shared/PendingQueue'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { CalendarClient } from '@/components/shared/CalendarClient'
@@ -261,6 +262,10 @@ export default async function CalendarPage({ searchParams }: Props) {
     // Kept only so this page reads the same as its siblings in isolation.
     <div className="mt-10">
       <h1 className="sr-only">Calendar</h1>
+
+      {/* Bookings held for a decision, folded above the diary. Renders nothing
+          when nothing is waiting. */}
+      <PendingQueue variant="calendar" />
 
       <CalendarClient
         initialAppointments={formattedAppointments}

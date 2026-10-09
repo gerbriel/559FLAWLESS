@@ -10,7 +10,6 @@ import {
   CalendarDays,
   ChevronDown,
   Circle,
-  ClipboardCheck,
   ClipboardList,
   FileBarChart,
   FileSignature,
@@ -139,15 +138,8 @@ const TREE: NavEntry[] = [
       { href: '/dashboard/calendar/timesheets', label: 'Timesheets', visible: () => true },
     ],
   },
-  // Bookings the approval rules held back. A provider sees their own; front
-  // desk and up see the studio's — RLS on `appointments` already draws that
-  // line, so the item itself is visible to everyone.
-  {
-    href: '/dashboard/appointments/pending',
-    label: 'Waiting on you',
-    icon: ClipboardCheck,
-    visible: () => true,
-  },
+  // "Waiting on you" is no longer a row: the approval queue sits at the top of
+  // Today and folds above the Calendar (PendingQueue).
   {
     id: 'clients',
     label: 'Clients',

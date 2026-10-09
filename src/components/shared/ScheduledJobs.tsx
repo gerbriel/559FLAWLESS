@@ -18,12 +18,17 @@ const JOBS: Record<string, string> = {
  * fail quietly — a reminder that stops going out looks identical to a week when
  * nothing was due. Showing the last run turns that into something visible.
  */
-export async function ScheduledJobs() {
+export async function ScheduledJobs({ timeClock = true }: { timeClock?: boolean }) {
   const supabase = await createClient()
   const { data, error } = await supabase.rpc('scheduled_job_status')
 
   // No rows means pg_cron is not enabled — a setup state, not a failure.
-  const jobs = error ? [] : (data ?? [])
+  // With the time clock switched off (077) its reminder sweep still fires but
+  // sends nothing, so it is not shown: a job doing nothing on purpose is not
+  // something to keep an eye on.
+  const jobs = (error ? [] : (data ?? [])).filter(
+    (j) => timeClock || j.jobname !== '559-timeclock'
+  )
 
   return (
     <section className="mt-14">
