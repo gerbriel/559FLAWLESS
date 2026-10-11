@@ -16,6 +16,7 @@ import {
   Layers,
   Scissors,
   PenLine,
+  Delete,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -235,9 +236,13 @@ export function PointOfSale({
   }, [packages])
 
   const packageList = packages ?? fetchedPackages ?? []
-  const [mode, setMode] = useState<'retail' | 'services' | 'prepaid' | 'custom'>('retail')
+  // Custom amount first and by default: at this studio the counter usually
+  // starts from "that's $X today", not from a bottle being scanned.
+  const [mode, setMode] = useState<'retail' | 'services' | 'prepaid' | 'custom'>('custom')
   // Custom mode: a figure typed in at the counter, itemised later if at all.
   const [customDesc, setCustomDesc] = useState('')
+  // The keypad's digits, read as cents: "1250" is $12.50 — the card-terminal
+  // way, so nobody ever types a decimal point.
   const [customAmount, setCustomAmount] = useState('')
   const [customTaxable, setCustomTaxable] = useState(false)
   // What the picked client still owes, and which of it this payment settles.
@@ -302,6 +307,30 @@ export function PointOfSale({
   }, [customerId])
 
   const owedTotal = balances.reduce((sum, b) => sum + b.owed_cents, 0)
+
+  // The keypad answers the physical keyboard too — but never while someone is
+  // typing in a field, where those keys belong to the field.
+  useEffect(() => {
+    if (mode !== 'custom' || receipt) return
+    function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) {
+        return
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      if (/^[0-9]$/.test(e.key)) {
+        e.preventDefault()
+        setCustomAmount((cur) => pressKey(cur, e.key))
+      } else if (e.key === 'Backspace') {
+        e.preventDefault()
+        setCustomAmount((cur) => pressKey(cur, 'back'))
+      } else if (e.key === 'Escape') {
+        setCustomAmount('')
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [mode, receipt])
   // Services mode: each tap adds one line; two facials really are two lines.
   const [serviceLines, setServiceLines] = useState<SellableService[]>([])
   // The manager's discount, in dollars as typed. Parsed at use, capped server-side.
@@ -314,10 +343,7 @@ export function PointOfSale({
   const serviceList = services ?? []
   const sellingServices = serviceList.length > 0 && mode === 'services'
   const sellingCustom = mode === 'custom'
-  const customCents = Math.max(
-    0,
-    Math.round((Number(customAmount.replace(/[$,\s]/g, '')) || 0) * 100)
-  )
+  const customCents = Number(customAmount || '0')
   // Preview of the split. The server re-derives every balance; this only reads.
   const owedSelected = balances
     .filter((b) => applyTo.includes(b.id))
@@ -876,8 +902,9 @@ export function PointOfSale({
   return (
     <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_22rem]">
       <div>
-        {/* Always drawn, since a typed-in amount is always on offer. Services
-            and Packages appear only when there is something behind them. */}
+        {/* Always drawn, since a typed-in amount is always on offer — and it
+            is the first tab and the default. Services and Packages appear only
+            when there is something behind them. */}
           <div
             data-ui="tile"
             role="group"
@@ -886,6 +913,7 @@ export function PointOfSale({
           >
             {(
               [
+                { value: 'custom' as const, label: 'Custom amount', icon: PenLine },
                 { value: 'retail' as const, label: 'Products', icon: Package },
                 ...(serviceList.length > 0
                   ? [{ value: 'services' as const, label: 'Services', icon: Scissors }]
@@ -893,7 +921,6 @@ export function PointOfSale({
                 ...(packageList.length > 0
                   ? [{ value: 'prepaid' as const, label: 'Packages', icon: Layers }]
                   : []),
-                { value: 'custom' as const, label: 'Custom amount', icon: PenLine },
               ]
             ).map((tab) => {
               const on = mode === tab.value
@@ -958,6 +985,19 @@ export function PointOfSale({
                 </fieldset>
               )}
 
+
+              <AmountPad
+                cents={customCents}
+                onKey={(k) => setCustomAmount((cur) => pressKey(cur, k))}
+                onClear={() => setCustomAmount('')}
+                suggestion={
+                  owedSelected > 0 && customCents !== owedSelected
+                    ? { label: 'What they owe', cents: owedSelected }
+                    : null
+                }
+                onSuggest={(cents) => setCustomAmount(String(cents))}
+              />
+
               <Field label="What it's for" htmlFor="pos_custom_desc" hint="Shows on the receipt and in their history.">
                 <Input
                   id="pos_custom_desc"
@@ -965,16 +1005,6 @@ export function PointOfSale({
                   placeholder="e.g. Brow tint add-on"
                   value={customDesc}
                   onChange={(e) => setCustomDesc(e.target.value)}
-                />
-              </Field>
-
-              <Field label="Amount ($)" htmlFor="pos_custom_amount">
-                <Input
-                  id="pos_custom_amount"
-                  inputMode="decimal"
-                  placeholder="0.00"
-                  value={customAmount}
-                  onChange={(e) => setCustomAmount(e.target.value)}
                 />
               </Field>
 
@@ -1582,6 +1612,93 @@ export function PointOfSale({
           )}
         </div>
       </aside>
+    </div>
+  )
+}
+
+/** Six digits of cents: up to $9,999.99, which is the till's own ceiling. */
+const MAX_PAD_DIGITS = 6
+
+/** One keypad press against the digit string. Pure, so the keyboard and the
+ *  on-screen pad cannot disagree. */
+function pressKey(cur: string, key: string): string {
+  if (key === 'back') return cur.slice(0, -1)
+  const next = (cur + key).replace(/^0+/, '')
+  return next.length > MAX_PAD_DIGITS ? cur : next
+}
+
+const PAD_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '00', '0', 'back'] as const
+
+/**
+ * The amount, as a calculator rather than a text field.
+ *
+ * The figure is the biggest thing on the screen because it is the one thing
+ * the client is also reading over the counter. Digits fill from the right, so
+ * 1-2-5-0 is $12.50 and there is no decimal point to miss.
+ */
+function AmountPad({
+  cents,
+  onKey,
+  onClear,
+  suggestion,
+  onSuggest,
+}: {
+  cents: number
+  onKey: (key: string) => void
+  onClear: () => void
+  suggestion: { label: string; cents: number } | null
+  onSuggest: (cents: number) => void
+}) {
+  return (
+    <div>
+      <div className="flex items-end justify-between gap-4">
+        <span className="label-caps text-[var(--color-muted)]">Amount</span>
+        {cents > 0 && (
+          <button
+            type="button"
+            onClick={onClear}
+            className="label-caps text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+
+      <output
+        aria-live="polite"
+        className={cn(
+          'display mt-2 block text-right text-5xl tabular-nums sm:text-6xl',
+          cents === 0 && 'text-[var(--color-muted)]'
+        )}
+      >
+        {formatMoney(cents)}
+      </output>
+
+      {suggestion && (
+        <button
+          type="button"
+          data-ui="button"
+          onClick={() => onSuggest(suggestion.cents)}
+          className="label-caps mt-3 border border-[var(--color-border)] px-3 py-1.5 text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+        >
+          {suggestion.label} · {formatMoney(suggestion.cents)}
+        </button>
+      )}
+
+      <div className="mt-4 grid grid-cols-3 gap-2">
+        {PAD_KEYS.map((k) => (
+          <button
+            key={k}
+            type="button"
+            data-ui="button"
+            onClick={() => onKey(k)}
+            aria-label={k === 'back' ? 'Delete last digit' : k}
+            className="flex min-h-16 items-center justify-center border border-[var(--color-border)] bg-[var(--color-background)] text-2xl tabular-nums transition-colors hover:bg-[var(--color-linen)] active:bg-[var(--color-clay-soft)] dark:hover:bg-[var(--color-surface)]"
+          >
+            {k === 'back' ? <Delete className="h-6 w-6" strokeWidth={1.5} aria-hidden /> : k}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }
