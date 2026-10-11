@@ -6,6 +6,7 @@ import { Container, Section, SectionHeading } from '@/components/ui/section'
 import { ButtonLink } from '@/components/ui/button'
 import { formatServicePrice, formatDuration } from '@/lib/utils'
 import { ConsideredService } from '@/components/shared/ConsideredService'
+import { InTheRoom } from '@/components/shared/InTheRoom'
 import { pageCopy } from '@/lib/page-copy'
 
 export const revalidate = 300
@@ -180,6 +181,25 @@ export default async function HomePage() {
                 </div>
               </Link>
             ))}
+          </div>
+        </Container>
+      </Section>
+
+      {/* ── In the room ──────────────────────────────────── */}
+      <Section className="border-t border-[var(--color-border)]">
+        <Container>
+          <SectionHeading
+            eyebrow={copy.room_eyebrow ?? 'In the room'}
+            title={copy.room_title ?? 'What a visit looks like.'}
+            lede={
+              copy.room_lede ??
+              'A corrective facial, a mask mixed for the person on the bed, and the wax pot — a few quiet seconds of each.'
+            }
+            editKey="page_home"
+            editFields={{ eyebrow: 'room_eyebrow', title: 'room_title', lede: 'room_lede' }}
+          />
+          <div className="mt-16">
+            <InTheRoom />
           </div>
         </Container>
       </Section>
