@@ -20,6 +20,7 @@ interface NavCategory {
 const STATIC_LINKS = [
   { href: '/about', label: 'About' },
   { href: '/shop', label: 'Shop' },
+  { href: '/memberships', label: 'Membership' },
   { href: '/faq', label: 'FAQ' },
   { href: '/contact', label: 'Contact' },
 ]

@@ -58,6 +58,7 @@ import type {
 import type {
   Membership,
   MembershipService,
+  MembershipMemberPrice,
   MembershipStatus,
   MembershipCharge,
   MembershipRedemption,
@@ -2169,6 +2170,13 @@ export type Database = {
         [
           Rel<'membership_services_membership_id_fkey', ['membership_id'], 'memberships', ['id']>,
           Rel<'membership_services_service_id_fkey', ['service_id'], 'services', ['id']>,
+        ]
+      >
+      membership_member_prices: TableDef<
+        MembershipMemberPrice,
+        [
+          Rel<'membership_member_prices_membership_id_fkey', ['membership_id'], 'memberships', ['id']>,
+          Rel<'membership_member_prices_service_id_fkey', ['service_id'], 'services', ['id']>,
         ]
       >
       client_memberships: TableDef<

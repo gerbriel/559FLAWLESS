@@ -68,6 +68,86 @@ export async function POST(request: NextRequest) {
         const session = event.data.object
         const kind = session.metadata?.kind
 
+        if (kind === 'membership') {
+          // Joining online (078). Enrol, then mark the first period paid.
+          const membershipId = Number(session.metadata?.membership_id)
+          const clientId = session.metadata?.client_id
+          const intent = paymentIntentId(session)
+          if (!membershipId || !clientId) break
+
+          // Idempotency: this payment intent already settled a period.
+          if (intent) {
+            const { data: settled } = await admin
+              .from('membership_charges')
+              .select('id')
+              .eq('stripe_payment_intent_id', intent)
+              .limit(1)
+            if (settled && settled.length > 0) break
+          }
+
+          // The enrol trigger (050) sets the price snapshot and the period end
+          // from the plan, and writes the first period's charge as `due`.
+          const inserted = await admin
+            .from('client_memberships')
+            .insert({
+              client_id: clientId,
+              membership_id: membershipId,
+              status: 'active',
+              note: 'Joined online',
+            })
+            .select('id, current_period_start')
+            .single()
+          let enrolled = inserted.data
+          const enrolError = inserted.error
+
+          // A retry of this same event can land after the enrolment but before
+          // the charge was marked: the membership exists and its first period
+          // is still `due`. Finish that one rather than stopping short.
+          if (enrolError?.code === '23505') {
+            const { data: pending } = await admin
+              .from('client_memberships')
+              .select('id, current_period_start, membership_charges(status)')
+              .eq('client_id', clientId)
+              .eq('membership_id', membershipId)
+              .eq('note', 'Joined online')
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .maybeSingle()
+            const charges = (pending?.membership_charges ?? []) as { status: string }[]
+            if (pending && charges.some((c) => c.status === 'due')) enrolled = pending
+          }
+
+          if (!enrolled) {
+            // 23505: they already hold a live membership (one per person). The
+            // money has moved, so this needs a person, not a retry.
+            void logError('stripe/webhook', enrolError?.message ?? 'membership enrol failed', {
+              step: 'membership_enrol',
+              client_id: clientId,
+              membership_id: membershipId,
+              payment_intent: intent,
+              amount_cents: session.amount_total,
+            })
+            if (enrolError?.code === '23505') break
+            throw new Error(`enrol membership for ${clientId}: ${enrolError?.message}`)
+          }
+
+          must(
+            await admin
+              .from('membership_charges')
+              .update({
+                status: 'paid',
+                method: 'stripe',
+                paid_at: new Date().toISOString(),
+                amount_cents: session.amount_total ?? undefined,
+                stripe_payment_intent_id: intent,
+                note: 'Paid online at sign-up',
+              })
+              .eq('client_membership_id', enrolled.id)
+              .eq('period_start', enrolled.current_period_start),
+            `mark membership ${enrolled.id} paid`
+          )
+        }
+
         if (kind === 'appointment_deposit') {
           const appointmentId = session.metadata?.appointment_id
           if (!appointmentId) break

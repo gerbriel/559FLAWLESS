@@ -41,7 +41,10 @@ export interface AppliedMembership {
   planName: string
   /** List value of the lines an included session covered, integer cents. */
   coveredCents: number
-  /** The member percentage off the rest of the visit, integer cents. */
+  /**
+   * Everything else the membership took off, integer cents: member prices
+   * (078) on the lines a session did not cover, then the plan percentage.
+   */
   discountCents: number
   /** Included sessions consumed by this visit. */
   sessionsSpent: number
@@ -110,6 +113,8 @@ export async function applyMembershipBenefit(opts: {
   let coveredCents = 0
   let sessionsSpent = 0
   const claimed: number[] = []
+  // Which lines a session paid for, so a member price is never applied twice.
+  const claimedServiceIds = new Set<number>()
 
   if (plan.included_sessions_per_period > 0 && lines.length > 0) {
     // Which treatments a session may be spent on. NO ROWS MEANS ANY TREATMENT
@@ -166,13 +171,33 @@ export async function applyMembershipBenefit(opts: {
       }
 
       claimed.push(row.id)
+      claimedServiceIds.add(line.serviceId)
       coveredCents += line.priceCents
       sessionsSpent += 1
     }
   }
 
-  const discountable = Math.max(subtotalCents - coveredCents, 0)
-  const discountCents = membershipDiscountCents(discountable, plan.service_discount_pct)
+  // Member prices (078): a ceiling on a named service — the Brazilian at $25 —
+  // for every line a session did not cover. A line already below it (the
+  // half-off pair deal) comes down to the member price, never further.
+  let memberPriceCents = 0
+  const uncovered = lines.filter((l) => !claimedServiceIds.has(l.serviceId))
+  if (uncovered.length > 0) {
+    const { data: memberPrices } = await supabase
+      .from('membership_member_prices')
+      .select('service_id, price_cents')
+      .eq('membership_id', plan.id)
+      .in('service_id', [...new Set(uncovered.map((l) => l.serviceId))])
+    const ceiling = new Map((memberPrices ?? []).map((r) => [r.service_id, r.price_cents]))
+    for (const line of uncovered) {
+      const cap = ceiling.get(line.serviceId)
+      if (cap !== undefined) memberPriceCents += Math.max(line.priceCents - cap, 0)
+    }
+  }
+
+  const discountable = Math.max(subtotalCents - coveredCents - memberPriceCents, 0)
+  const discountCents =
+    memberPriceCents + membershipDiscountCents(discountable, plan.service_discount_pct)
 
   if (coveredCents === 0 && discountCents === 0) return null
 

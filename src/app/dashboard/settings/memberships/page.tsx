@@ -52,14 +52,14 @@ export default async function MembershipsSettingsPage() {
 
   if (!profile || !isManager(profile.role)) redirect('/dashboard/settings')
 
-  const [{ data: plans }, { data: scopes }, { data: services }, { data: held }] =
+  const [{ data: plans }, { data: scopes }, { data: services }, { data: held }, { data: memberPriceRows }] =
     await Promise.all([
       supabase
         // One string literal — concatenating widens the select to `string` and
         // collapses the result type to SelectQueryError.
         .from('memberships')
         .select(
-          'id, name, slug, description, price_cents, period_months, service_discount_pct, included_sessions_per_period, stripe_price_id, is_active, sort_order, created_at, updated_at'
+          'id, name, slug, description, price_cents, period_months, service_discount_pct, included_sessions_per_period, stripe_price_id, sell_online, is_active, sort_order, created_at, updated_at'
         )
         .order('sort_order')
         .order('id'),
@@ -72,6 +72,7 @@ export default async function MembershipsSettingsPage() {
       supabase
         .from('client_memberships')
         .select('membership_id, status, current_period_end'),
+      supabase.from('membership_member_prices').select('membership_id, service_id, price_cents'),
     ])
 
   const rows = (plans ?? []) as Membership[]
@@ -81,6 +82,9 @@ export default async function MembershipsSettingsPage() {
     ClientMembership,
     'membership_id' | 'status' | 'current_period_end'
   >[]
+
+  const memberPricesFor = (planId: number) =>
+    (memberPriceRows ?? []).filter((r) => r.membership_id === planId)
 
   const scopeFor = (planId: number) =>
     scopeRows.filter((s) => s.membership_id === planId).map((s) => s.service_id)
@@ -151,6 +155,7 @@ export default async function MembershipsSettingsPage() {
                       <p className="flex flex-wrap items-center gap-2.5">
                         <span className="text-base">{plan.name}</span>
                         {!plan.is_active && <Badge tone="neutral">Closed</Badge>}
+                        {plan.is_active && plan.sell_online && <Badge tone="success">Sold online</Badge>}
                         {members > 0 && (
                           <Badge tone="accent">
                             {members} {members === 1 ? 'member' : 'members'}
@@ -176,6 +181,17 @@ export default async function MembershipsSettingsPage() {
                                 .join(', ')}`}
                         </p>
                       )}
+                      {memberPricesFor(plan.id).length > 0 && (
+                        <p className="mt-1 text-xs text-[var(--color-muted)]">
+                          Member prices:{' '}
+                          {memberPricesFor(plan.id)
+                            .map(
+                              (r) =>
+                                `${serviceOptions.find((s) => s.id === r.service_id)?.name ?? `#${r.service_id}`} ${formatMoney(r.price_cents)}`
+                            )
+                            .join(', ')}
+                        </p>
+                      )}
                       {plan.description && (
                         <p className="mt-2 max-w-prose text-xs text-[var(--color-muted)]">
                           {plan.description}
@@ -187,6 +203,7 @@ export default async function MembershipsSettingsPage() {
                       <MembershipEditor
                         plan={plan}
                         scopeServiceIds={scoped}
+                        memberPrices={memberPricesFor(plan.id)}
                         services={serviceOptions}
                         trigger="link"
                       />

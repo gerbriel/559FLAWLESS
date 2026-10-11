@@ -40,6 +40,7 @@ const BLANK: Draft = {
   period_months: 1,
   service_discount_pct: 10,
   included_sessions_per_period: 0,
+  sell_online: false,
   is_active: true,
   sort_order: 0,
 }
@@ -69,12 +70,15 @@ const PERIODS = [1, 3, 6, 12]
 export function MembershipEditor({
   plan,
   scopeServiceIds = [],
+  memberPrices = [],
   services,
   trigger = 'button',
 }: {
   plan?: Membership
   /** Which services this plan's included sessions may be spent on. */
   scopeServiceIds?: number[]
+  /** Services a member pays a set price for (078), e.g. the Brazilian at $25. */
+  memberPrices?: { service_id: number; price_cents: number }[]
   services: MembershipServiceOption[]
   trigger?: 'button' | 'link'
 }) {
@@ -86,6 +90,9 @@ export function MembershipEditor({
   const [form, setForm] = useState<Draft>(plan ?? BLANK)
   const [price, setPrice] = useState(money(plan?.price_cents ?? 0))
   const [scope, setScope] = useState<number[]>(scopeServiceIds)
+  const [prices, setPrices] = useState<{ serviceId: number; price: string }[]>(
+    memberPrices.map((p) => ({ serviceId: p.service_id, price: money(p.price_cents) }))
+  )
 
   function set<K extends keyof Draft>(key: K, value: Draft[K]) {
     setForm((f) => ({ ...f, [key]: value }))
@@ -115,6 +122,11 @@ export function MembershipEditor({
       toast.error('Give the membership a name.')
       return
     }
+    const parsedPrices = prices.map((p) => ({ serviceId: p.serviceId, cents: toCents(p.price) }))
+    if (parsedPrices.some((p) => p.cents === null)) {
+      toast.error('One of the member prices is not a number.')
+      return
+    }
     if (form.service_discount_pct === 0 && form.included_sessions_per_period === 0) {
       toast.error(
         'A membership has to grant something — a discount, some included treatments, or both.'
@@ -139,6 +151,7 @@ export function MembershipEditor({
       period_months: form.period_months,
       service_discount_pct: form.service_discount_pct,
       included_sessions_per_period: form.included_sessions_per_period,
+      sell_online: form.sell_online,
       is_active: form.is_active,
       sort_order: form.sort_order,
     }
@@ -175,6 +188,21 @@ export function MembershipEditor({
         .insert(wanted.map((serviceId) => ({ membership_id: saved.id, service_id: serviceId })))
     }
 
+    // Member prices, replaced wholesale for the same reason as the scope.
+    const { error: clearPricesError } = await supabase
+      .from('membership_member_prices')
+      .delete()
+      .eq('membership_id', saved.id)
+    if (!clearPricesError && parsedPrices.length > 0) {
+      await supabase.from('membership_member_prices').insert(
+        parsedPrices.map((p) => ({
+          membership_id: saved.id,
+          service_id: p.serviceId,
+          price_cents: p.cents ?? 0,
+        }))
+      )
+    }
+
     setBusy(false)
     toast.success(isNew ? `${payload.name} added.` : 'Saved.')
     setOpen(false)
@@ -182,6 +210,7 @@ export function MembershipEditor({
       setForm(BLANK)
       setPrice('0.00')
       setScope([])
+      setPrices([])
     }
     router.refresh()
   }
@@ -264,8 +293,9 @@ export function MembershipEditor({
       }
     >
         <p className="max-w-prose text-sm text-[var(--color-muted)]">
-          A standing arrangement, charged again every period. Nothing here takes a
-          card — the studio records each period as it is paid.
+          A standing arrangement, paid once per period. Sold online, the first period
+          is paid through Stripe on the website; at the counter, the studio records
+          each period as it is paid. Nothing renews by itself.
         </p>
 
         <div className="mt-7 grid gap-5 sm:grid-cols-2">
@@ -396,6 +426,87 @@ export function MembershipEditor({
               </div>
             </fieldset>
           )}
+
+          <fieldset className="sm:col-span-2">
+            <legend className="label-caps text-[var(--color-muted)]">Member prices</legend>
+            <p className="mt-2 max-w-prose text-xs text-[var(--color-muted)]">
+              A set price a member pays for a service, on any visit while their
+              membership is current — e.g. a Brazilian for $25. Never lower than this
+              if another deal already applies; never stacked below it.
+            </p>
+            <ul className="mt-3 space-y-2">
+              {prices.map((p, i) => {
+                const svc = services.find((s) => s.id === p.serviceId)
+                return (
+                  <li key={p.serviceId} className="flex items-center gap-3 text-sm">
+                    <span className="min-w-0 flex-1 truncate">
+                      {svc?.name ?? `Service ${p.serviceId}`}
+                      {svc && (
+                        <span className="ml-2 text-xs text-[var(--color-muted)]">
+                          usually {formatMoney(svc.price_cents)}
+                        </span>
+                      )}
+                    </span>
+                    <Input
+                      aria-label={`Member price for ${svc?.name ?? 'service'}`}
+                      inputMode="decimal"
+                      className="w-28"
+                      value={p.price}
+                      onChange={(e) =>
+                        setPrices((cur) =>
+                          cur.map((x, j) => (j === i ? { ...x, price: e.target.value } : x))
+                        )
+                      }
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setPrices((cur) => cur.filter((_, j) => j !== i))}
+                      className="flex h-8 w-8 items-center justify-center text-[var(--color-muted)] hover:text-red-700"
+                      aria-label={`Remove member price for ${svc?.name ?? 'service'}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+            <Select
+              aria-label="Add a member price"
+              className="mt-3"
+              value=""
+              onChange={(e) => {
+                const id = Number(e.target.value)
+                const svc = services.find((s) => s.id === id)
+                if (!svc || prices.some((p) => p.serviceId === id)) return
+                setPrices((cur) => [...cur, { serviceId: id, price: money(svc.price_cents) }])
+              }}
+            >
+              <option value="">Add a member price…</option>
+              {services
+                .filter((s) => !prices.some((p) => p.serviceId === s.id))
+                .map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+            </Select>
+          </fieldset>
+
+          <label className="flex items-start gap-3 text-sm sm:col-span-2">
+            <input
+              type="checkbox"
+              checked={form.sell_online}
+              onChange={(e) => set('sell_online', e.target.checked)}
+              className="mt-1 h-4 w-4 accent-[var(--color-accent)]"
+            />
+            <span>
+              Sell online
+              <span className="block text-xs text-[var(--color-muted)]">
+                Shows on the website&rsquo;s Membership page, where a signed-in client
+                pays the first {period} through Stripe and is enrolled straight away.
+              </span>
+            </span>
+          </label>
 
           <Field label="Sort order" htmlFor="mem_sort" hint="Lower shows first.">
             <Input

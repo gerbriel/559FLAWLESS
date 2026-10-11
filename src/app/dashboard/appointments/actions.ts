@@ -207,7 +207,7 @@ export async function addPairedService(
   const { data: appointment } = await supabase
     .from('appointments')
     .select(
-      'id, provider_id, status, starts_at, ends_at, age_attested_at, appointment_services(id, service_id, sort_order)'
+      'id, provider_id, client_id, status, starts_at, ends_at, age_attested_at, appointment_services(id, service_id, sort_order)'
     )
     .eq('id', appointmentId)
     .maybeSingle()
@@ -267,7 +267,33 @@ export async function addPairedService(
   const fullPriceCents = link.price_cents ?? service.price_cents
   const durationMinutes = link.duration_minutes ?? service.duration_minutes
   const off = pairDiscountCents(fullPriceCents, rule.percent_off)
-  const priceCents = fullPriceCents - off
+  let priceCents = fullPriceCents - off
+  let pairDiscountId: number | null = rule.id
+
+  // A member price (078) wins when it is lower — the Brazilian at $25 rather
+  // than half off at $32.50. The visit's membership was applied at booking,
+  // before this line existed, so it is checked here for the added line.
+  if (appointment.client_id) {
+    const { data: held } = await supabase
+      .from('client_memberships')
+      .select('membership_id')
+      .eq('client_id', appointment.client_id)
+      .eq('status', 'active')
+      .gt('current_period_end', new Date(now).toISOString())
+      .maybeSingle()
+    if (held) {
+      const { data: memberPrice } = await supabase
+        .from('membership_member_prices')
+        .select('price_cents')
+        .eq('membership_id', held.membership_id)
+        .eq('service_id', serviceId)
+        .maybeSingle()
+      if (memberPrice && memberPrice.price_cents < priceCents) {
+        priceCents = memberPrice.price_cents
+        pairDiscountId = null
+      }
+    }
+  }
 
   const needsAge = service.requires_age_verification && !appointment.age_attested_at
   if (needsAge && !ageConfirmed) return fail('age_confirmation_required')
@@ -301,7 +327,7 @@ export async function addPairedService(
     price_cents: priceCents,
     duration_minutes: durationMinutes,
     full_price_cents: fullPriceCents,
-    pair_discount_id: rule.id,
+    pair_discount_id: pairDiscountId,
     added_by: user.id,
     added_at: new Date(now).toISOString(),
     sort_order: Math.max(-1, ...lines.map((l) => l.sort_order)) + 1,

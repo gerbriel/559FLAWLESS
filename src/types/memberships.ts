@@ -30,6 +30,8 @@ export type Membership = {
   included_sessions_per_period: number
   /** Reserved for the Stripe Price when a follow-up builds the subscription. */
   stripe_price_id: string | null
+  /** On the public /memberships page, paid through Stripe (078). */
+  sell_online: boolean
   is_active: boolean
   sort_order: number
   created_at: string
@@ -43,6 +45,16 @@ export type Membership = {
 export type MembershipService = {
   membership_id: number
   service_id: number
+}
+
+/**
+ * What a member pays for one service while current (078) — a ceiling applied
+ * after every other deal, never a further cut below it.
+ */
+export type MembershipMemberPrice = {
+  membership_id: number
+  service_id: number
+  price_cents: number
 }
 
 /** Somebody holding a plan. */
