@@ -1,3 +1,5 @@
+import Link from 'next/link'
+import { GiveBackSession } from '@/components/shared/GiveBackSession'
 import { BadgeCheck } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
@@ -103,10 +105,13 @@ export async function ClientMembershipPanel({
     live
       ? supabase
           .from('membership_redemptions')
-          .select('sessions')
+          .select(
+            'id, sessions, value_cents, appointments!membership_redemptions_appointment_id_fkey(id, starts_at, status), services!membership_redemptions_service_id_fkey(name)'
+          )
           .eq('client_membership_id', live.id)
           .eq('redeemed_for_period_start', live.current_period_start)
-      : Promise.resolve({ data: [] as { sessions: number }[] }),
+          .order('created_at')
+      : Promise.resolve({ data: [] }),
   ])
 
   const chargeRows = (charges ?? []) as Pick<
@@ -156,6 +161,45 @@ export async function ClientMembershipPanel({
             <p className="text-xs text-[var(--color-muted)]">
               {sessionsSpent} of {plan.included_sessions_per_period} used this period.
             </p>
+          )}
+
+          {/* Which visits used them — each one a link, and for a manager a way
+              to hand one back (079). */}
+          {(spent ?? []).length > 0 && (
+            <ul className="space-y-1.5 border-t border-[var(--color-border)] pt-3 text-xs">
+              {(spent ?? []).map((r) => {
+                const appt = r.appointments as unknown as {
+                  id: string
+                  starts_at: string
+                  status: string
+                } | null
+                const svc = r.services as unknown as { name: string } | null
+                return (
+                  <li key={r.id} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                    {appt ? (
+                      <Link
+                        href={`/dashboard/appointments/${appt.id}`}
+                        className="min-w-0 flex-1 truncate underline-offset-4 hover:underline"
+                      >
+                        {svc?.name ?? 'Treatment'} ·{' '}
+                        {formatDateInTimeZone(new Date(appt.starts_at), timeZone)}
+                        {appt.status === 'no_show' && ' · no-show'}
+                      </Link>
+                    ) : (
+                      <span className="min-w-0 flex-1 truncate">{svc?.name ?? 'Treatment'}</span>
+                    )}
+                    {canManage && (
+                      <GiveBackSession
+                        redemptionId={r.id}
+                        upcoming={
+                          !!appt && ['pending', 'confirmed', 'checked_in'].includes(appt.status)
+                        }
+                      />
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
           )}
 
           <p className="text-xs text-[var(--color-muted)]">

@@ -2830,6 +2830,15 @@ export type Database = {
        * Settle one membership period. Manager only, and idempotent — a second
        * press, or a retried Stripe invoice.paid, finds it paid and stops.
        */
+      /**
+       * Give one used membership session back (079). An upcoming visit goes
+       * back to its normal price ('repriced'); a past one is left as it was
+       * ('returned'). Manager and up.
+       */
+      give_back_membership_session: {
+        Args: { p_redemption: number }
+        Returns: 'repriced' | 'returned'
+      }
       mark_membership_charge_paid: {
         Args: { p_charge: number; p_method?: string; p_note?: string | null }
         Returns: number

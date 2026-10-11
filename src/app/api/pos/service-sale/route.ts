@@ -4,6 +4,7 @@ import { logError } from '@/lib/log-error'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { priceService } from '@/lib/booking'
+import { applyMembershipBenefit } from '@/lib/memberships'
 import { queueNotificationEmails } from '@/lib/notification-email'
 import { isFrontDesk, isManager, type UserRole } from '@/types/database'
 
@@ -162,6 +163,17 @@ export async function POST(request: NextRequest) {
     )
   }
 
+  // A member's included facial and member prices, exactly as a booking gets
+  // them — the same function, so the counter and the calendar cannot disagree.
+  const membership = clientId
+    ? await applyMembershipBenefit({
+        appointmentId: appointment.id,
+        clientId,
+        lines: services.map((svc) => ({ serviceId: svc.id, priceCents: svc.price_cents })),
+        subtotalCents: services.reduce((sum, svc) => sum + svc.price_cents, 0),
+      })
+    : null
+
   // checked_in -> completed is the transition the back-bar stock trigger
   // watches (007) — inserting as completed outright would skip the draw-down.
   // The manual discount rides the same update; the derive trigger floors at 0.
@@ -186,14 +198,18 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  // The money, in the same ledger every balance reads.
-  const { error: paymentError } = await admin.rpc('record_payment', {
-    p_amount_cents: done.total_cents,
-    p_kind: 'service',
-    p_method: paymentMethod,
-    p_appointment: done.id,
-    p_note: notes ?? null,
-  })
+  // The money, in the same ledger every balance reads. A visit the membership
+  // covered entirely takes nothing — and record_payment refuses a zero.
+  const { error: paymentError } =
+    done.total_cents > 0
+      ? await admin.rpc('record_payment', {
+          p_amount_cents: done.total_cents,
+          p_kind: 'service',
+          p_method: paymentMethod,
+          p_appointment: done.id,
+          p_note: notes ?? null,
+        })
+      : { error: null }
   if (paymentError) {
     // The visit stands; a missing ledger row is reconciliation, not a reason
     // to fail in front of the client.
@@ -222,6 +238,8 @@ export async function POST(request: NextRequest) {
       appointment_id: done.id,
       subtotal_cents: done.subtotal_cents,
       discount_cents: done.promo_discount_cents,
+      membership_cents: membership ? membership.coveredCents + membership.discountCents : 0,
+      membership_name: membership?.planName ?? null,
       total_cents: done.total_cents,
     },
     { status: 201 }

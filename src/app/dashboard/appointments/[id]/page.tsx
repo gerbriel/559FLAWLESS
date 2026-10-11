@@ -1,3 +1,4 @@
+import { UseMembershipButton } from '@/components/shared/UseMembershipButton'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { AlertTriangle } from 'lucide-react'
@@ -32,12 +33,34 @@ export default async function StaffAppointmentPage({ params }: Props) {
   const { data: appointment } = await supabase
     .from('appointments')
     .select(
-      'id, starts_at, ends_at, status, source, provider_id, subtotal_cents, total_cents, membership_covered_cents, membership_discount_cents, promo_discount_cents, deposit_cents, deposit_status, client_notes, staff_notes, client_id, guest_first_name, guest_last_name, guest_email, guest_phone, age_attested_at, profiles!appointments_client_id_fkey(first_name, last_name, email, phone), appointment_services(id, service_id, name_snapshot, price_cents, duration_minutes, full_price_cents, added_by, promotion_id, sort_order)'
+      'id, starts_at, ends_at, status, source, provider_id, subtotal_cents, total_cents, membership_covered_cents, membership_discount_cents, client_membership_id, created_at, promo_discount_cents, deposit_cents, deposit_status, client_notes, staff_notes, client_id, guest_first_name, guest_last_name, guest_email, guest_phone, age_attested_at, profiles!appointments_client_id_fkey(first_name, last_name, email, phone), appointment_services(id, service_id, name_snapshot, price_cents, duration_minutes, full_price_cents, added_by, promotion_id, sort_order)'
     )
     .eq('id', id)
     .maybeSingle()
 
   if (!appointment) notFound()
+
+  // A member whose visit was booked before they joined: offer to put the
+  // membership on it. Booking does this by itself for everything after.
+  const { data: unusedMembership } =
+    appointment.client_id &&
+    !appointment.client_membership_id &&
+    !['cancelled', 'no_show'].includes(appointment.status)
+      ? await supabase
+          .from('client_memberships')
+          .select('id, started_at, memberships!client_memberships_membership_id_fkey(name)')
+          .eq('client_id', appointment.client_id)
+          .eq('status', 'active')
+          .gt('current_period_end', new Date(requestNow()).toISOString())
+          .maybeSingle()
+      : { data: null }
+  // Only for a visit booked BEFORE they joined; anything booked since already
+  // had the membership offered to it at booking.
+  const unusedPlanName =
+    unusedMembership &&
+    new Date(appointment.created_at).getTime() < new Date(unusedMembership.started_at).getTime()
+      ? ((unusedMembership.memberships as unknown as { name: string } | null)?.name ?? null)
+      : null
 
   const client = appointment.profiles as {
     first_name: string | null
@@ -334,6 +357,10 @@ export default async function StaffAppointmentPage({ params }: Props) {
               </li>
             )}
           </ul>
+        )}
+
+        {unusedPlanName && (
+          <UseMembershipButton appointmentId={appointment.id} planName={unusedPlanName} />
         )}
 
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">

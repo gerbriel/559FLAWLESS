@@ -25,6 +25,7 @@ import { createClient } from '@/lib/supabase/server'
 import { bestPairDiscount, pairDiscountCents, type PairDiscountRule } from '@/lib/pair-discounts'
 import { dateKeyInTimeZone, requestNow } from '@/lib/time'
 import { isFrontDesk, isStaff, type UserRole } from '@/types/database'
+import { applyMembershipBenefit } from '@/lib/memberships'
 
 // ── Referral rewards (068) ───────────────────────────────────
 
@@ -348,4 +349,75 @@ export async function addPairedService(
 
   revalidatePath(`/dashboard/appointments/${appointmentId}`)
   return { ok: true, name: service.name, priceCents, fullPriceCents }
+}
+
+/**
+ * Put a client's membership on a visit that was booked before they joined.
+ *
+ * Booking applies a membership automatically (src/lib/booking.ts); a visit
+ * made before the membership existed never got the chance. This runs the same
+ * applyMembershipBenefit() — the database still decides whether a session is
+ * left, and a visit that already has a membership on it is left alone.
+ */
+export async function applyMembershipToVisit(
+  appointmentId: string
+): Promise<{ ok: true; coveredCents: number; discountCents: number } | { ok: false; message: string }> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { ok: false, message: 'Sign in again.' }
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('role, suspended_at')
+    .eq('id', user.id)
+    .maybeSingle()
+  const role = (profile?.role ?? 'client') as UserRole
+  if (profile?.suspended_at || !isStaff(role)) return { ok: false, message: 'Not allowed.' }
+
+  const { data: appointment } = await supabase
+    .from('appointments')
+    .select(
+      'id, provider_id, client_id, status, subtotal_cents, client_membership_id, appointment_services(service_id, price_cents)'
+    )
+    .eq('id', appointmentId)
+    .maybeSingle()
+
+  if (!appointment) return { ok: false, message: 'That appointment was not found.' }
+  if (!isFrontDesk(role) && appointment.provider_id !== user.id) {
+    return { ok: false, message: 'Not allowed.' }
+  }
+  if (!appointment.client_id) return { ok: false, message: 'This visit has no client account.' }
+  if (appointment.client_membership_id) {
+    return { ok: false, message: 'A membership is already on this visit.' }
+  }
+  if (appointment.status === 'cancelled' || appointment.status === 'no_show') {
+    return { ok: false, message: 'A cancelled or missed visit cannot use the membership.' }
+  }
+
+  const lines = ((appointment.appointment_services ?? []) as {
+    service_id: number | null
+    price_cents: number
+  }[])
+    .filter((l): l is { service_id: number; price_cents: number } => l.service_id !== null)
+    .map((l) => ({ serviceId: l.service_id, priceCents: l.price_cents }))
+
+  const applied = await applyMembershipBenefit({
+    appointmentId,
+    clientId: appointment.client_id,
+    lines,
+    subtotalCents: appointment.subtotal_cents,
+  })
+
+  if (!applied) {
+    return {
+      ok: false,
+      message:
+        'Nothing to apply — no current membership, no facials left this period, or nothing on this visit it covers.',
+    }
+  }
+
+  revalidatePath(`/dashboard/appointments/${appointmentId}`)
+  return { ok: true, coveredCents: applied.coveredCents, discountCents: applied.discountCents }
 }

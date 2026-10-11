@@ -24,6 +24,7 @@ import { Field, Input, Select } from '@/components/ui/field'
 import { createClient } from '@/lib/supabase/client'
 import { cn, formatMoney } from '@/lib/utils'
 import { formatDateTimeInTimeZone } from '@/lib/time'
+import { membershipDiscountCents } from '@/types/memberships'
 import { sellPackage } from '@/app/dashboard/packages/actions'
 import { packageErrorMessage } from '@/app/dashboard/packages/errors'
 import {
@@ -111,6 +112,9 @@ interface Receipt {
   custom?: boolean
   /** How much of a custom amount went on the client's visit balances. */
   applied_cents?: number
+  /** What a membership took off a services sale. */
+  membership_cents?: number
+  membership_name?: string | null
 }
 
 /**
@@ -247,6 +251,15 @@ export function PointOfSale({
   const [customTaxable, setCustomTaxable] = useState(false)
   // What the picked client still owes, and which of it this payment settles.
   const [balances, setBalances] = useState<OpenBalance[]>([])
+  // The picked client's live membership, for the Services preview. The sale
+  // route applies it for real; this only shows staff the figure first.
+  const [membership, setMembership] = useState<{
+    name: string
+    left: number
+    scope: number[]
+    pct: number
+    prices: Map<number, number>
+  } | null>(null)
   const [applyTo, setApplyTo] = useState<string[]>([])
 
   useEffect(() => {
@@ -256,10 +269,47 @@ export function PointOfSale({
         if (alive) {
           setBalances([])
           setApplyTo([])
+          setMembership(null)
         }
         return
       }
       const supabase = createClient()
+
+      const { data: held } = await supabase
+        .from('client_memberships')
+        .select(
+          'id, membership_id, current_period_start, memberships!client_memberships_membership_id_fkey(name, included_sessions_per_period, service_discount_pct, membership_services(service_id), membership_member_prices(service_id, price_cents)), membership_redemptions(sessions, redeemed_for_period_start)'
+        )
+        .eq('client_id', customerId)
+        .eq('status', 'active')
+        .gt('current_period_end', new Date().toISOString())
+        .maybeSingle()
+      if (alive) {
+        const plan = held?.memberships as unknown as {
+          name: string
+          included_sessions_per_period: number
+          service_discount_pct: number
+          membership_services: { service_id: number }[]
+          membership_member_prices: { service_id: number; price_cents: number }[]
+        } | null
+        if (held && plan) {
+          const used = ((held.membership_redemptions ?? []) as {
+            sessions: number
+            redeemed_for_period_start: string
+          }[])
+            .filter((r) => r.redeemed_for_period_start === held.current_period_start)
+            .reduce((n, r) => n + r.sessions, 0)
+          setMembership({
+            name: plan.name,
+            left: Math.max(plan.included_sessions_per_period - used, 0),
+            scope: plan.membership_services.map((r) => r.service_id),
+            pct: plan.service_discount_pct,
+            prices: new Map(plan.membership_member_prices.map((r) => [r.service_id, r.price_cents])),
+          })
+        } else {
+          setMembership(null)
+        }
+      }
       const { data: visits } = await supabase
         .from('appointments')
         .select('id, starts_at, total_cents, appointment_services(name_snapshot, sort_order)')
@@ -397,7 +447,33 @@ export function PointOfSale({
       : sellingCustom
         ? customExtra
         : retailSubtotal
-  const afterDiscount = Math.max(subtotal - manualDiscount, 0)
+  // The membership on a services sale, previewed the way applyMembershipBenefit
+  // computes it: included sessions dearest-first, one per service, then member
+  // prices on the rest, then the plan percentage.
+  const memberCut = (() => {
+    if (!sellingServices || !membership) return 0
+    const coveredIds = new Set<number>()
+    let covered = 0
+    const eligible = [...serviceLines]
+      .filter((l) => l.price_cents > 0 && (membership.scope.length === 0 || membership.scope.includes(l.id)))
+      .sort((a, b) => b.price_cents - a.price_cents)
+    for (const l of eligible) {
+      if (coveredIds.size >= membership.left) break
+      if (coveredIds.has(l.id)) continue
+      coveredIds.add(l.id)
+      covered += l.price_cents
+    }
+    let priced = 0
+    for (const l of serviceLines) {
+      if (coveredIds.has(l.id)) continue
+      const cap = membership.prices.get(l.id)
+      if (cap !== undefined) priced += Math.max(l.price_cents - cap, 0)
+    }
+    const rest = Math.max(servicesSubtotal - covered - priced, 0)
+    return covered + priced + membershipDiscountCents(rest, membership.pct)
+  })()
+
+  const afterDiscount = Math.max(subtotal - memberCut - manualDiscount, 0)
   // A custom amount is taxed only when the desk ticks that it is goods.
   const untaxed = sellingPackage || sellingServices || (sellingCustom && !customTaxable)
   const tax = untaxed ? 0 : Math.round(afterDiscount * taxRate)
@@ -660,6 +736,8 @@ export function PointOfSale({
         subtotal_cents: data.subtotal_cents,
         tax_cents: 0,
         total_cents: data.total_cents,
+        membership_cents: data.membership_cents ?? 0,
+        membership_name: data.membership_name ?? null,
         customer: customerId
           ? (customers.find((c) => c.id === customerId)?.name ?? 'Client')
           : walkIn.trim(),
@@ -838,6 +916,12 @@ export function PointOfSale({
             </dt>
             <dd className="tabular-nums">{formatMoney(receipt.subtotal_cents)}</dd>
           </div>
+          {(receipt.membership_cents ?? 0) > 0 && (
+            <div className="flex justify-between">
+              <dt className="text-[var(--color-muted)]">{receipt.membership_name ?? 'Membership'}</dt>
+              <dd className="tabular-nums">&minus;{formatMoney(receipt.membership_cents ?? 0)}</dd>
+            </div>
+          )}
           {/* A package carries no sales tax, so the line would read $0 and say
               nothing. The retail sale always has one, even when it is zero. */}
           {!receipt.prepaid && (
@@ -1474,6 +1558,12 @@ export function PointOfSale({
               <dt className="text-[var(--color-muted)]">{towardBalance > 0 ? 'Extras' : 'Subtotal'}</dt>
               <dd className="tabular-nums">{formatMoney(subtotal)}</dd>
             </div>
+            {memberCut > 0 && membership && (
+              <div className="flex justify-between">
+                <dt className="text-[var(--color-muted)]">{membership.name}</dt>
+                <dd className="tabular-nums">&minus;{formatMoney(memberCut)}</dd>
+              </div>
+            )}
             {manualDiscount > 0 && (
               <div className="flex justify-between">
                 <dt className="text-[var(--color-muted)]">Discount</dt>
@@ -1539,6 +1629,14 @@ export function PointOfSale({
               ))}
             </Select>
           </Field>
+
+          {membership && (
+            <p className="text-xs leading-relaxed text-[var(--color-muted)]">
+              {membership.name} member · {membership.left}{' '}
+              {membership.left === 1 ? 'facial' : 'facials'} left this period. Applied
+              automatically to services rung up here.
+            </p>
+          )}
 
           {customerId && owedTotal > 0 && !sellingCustom && (
             <p className="text-xs leading-relaxed text-amber-700 dark:text-amber-400">
