@@ -196,7 +196,13 @@ export function noShowRatePct(r: ClientRecordStats): number | null {
   return Math.round((100 * r.no_show_count) / attended)
 }
 
-/** Integer cents throughout — no float ever touches a price. */
+/**
+ * Takings per visit: money received from this client (081) over the visits
+ * they actually attended. Not a bill — a visit they never paid for drags it
+ * down, which is the point.
+ *
+ * Integer cents throughout — no float ever touches a price.
+ */
 export function averageTicketCents(r: ClientRecordStats): number | null {
   if (r.visit_count === 0) return null
   return Math.round(r.lifetime_value_cents / r.visit_count)

@@ -327,8 +327,10 @@ export default async function ClientDetailPage({ params }: Props) {
     (p) => p.photo_due || (p.photo_documented && !p.consent_ok),
   )
 
-  // Derived from the counters client_record_sync_stats (005) already maintains.
-  // Nothing here re-aggregates `appointments` — a second copy of that sum is
+  // Derived from the counters client_record_refresh (081) maintains: visits
+  // counted from `appointments`, `lifetime_value_cents` from money actually
+  // received — deposits, balances, retail and paid membership dues, net of
+  // refunds. Nothing here re-aggregates either; a second copy of those sums is
   // free to drift from the first.
   const stats = {
     visit_count: record?.visit_count ?? 0,

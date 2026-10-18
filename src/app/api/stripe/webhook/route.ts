@@ -352,11 +352,25 @@ export async function POST(request: NextRequest) {
             `mark deposit refunded for ${intentId}`
           )
 
+          // Who it goes back to. Without this the refund row carried neither
+          // a client nor an appointment, so it could never come off anybody's
+          // total — and since 081 that total is what the counter calls
+          // lifetime value. Read from the appointment the intent paid for;
+          // a refund against a retail order has no appointment and keeps the
+          // nulls, which is honest rather than guessed.
+          const { data: refunded } = await admin
+            .from('appointments')
+            .select('id, client_id')
+            .eq('stripe_payment_intent_id', intentId)
+            .maybeSingle()
+
           must(
             await admin.from('payments').insert({
               amount_cents: -(charge.amount_refunded ?? 0),
               method: 'card',
               kind: 'refund',
+              appointment_id: refunded?.id ?? null,
+              client_id: refunded?.client_id ?? null,
               stripe_payment_intent_id: intentId,
               stripe_charge_id: charge.id,
               status: 'refunded',

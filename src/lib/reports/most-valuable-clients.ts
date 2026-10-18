@@ -11,9 +11,10 @@
 //
 //  1. MONEY IS WHAT WAS TAKEN. `payments` is the ledger (008/025); a completed
 //     appointment nobody paid for is not revenue. Refunds are negative rows and
-//     net out on their own. `client_records.lifetime_value_cents` measures
-//     something different — see the reconciliation below — and this report
-//     shows the gap rather than hiding it.
+//     net out on their own. `client_records.lifetime_value_cents` counts the
+//     same kind of money since 081, but business-wide and across both
+//     ledgers — see the reconciliation below, which shows the gap rather than
+//     hiding it.
 //
 //  2. VISIT STATS COME FROM `client_records`. Migration 005's
 //     `client_record_sync_stats` trigger maintains visit_count, first/last
@@ -121,8 +122,9 @@ type Tally = {
   redeemedCents: number
   /** Money taken against appointments, for the reconciliation against 005. */
   serviceTakenCents: number
-  /** `client_records.lifetime_value_cents`: appointments.total_cents, billed. */
-  billedCents: number
+  /** `client_records.lifetime_value_cents`: money received, every site, both
+   *  ledgers — what the counter on the client page shows (081). */
+  counterCents: number
   visits: number
   noShows: number
   cancels: number
@@ -260,7 +262,7 @@ export const mostValuableClientsReport: ReportModule = {
           retailCents: 0,
           redeemedCents: 0,
           serviceTakenCents: 0,
-          billedCents: 0,
+          counterCents: 0,
           visits: 0,
           noShows: 0,
           cancels: 0,
@@ -293,7 +295,7 @@ export const mostValuableClientsReport: ReportModule = {
       }
       // Always the business-wide figure: it is what 005 stores, and the
       // reconciliation below is about that number specifically.
-      t.billedCents = r.lifetime_value_cents
+      t.counterCents = r.lifetime_value_cents
     }
 
     let unattributedCents = 0
@@ -370,7 +372,7 @@ export const mostValuableClientsReport: ReportModule = {
     // ── 8. The derived figures ────────────────────────────────
     const totalTaken = ranked.reduce((s, t) => s + t.takenCents, 0)
     const totalVisits = ranked.reduce((s, t) => s + t.visits, 0)
-    const totalBilled = ranked.reduce((s, t) => s + t.billedCents, 0)
+    const totalCounter = ranked.reduce((s, t) => s + t.counterCents, 0)
     const totalServiceTaken = ranked.reduce((s, t) => s + t.serviceTakenCents, 0)
     const houseAvgTicket = totalVisits > 0 ? divideCents(totalTaken, totalVisits) : 0
 
@@ -491,7 +493,7 @@ export const mostValuableClientsReport: ReportModule = {
       .sort((a, b) => b.noShowRate - a.noShowRate || b.t.takenCents - a.t.takenCents)
 
     const atRiskValue = atRisk.reduce((s, v) => s + v.t.takenCents, 0)
-    const ledgerGap = totalServiceTaken - totalBilled
+    const ledgerGap = totalCounter - totalTaken
 
     // ── 9. Notes: every figure above, defined ─────────────────
     notes.push(
@@ -525,7 +527,7 @@ export const mostValuableClientsReport: ReportModule = {
 
     // The reconciliation the brief asks for, stated whether or not it is zero.
     notes.push(
-      `RECONCILIATION. \`client_records.lifetime_value_cents\` is not takings: 005's trigger sums \`appointments.total_cents\` for completed appointments, which is what was BILLED for services. Across this list it is ${formatMoney(totalBilled)}, against ${formatMoney(totalServiceTaken)} actually taken on appointments — a difference of ${formatMoney(ledgerGap)}. The gap is structural, not a bug: it holds unpaid balances (negative), deposits taken on appointments not yet completed (positive), refunds, and every payment against an appointment that was later cancelled. It also excludes retail entirely. This report ranks on the ledger; the counter is shown for what it measures.`,
+      `RECONCILIATION. \`client_records.lifetime_value_cents\` is takings too since 081 — payments net of refunds, redemptions excluded, plus paid membership dues. The counter reads ${formatMoney(totalCounter)} across this list against ${formatMoney(totalTaken)} on this report's ledger, a difference of ${formatMoney(ledgerGap)}, of which ${formatMoney(totalServiceTaken)} is the part taken on appointments. Two things account for the gap and neither is a bug: membership dues live in \`membership_charges\`, which 050 kept out of \`payments\` and this report does not read; and the counter is deliberately business-wide (032), so a run filtered to one site will always read lower. A gap with no memberships running and no filter applied is worth a look.`,
     )
 
     if (anonymised.length > 0) {
