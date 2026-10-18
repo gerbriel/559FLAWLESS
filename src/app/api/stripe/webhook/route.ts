@@ -1,4 +1,5 @@
-import { NextResponse, type NextRequest } from 'next/server'
+import { NextResponse, after, type NextRequest } from 'next/server'
+import { syncAppointmentToCalendar } from '@/lib/calendar-push'
 import { logError } from '@/lib/log-error'
 import type Stripe from 'stripe'
 import { getStripe, stripeConfigured } from '@/lib/stripe'
@@ -64,6 +65,22 @@ export async function POST(request: NextRequest) {
 
   try {
     switch (event.type) {
+      case 'checkout.session.expired': {
+        const session = event.data.object
+        if (session.metadata?.kind !== 'appointment_deposit') break
+        const appointmentId = session.metadata?.appointment_id
+        if (!appointmentId) break
+
+        // A hold nobody paid for, released the moment Stripe gives up on the
+        // session (080). The function refuses anything requested or paid, so
+        // a retry — or a client who paid through a second session — is safe.
+        must(
+          await admin.rpc('release_unpaid_hold', { p_appointment: appointmentId }),
+          `release unpaid hold ${appointmentId}`
+        )
+        break
+      }
+
       case 'checkout.session.completed': {
         const session = event.data.object
         const kind = session.metadata?.kind
@@ -154,23 +171,43 @@ export async function POST(request: NextRequest) {
 
           const { data: appointment } = await admin
             .from('appointments')
-            .select('id, client_id, deposit_status, deposit_cents')
+            .select('id, client_id, deposit_status, deposit_cents, requested_at')
             .eq('id', appointmentId)
             .maybeSingle()
 
+          if (!appointment) {
+            // Money arrived for a hold that is gone — released as unpaid before
+            // this event got here. Loud, because somebody has to refund it.
+            void logError('stripe/webhook', 'deposit paid for an appointment that no longer exists', {
+              appointment_id: appointmentId,
+              payment_intent: paymentIntentId(session),
+              amount_cents: session.amount_total,
+              customer_email: session.customer_details?.email ?? null,
+            })
+            break
+          }
           // Idempotency: a retry finds it already paid and stops here.
-          if (!appointment || appointment.deposit_status === 'paid') break
+          if (appointment.deposit_status === 'paid') break
 
+          const becameRequest = appointment.requested_at === null
           must(
             await admin
               .from('appointments')
               .update({
                 deposit_status: 'paid',
                 stripe_payment_intent_id: paymentIntentId(session),
+                // The deposit is the ticket in (080): paying it is what makes
+                // this a request. Same statement as the payment, so a retry
+                // can never leave one without the other.
+                requested_at: appointment.requested_at ?? new Date().toISOString(),
               })
               .eq('id', appointmentId),
             `mark deposit paid for ${appointmentId}`
           )
+
+          // Now that it is a request, it belongs on the provider's Google
+          // Calendar — booking.ts deliberately did not push the unpaid hold.
+          if (becameRequest) after(() => syncAppointmentToCalendar(appointmentId))
 
           must(
             await admin.from('payments').insert({

@@ -425,6 +425,12 @@ export type Appointment = {
   total_cents: number
   deposit_cents: number
   deposit_status: DepositStatus
+  /**
+   * When this became a request the studio could see (080). Null while an
+   * online booking's deposit is owed and unpaid: the slot is held, nothing has
+   * been announced, and release_unpaid_hold() deletes it if nobody pays.
+   */
+  requested_at: string | null
   stripe_payment_intent_id: string | null
   stripe_session_id: string | null
   client_notes: string | null
@@ -2835,6 +2841,10 @@ export type Database = {
        * back to its normal price ('repriced'); a past one is left as it was
        * ('returned'). Manager and up.
        */
+      /** Delete an online hold whose deposit was never paid (080). Service role only. */
+      release_unpaid_hold: { Args: { p_appointment: string }; Returns: boolean }
+      /** The sweep behind release_unpaid_hold; returns how many it released. */
+      release_unpaid_holds: { Args: Record<string, never>; Returns: number }
       give_back_membership_session: {
         Args: { p_redemption: number }
         Returns: 'repriced' | 'returned'

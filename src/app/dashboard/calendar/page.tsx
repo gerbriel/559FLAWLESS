@@ -94,7 +94,7 @@ export default async function CalendarPage({ searchParams }: Props) {
   let appointmentsQuery = supabase
     .from('appointments')
     .select(
-      'id, starts_at, ends_at, status, total_cents, deposit_cents, provider_id, client_id, client_notes, staff_notes, guest_first_name, guest_last_name, guest_email, guest_phone, client:profiles!appointments_client_id_fkey(first_name, last_name, email, phone), provider:profiles!appointments_provider_id_fkey(first_name, last_name, display_name), appointment_services(name_snapshot, price_cents, duration_minutes, sort_order)'
+      'id, starts_at, ends_at, status, total_cents, deposit_cents, requested_at, provider_id, client_id, client_notes, staff_notes, guest_first_name, guest_last_name, guest_email, guest_phone, client:profiles!appointments_client_id_fkey(first_name, last_name, email, phone), provider:profiles!appointments_provider_id_fkey(first_name, last_name, display_name), appointment_services(name_snapshot, price_cents, duration_minutes, sort_order)'
     )
     .gte('starts_at', zonedTimeToUtc(startKey, '00:00', tz).toISOString())
     .lt('starts_at', zonedTimeToUtc(endKey, '00:00', tz).toISOString())

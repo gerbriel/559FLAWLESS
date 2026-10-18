@@ -38,7 +38,7 @@ export default async function AppointmentDetailPage({ params, searchParams }: Pr
   const { data: appointment } = await supabase
     .from('appointments')
     .select(
-      'id, starts_at, ends_at, status, total_cents, membership_covered_cents, membership_discount_cents, promo_discount_cents, deposit_cents, deposit_status, client_notes, cancellation_reason, profiles!appointments_provider_id_fkey(display_name, first_name, bio), appointment_services(id, name_snapshot, price_cents, duration_minutes, full_price_cents, sort_order)'
+      'id, starts_at, ends_at, status, total_cents, membership_covered_cents, membership_discount_cents, promo_discount_cents, deposit_cents, deposit_status, requested_at, client_notes, cancellation_reason, profiles!appointments_provider_id_fkey(display_name, first_name, bio), appointment_services(id, name_snapshot, price_cents, duration_minutes, full_price_cents, sort_order)'
     )
     .eq('id', id)
     .eq('client_id', user.id)
@@ -78,6 +78,12 @@ export default async function AppointmentDetailPage({ params, searchParams }: Pr
   // 'pending' means a person has not agreed to this yet. Every sentence on this
   // page that promises the client an appointment has to check it first.
   const awaitingApproval = appointment.status === 'pending'
+  // Not a request yet: the deposit is owed and unpaid (080). The hold lasts
+  // 30 minutes from booking; after that it is released and this page is gone.
+  const awaitingDeposit =
+    appointment.deposit_cents > 0 &&
+    appointment.deposit_status !== 'paid' &&
+    appointment.requested_at === null
   // The webhook is the record that money moved; `?deposit=paid` only says the
   // browser came back from Checkout. They are usually seconds apart and
   // occasionally are not.
@@ -191,7 +197,24 @@ export default async function AppointmentDetailPage({ params, searchParams }: Pr
         codebase, and "we'll let you know" without naming the channel is how a
         client ends up watching an inbox that will never have anything in it.
       */}
-      {awaitingApproval && (
+      {awaitingDeposit && deposit !== 'paid' && (
+        <div className="mt-6 border border-[var(--color-accent)] bg-[var(--color-clay-soft)] p-6 text-sm dark:bg-transparent">
+          <p className="label-caps text-[var(--color-accent)]">Not sent yet</p>
+          <p className="mt-3 leading-relaxed">
+            Pay the {formatMoney(appointment.deposit_cents)} deposit to send this request to{' '}
+            {providerName}. The time is held for 30 minutes from when you booked; after that it
+            is released and you are welcome to book again. The deposit comes off your total on
+            the day, and if the studio cannot take the booking it is returned in full.
+          </p>
+          <div className="mt-5">
+            <ButtonLink href={`/account/appointments/${appointment.id}/deposit`} variant="accent">
+              Pay {formatMoney(appointment.deposit_cents)} deposit
+            </ButtonLink>
+          </div>
+        </div>
+      )}
+
+      {awaitingApproval && !awaitingDeposit && (
         <div className="mt-6 border border-amber-600/40 bg-amber-50 p-6 text-sm text-amber-800 dark:bg-transparent dark:text-amber-400">
           <p className="label-caps">Awaiting confirmation</p>
           <p className="mt-3 leading-relaxed">

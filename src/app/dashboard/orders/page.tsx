@@ -69,6 +69,8 @@ export default async function DashboardOrdersPage({ searchParams }: Props) {
       .select(
         'id, starts_at, status, source, total_cents, deposit_cents, deposit_status, client_id, guest_first_name, guest_last_name, profiles!appointments_client_id_fkey(first_name, last_name), appointment_services(name_snapshot, sort_order)'
       )
+      // An unpaid hold is not a sale, or a balance, until it is a request (080).
+      .not('requested_at', 'is', null)
       .order('starts_at', { ascending: false })
       .limit(200),
     supabase

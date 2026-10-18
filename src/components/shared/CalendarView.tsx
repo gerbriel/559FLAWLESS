@@ -49,6 +49,9 @@ export interface CalendarAppointment {
   status: AppointmentStatus
   total_cents: number
   deposit_cents: number
+  /** Null while an online booking's deposit is owed and unpaid (080). Absent
+   *  on callers that do not select it, which reads as "requested". */
+  requested_at?: string | null
   provider_id: string
   client_id: string | null
   client_notes: string | null
@@ -354,6 +357,23 @@ export function isAwaitingApproval(appointment: { status: AppointmentStatus }): 
 }
 
 /**
+ * A hold whose deposit has not been paid (080): held, not yet requested, and
+ * gone within the hour if nobody pays. Drawn like any pending card — it blocks
+ * the time just the same — but the words say what is actually being waited on.
+ */
+export function isAwaitingDeposit(appointment: {
+  status: AppointmentStatus
+  deposit_cents: number
+  requested_at?: string | null
+}): boolean {
+  return (
+    appointment.status === 'pending' &&
+    appointment.deposit_cents > 0 &&
+    appointment.requested_at === null
+  )
+}
+
+/**
  * Three channels mark a held-but-unapproved card, so that none of them has to
  * carry the distinction alone:
  *
@@ -416,16 +436,19 @@ export const PENDING_TITLE =
  */
 export function PendingMark({
   showLabel = true,
+  unpaid = false,
   className = '',
 }: {
   showLabel?: boolean
+  /** The deposit is still owed — see isAwaitingDeposit. */
+  unpaid?: boolean
   className?: string
 }) {
   return (
     <span className={`inline-flex items-center gap-1 text-[var(--color-muted)] ${className}`}>
       <CircleDashed className="h-3 w-3 shrink-0" strokeWidth={1.75} aria-hidden />
       <span className={showLabel ? 'label-caps text-[0.5625rem]' : 'sr-only'}>
-        Awaiting approval
+        {unpaid ? 'Awaiting deposit' : 'Awaiting approval'}
       </span>
     </span>
   )
@@ -1294,7 +1317,9 @@ function AppointmentCard({
         </span>
         {/* Tight: the mark rides the time line, so being pending costs the card
             no height and the two lines it has stay the client's and the clock's. */}
-        {pending && !full && <PendingMark showLabel={false} className="ml-auto" />}
+        {pending && !full && (
+          <PendingMark showLabel={false} unpaid={isAwaitingDeposit(appointment)} className="ml-auto" />
+        )}
       </span>
 
       <span className={cn('mt-0.5 block truncate', full ? 'text-sm' : 'text-xs leading-tight')}>
@@ -1311,7 +1336,7 @@ function AppointmentCard({
           {formatMoney(appointment.total_cents)}
         </span>
       )}
-      {pending && full && <PendingMark className="mt-1" />}
+      {pending && full && <PendingMark unpaid={isAwaitingDeposit(appointment)} className="mt-1" />}
     </button>
   )
 }
@@ -1476,7 +1501,9 @@ function MonthView({
                           {/* A month cell is a seventh of a row: the icon and the
                               hatch carry it here, and the words are still there
                               for a screen reader and on hover. */}
-                          {pending && <PendingMark showLabel={false} className="ml-auto" />}
+                          {pending && (
+                            <PendingMark showLabel={false} unpaid={isAwaitingDeposit(appt)} className="ml-auto" />
+                          )}
                         </span>
                       )
                     })}

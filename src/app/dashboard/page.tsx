@@ -51,7 +51,7 @@ export default async function DashboardHome() {
       supabase
         .from('appointments')
         .select(
-          'id, starts_at, ends_at, status, total_cents, deposit_status, deposit_cents, guest_first_name, guest_last_name, profiles!appointments_client_id_fkey(first_name, last_name), appointment_services(name_snapshot, sort_order)'
+          'id, starts_at, ends_at, status, total_cents, deposit_status, deposit_cents, requested_at, guest_first_name, guest_last_name, profiles!appointments_client_id_fkey(first_name, last_name), appointment_services(name_snapshot, sort_order)'
         )
         .gte('starts_at', dayStart)
         .lt('starts_at', dayEnd)
@@ -210,7 +210,9 @@ export default async function DashboardHome() {
                           words and the warning tone every other pending
                           surface uses. */}
                       {a.status === 'pending' ? (
-                        <Badge tone="warning">Awaiting approval</Badge>
+                        <Badge tone="warning">
+                          {a.requested_at ? 'Awaiting approval' : 'Awaiting deposit'}
+                        </Badge>
                       ) : (
                         <Badge tone={a.status === 'checked_in' ? 'accent' : 'neutral'}>
                           {a.status.replace('_', ' ')}

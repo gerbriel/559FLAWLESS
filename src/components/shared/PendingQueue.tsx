@@ -68,6 +68,8 @@ export async function PendingQueue({ variant }: { variant: 'today' | 'calendar' 
         'id, starts_at, total_cents, deposit_cents, deposit_status, stripe_payment_intent_id, approval_reason, client_notes, client_id, guest_first_name, guest_last_name, guest_email, guest_phone, provider:profiles!appointments_provider_id_fkey(display_name, first_name), client:profiles!appointments_client_id_fkey(first_name, last_name, email, phone), appointment_services(name_snapshot, price_cents, duration_minutes, sort_order, services(id, category_id))'
       )
       .eq('status', 'pending')
+      // A hold whose deposit is still owed is not a request yet (080).
+      .not('requested_at', 'is', null)
       .order('starts_at'),
     supabase
       .from('consent_forms')

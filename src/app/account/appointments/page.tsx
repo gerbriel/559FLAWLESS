@@ -21,7 +21,7 @@ export default async function AppointmentsPage() {
   const { data: appointments } = await supabase
     .from('appointments')
     .select(
-      'id, starts_at, status, total_cents, deposit_cents, deposit_status, profiles!appointments_provider_id_fkey(display_name, first_name), appointment_services(name_snapshot, sort_order)'
+      'id, starts_at, status, total_cents, deposit_cents, deposit_status, requested_at, profiles!appointments_provider_id_fkey(display_name, first_name), appointment_services(name_snapshot, sort_order)'
     )
     .eq('client_id', user.id)
     .order('starts_at', { ascending: false })
@@ -61,7 +61,11 @@ export default async function AppointmentsPage() {
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-4">
-            <Badge tone={STATUS_TONE[a.status]}>{STATUS_LABEL[a.status]}</Badge>
+            {a.status === 'pending' && !a.requested_at && a.deposit_status !== 'paid' ? (
+              <Badge tone="warning">Deposit needed</Badge>
+            ) : (
+              <Badge tone={STATUS_TONE[a.status]}>{STATUS_LABEL[a.status]}</Badge>
+            )}
             <span className="tabular-nums text-sm">{formatMoney(a.total_cents)}</span>
           </div>
         </Link>

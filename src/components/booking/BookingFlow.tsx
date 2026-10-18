@@ -538,7 +538,6 @@ export function BookingFlow({
       // An older server build that does not send this is treated as the status
       // the studio has run on until now.
       const status: string = data.booking.status ?? 'confirmed'
-      const heldForReview = status === 'pending'
 
       setConfirmation({
         id: data.booking.id,
@@ -562,21 +561,14 @@ export function BookingFlow({
       }
 
       /**
-       * A booking the studio still has to approve is NOT thrown at Stripe.
-       *
-       * `window.location.assign` leaves before a browser has painted anything
-       * worth reading, so the screen below — the one that says this is not
-       * confirmed yet — existed only for bookings without a deposit. The client
-       * paying money was the single client who never got told, and they came
-       * back from Stripe with a receipt believing they had an appointment.
-       *
-       * So: it still comes to checkout, because a held slot is exactly what a
-       * deposit is for, but by a tap on a screen that has said what it is first.
-       * `heldForReview` is what the database made of the booking (036), not what
-       * was asked for.
+       * The deposit is the ticket in (080): a booking with one owed goes
+       * straight to Stripe, held or not. Until it is paid the studio does not
+       * see the request at all, and the hold is released after 30 minutes.
+       * Stripe's own line item says so, and the account page the client comes
+       * back to says whether it is a request yet — so nobody returns from
+       * Checkout believing they have an appointment the studio has not seen.
        */
-      if (data.booking.depositCents > 0 && !heldForReview) {
-        // Confirmed and paying: straight through, as before.
+      if (data.booking.depositCents > 0) {
         const checkout = await fetch('/api/stripe/deposit', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -706,11 +698,12 @@ export function BookingFlow({
               <p className="mt-3 text-sm leading-relaxed text-[var(--color-muted)]">
                 {heldForReview ? (
                   <>
-                    This is not payment for a confirmed appointment. Your time is
-                    already held while the studio reviews the booking, so paying is
-                    not what reserves it — the studio asks for the deposit up front
-                    and it comes off your total on the day. If we cannot take this
-                    booking, it is returned to you in full.
+                    Your request has not been sent yet. The studio only sees a
+                    booking once its deposit is paid — pay it now and your request
+                    goes to them for approval. The time is held for you for the next
+                    30 minutes; after that it is released. The deposit comes off your
+                    total on the day, and if the studio cannot take the booking it is
+                    returned in full.
                   </>
                 ) : (
                   <>
@@ -725,15 +718,15 @@ export function BookingFlow({
               </div>
               {signedIn && (
                 <p className="mt-3 text-xs text-[var(--color-muted)]">
-                  You can also pay it later from your appointments page.
+                  You can also pay from your appointments page — within the next 30 minutes.
                 </p>
               )}
             </div>
           ) : (
             <p className="mt-8 border border-[var(--color-border)] bg-[var(--color-surface)] p-5 text-sm text-[var(--color-muted)]">
               Taking you to secure checkout to pay the{' '}
-              {formatMoney(confirmation.depositCents)} deposit. Your slot is held
-              until then.
+              {formatMoney(confirmation.depositCents)} deposit. Your request goes to
+              the studio once it is paid; the time is held for 30 minutes until then.
             </p>
           ))}
 

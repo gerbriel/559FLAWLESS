@@ -71,7 +71,8 @@ export default async function DashboardLayout({
     supabase
       .from('appointments')
       .select('id', { count: 'exact', head: true })
-      .eq('status', 'pending'),
+      .eq('status', 'pending')
+      .not('requested_at', 'is', null),
     supabase.from('booking_settings').select('time_clock_enabled, my_hours_enabled').eq('id', 1).maybeSingle(),
   ])
 

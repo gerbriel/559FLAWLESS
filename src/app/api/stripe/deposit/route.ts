@@ -96,12 +96,15 @@ export async function POST(request: NextRequest) {
   */
   const awaitingApproval = appointment.status === 'pending'
   const lineDescription = awaitingApproval
-    ? 'Your time is held while the studio confirms this booking. Applied to your service total on the day.'
+    ? 'Your request goes to the studio once this is paid; the time is held for 30 minutes until then. Applied to your service total on the day, and refunded in full if the studio cannot take the booking.'
     : 'Applied to your service total at your appointment.'
 
   const stripe = getStripe()
   const session = await stripe.checkout.sessions.create({
     mode: 'payment',
+    // 30 minutes — Stripe's minimum, and the hold's life (080). When it lapses
+    // the checkout.session.expired webhook releases the hold.
+    expires_at: Math.floor(Date.now() / 1000) + 30 * 60,
     customer_email: appointment.guest_email ?? undefined,
     line_items: [
       {

@@ -739,6 +739,10 @@ export async function createBooking(req: BookingRequest): Promise<BookingOutcome
       source: 'online',
       deposit_cents: depositCents,
       deposit_status: depositCents > 0 ? 'pending' : 'none',
+      // The deposit is the ticket in (080). With one owed this is a HOLD, not
+      // yet a request: the slot is reserved, nobody is told, and the Stripe
+      // webhook sets this when the deposit lands. Nothing owed: requested now.
+      requested_at: depositCents > 0 ? null : now.toISOString(),
       client_notes: req.notes,
       age_attested_at: req.ageAttested ? now.toISOString() : null,
     })
@@ -856,6 +860,9 @@ export async function createBooking(req: BookingRequest): Promise<BookingOutcome
       .update({
         deposit_cents: depositAfterBenefit,
         deposit_status: depositAfterBenefit > 0 ? 'pending' : 'none',
+        // Capped to nothing — a member's covered facial — means there is no
+        // deposit to wait for: this is a request from this moment.
+        ...(depositAfterBenefit === 0 ? { requested_at: now.toISOString() } : {}),
       })
       .eq('id', appointment.id)
 
@@ -874,7 +881,11 @@ export async function createBooking(req: BookingRequest): Promise<BookingOutcome
   // an error. `after()`, not a bare `void`: on Vercel a promise left running
   // when the response goes out can be frozen with the function, and nothing
   // re-pushes a missed booking later — the daily sync only pulls busy time.
-  after(() => syncAppointmentToCalendar(appointment.id))
+  //
+  // Only once it is a request. An unpaid hold is not pushed: it may be deleted
+  // within the hour, and an orphaned Google event is worse than a late one.
+  // The webhook pushes it when the deposit is paid.
+  if (depositAfterBenefit === 0) after(() => syncAppointmentToCalendar(appointment.id))
 
   return {
     ok: true,

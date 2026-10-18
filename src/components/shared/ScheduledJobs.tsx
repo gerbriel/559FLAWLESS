@@ -9,6 +9,7 @@ const JOBS: Record<string, string> = {
   '559-timeclock': 'Nudging staff who forgot to clock in or out',
   '559-licences': 'Warning before a licence expires',
   '559-recurring-expenses': 'Posting rent, software and other regular costs',
+  '559-unpaid-holds': 'Releasing booking requests whose deposit was never paid',
 }
 
 /**
