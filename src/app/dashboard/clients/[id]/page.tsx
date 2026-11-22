@@ -68,7 +68,7 @@ export default async function ClientDetailPage({ params }: Props) {
     supabase
       .from('profiles')
       .select(
-        'id, first_name, last_name, email, phone, pronouns, date_of_birth, created_at, marketing_opt_in',
+        'id, first_name, last_name, email, phone, pronouns, date_of_birth, created_at, marketing_opt_in, stripe_customer_id',
       )
       .eq('id', id)
       .eq('role', 'client')
@@ -397,6 +397,20 @@ export default async function ClientDetailPage({ params }: Props) {
             }}
             canEdit={isFrontDesk(role)}
           />
+
+          {isManager(role) && client.stripe_customer_id && (
+            <p className="mt-2 text-sm text-[var(--color-muted)]">
+              Stripe customer{' '}
+              <a
+                href={`https://dashboard.stripe.com/customers/${encodeURIComponent(client.stripe_customer_id)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline underline-offset-2"
+              >
+                {client.stripe_customer_id}
+              </a>
+            </p>
+          )}
 
           <div className="mt-4">
             <ClientTagPicker
@@ -800,7 +814,7 @@ export default async function ClientDetailPage({ params }: Props) {
                         {form?.title}
                         <span className="block text-xs text-[var(--color-muted)]">
                           {expired
-                            ? 'Expired — needs re-signing'
+                            ? 'Expired. Needs re-signing'
                             : new Date(s.signed_at).toLocaleDateString('en-US', { timeZone })}
                         </span>
                       </span>

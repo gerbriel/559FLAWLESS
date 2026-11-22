@@ -1,6 +1,6 @@
 import 'server-only'
 import type Stripe from 'stripe'
-import { couponCutCents, normalizeCouponCode } from '@/lib/coupon-code'
+import { couponCustomerAllows, couponCutCents, normalizeCouponCode } from '@/lib/coupon-code'
 
 /**
  * Promo codes for retail checkout live in Stripe, not in `promotions`.
@@ -12,9 +12,10 @@ import { couponCutCents, normalizeCouponCode } from '@/lib/coupon-code'
  * redemption cap, minimum and first-purchase rules, which Stripe enforces
  * because the session is handed the promotion code itself.
  *
- * Codes that need a Stripe customer on the session (customer-locked,
- * first-purchase only) or a Stripe product (applies_to) are refused; see
- * lookupCoupon.
+ * Codes that need a Stripe product (applies_to) are refused. Codes that need
+ * a Stripe customer on the session (customer-locked, first-purchase only) are
+ * accepted for a signed-in shopper, who has one (091), and refused for a
+ * guest; see lookupCoupon.
  *
  * Only USD, only `once` or forever coupons make sense on a one-off payment;
  * a repeating coupon is treated like `once` because that is what a single
@@ -35,8 +36,16 @@ export type CouponLookup =
   | { ok: true; coupon: RedeemableCoupon }
   | { ok: false; reason: 'invalid_coupon' | 'coupon_minimum' }
 
-/** The live promotion code behind `raw`, or why there is none. */
-export async function lookupCoupon(stripe: Stripe, raw: string): Promise<CouponLookup> {
+/**
+ * The live promotion code behind `raw`, or why there is none. `customerId` is
+ * the shopper's own Stripe customer, from the server (stripe-customer.ts),
+ * when they are signed in; null or absent for a guest.
+ */
+export async function lookupCoupon(
+  stripe: Stripe,
+  raw: string,
+  customerId?: string | null
+): Promise<CouponLookup> {
   const code = normalizeCouponCode(raw)
   if (!code) return { ok: false, reason: 'invalid_coupon' }
 
@@ -66,20 +75,34 @@ export async function lookupCoupon(stripe: Stripe, raw: string): Promise<CouponL
   }
 
   // The session passes the promotion code itself, so Stripe enforces its
-  // rules, and three of them cannot be met by this checkout. Refused here so
+  // rules, and some of them cannot be met by every checkout. Refused here so
   // the shopper hears "that code does not work" rather than a Stripe error.
   // - applies_to: our line items are ad hoc price_data with no Stripe product
   //   id, so a product-limited coupon can never match anything.
-  // - customer / customer_account: the session carries only an email, no
-  //   customer object, so a code locked to one customer cannot be redeemed.
-  // - first_time_transaction: Stripe judges "first time" against a customer
-  //   object too. Supporting these means creating (or finding) a Stripe
-  //   customer for the guest before the session; until then they are refused.
+  // - customer / customer_account / first_time_transaction: these need a
+  //   customer on the session. A signed-in shopper's session carries their
+  //   own (091); a guest's carries only an email. couponCustomerAllows has
+  //   the rule and its test.
   if (coupon.applies_to && coupon.applies_to.products.length > 0) {
     return { ok: false, reason: 'invalid_coupon' }
   }
-  if (promo.customer || promo.customer_account) return { ok: false, reason: 'invalid_coupon' }
-  if (promo.restrictions.first_time_transaction) return { ok: false, reason: 'invalid_coupon' }
+  const lockedTo = promo.customer
+    ? typeof promo.customer === 'string'
+      ? promo.customer
+      : promo.customer.id
+    : null
+  if (
+    !couponCustomerAllows(
+      {
+        customer: lockedTo,
+        customerAccount: Boolean(promo.customer_account),
+        firstTimeOnly: promo.restrictions.first_time_transaction,
+      },
+      customerId
+    )
+  ) {
+    return { ok: false, reason: 'invalid_coupon' }
+  }
 
   const minCurrency = (promo.restrictions.minimum_amount_currency ?? 'usd').toLowerCase()
   return {

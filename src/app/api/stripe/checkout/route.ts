@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { z } from 'zod'
 import { getStripe, stripeConfigured, siteUrl } from '@/lib/stripe'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { checkoutCustomer } from '@/lib/stripe-customer'
 import { createClient } from '@/lib/supabase/server'
 import { multibuyDiscountCents, multibuyPromo, type PromotionRule } from '@/lib/promotions'
 import { couponDiscountFor, lookupCoupon, type RedeemableCoupon } from '@/lib/stripe-coupon'
@@ -134,15 +135,40 @@ export async function POST(request: NextRequest) {
     : null
   const memberCents = memberBest?.off ?? 0
 
+  // A signed-in shopper pays as their one Stripe customer (091), found or
+  // made before the code is looked up, because a code locked to a customer or
+  // to a first purchase is judged against it. A guest stays email only.
+  const payer = user
+    ? await checkoutCustomer(admin, getStripe(), { userId: user.id, email, name, phone })
+    : { customerId: null, params: { customer_email: email } }
+
   // The promo code, checked before any order row exists so a bad code leaves
   // nothing behind. Refused loudly rather than silently charged full price:
   // a shopper who typed a code wants to know it did not take.
   let coupon: RedeemableCoupon | null = null
   let couponCents = 0
   if (couponCode) {
-    const found = await lookupCoupon(getStripe(), couponCode)
+    const found = await lookupCoupon(getStripe(), couponCode, payer.customerId)
     if (!found.ok) {
       return NextResponse.json({ error: found.reason, code: couponCode }, { status: 409 })
+    }
+    // A new-client code is for a new client. Stripe judges "first purchase"
+    // against the customer object, and a long-standing client may have one
+    // only since 091, so their history here is asked too: any money taken,
+    // or any order paid or completed, and the code does not apply. (A guest
+    // never gets this far with such a code; lookupCoupon refuses it.)
+    if (found.coupon.first_time_transaction && user) {
+      const [{ data: paid, error: paidError }, { data: orders, error: ordersError }] = await Promise.all([
+        admin.from('payments').select('id').eq('client_id', user.id).eq('status', 'succeeded').limit(1),
+        admin.from('orders').select('id').eq('client_id', user.id).in('status', ['paid', 'completed']).limit(1),
+      ])
+      if (paidError || ordersError) {
+        console.error('first purchase check failed', paidError ?? ordersError)
+        return NextResponse.json({ error: 'checkout_failed' }, { status: 500 })
+      }
+      if ((paid ?? []).length > 0 || (orders ?? []).length > 0) {
+        return NextResponse.json({ error: 'invalid_coupon', code: couponCode }, { status: 409 })
+      }
     }
     const cut = couponDiscountFor(found.coupon, subtotal)
     if (!cut.ok) {
@@ -320,7 +346,7 @@ export async function POST(request: NextRequest) {
 
     session = await stripe.checkout.sessions.create({
       mode: 'payment',
-      customer_email: email,
+      ...payer.params,
       ...(discounts ? { discounts } : {}),
       line_items: lines.map((line) => {
         const p = byId.get(line.productId)!
@@ -358,6 +384,13 @@ export async function POST(request: NextRequest) {
   } catch (stripeError) {
     await admin.from('orders').delete().eq('id', order.id)
     console.error('stripe session create failed', stripeError, { orderId: order.id })
+    // Stripe refusing the shopper's own code (spent since the lookup, a rule
+    // only Stripe can judge) is the shopper's "that code does not work", not
+    // a failed checkout. Only when their code is what was sent: a refused
+    // deal coupon of ours is still our failure.
+    if (couponWins && isCouponRefusal(stripeError)) {
+      return NextResponse.json({ error: 'invalid_coupon', code: couponCode }, { status: 409 })
+    }
     return NextResponse.json({ error: 'checkout_failed' }, { status: 500 })
   }
 
@@ -401,4 +434,13 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json({ url: session.url, order_id: order.id })
+}
+
+/** A Stripe error about the promotion code or coupon on the session. */
+function isCouponRefusal(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false
+  const e = err as { code?: unknown; param?: unknown; message?: unknown }
+  return [e.code, e.param, e.message].some(
+    (v) => typeof v === 'string' && /promotion_code|coupon/i.test(v)
+  )
 }

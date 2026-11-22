@@ -39,3 +39,25 @@ export function couponCutCents(
   }
   return 0
 }
+
+/**
+ * Whether a promotion code's customer rules can be met by this shopper (091).
+ *
+ * - Locked to one customer: only that customer, so only a signed-in shopper
+ *   whose own Stripe customer it is. A guest, or anyone else, is refused.
+ * - Locked to a customer account (Stripe's Accounts v2): never; this studio
+ *   has none.
+ * - First purchase only: Stripe judges "first" against a customer object, so
+ *   any shopper with one may try it (Stripe still enforces the rule itself);
+ *   a guest, who has none, is refused.
+ */
+export function couponCustomerAllows(
+  rules: { customer: string | null; customerAccount: boolean; firstTimeOnly: boolean },
+  shopperCustomerId: string | null | undefined
+): boolean {
+  const shopper = shopperCustomerId || null
+  if (rules.customerAccount) return false
+  if (rules.customer !== null && rules.customer !== shopper) return false
+  if (rules.firstTimeOnly && shopper === null) return false
+  return true
+}

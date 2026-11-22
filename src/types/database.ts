@@ -165,6 +165,13 @@ export type Profile = {
    */
   profile_completed_at: string | null
 
+  // ── Added in 091 ────────────────────────────────────────────
+  /**
+   * The client's one Stripe customer, made the first time they pay anything
+   * (src/lib/stripe-customer.ts). Only the service role may set or change it.
+   */
+  stripe_customer_id: string | null
+
   created_at: string
   updated_at: string
 }

@@ -122,6 +122,11 @@ export async function POST(request: NextRequest) {
         const session = event.data.object
         const kind = session.metadata?.kind
 
+        // A customer on the session that the client's profile does not have
+        // yet (091): a renewing membership's customer that Stripe made from
+        // an email, or a session opened before 091. Best effort, never fatal.
+        await rememberCustomer(admin, session)
+
         // A till sale paid on the client's phone (090). settle_till_ticket
         // writes the ledger and completes the order under a row lock; a
         // second call for a paid ticket returns false and writes nothing.
@@ -925,6 +930,62 @@ async function refundUnenrolledMembership(session: Stripe.Checkout.Session): Pro
       mode: session.mode,
       amount_cents: session.amount_total,
     })
+  }
+}
+
+/**
+ * Store a completed session's customer on the paying client's profile when
+ * the profile has none (091). The client comes from the session's metadata
+ * (a membership carries client_id) or from the row the session paid for.
+ * The write is a compare-and-set on a null column, so a profile that already
+ * has a customer keeps it. Never throws: a miss here costs only a second
+ * customer at Stripe later, and must not make Stripe retry an event whose
+ * money is recorded.
+ */
+async function rememberCustomer(
+  admin: ReturnType<typeof createAdminClient>,
+  session: Stripe.Checkout.Session
+): Promise<void> {
+  const customerId = stripeId(session.customer)
+  const kind = session.metadata?.kind
+  if (!customerId || !kind || !OUR_METADATA_KINDS.has(kind)) return
+  try {
+    let clientId: string | null = session.metadata?.client_id || null
+    if (!clientId && (kind === 'appointment_deposit' || kind === 'appointment_balance')) {
+      const id = session.metadata?.appointment_id
+      if (id) {
+        const { data } = await admin.from('appointments').select('client_id').eq('id', id).maybeSingle()
+        clientId = data?.client_id ?? null
+      }
+    } else if (!clientId && kind === 'product_order') {
+      const id = Number(session.metadata?.order_id)
+      if (Number.isInteger(id) && id > 0) {
+        const { data } = await admin.from('orders').select('client_id').eq('id', id).maybeSingle()
+        clientId = data?.client_id ?? null
+      }
+    } else if (!clientId && kind === 'till_ticket') {
+      const id = Number(session.metadata?.ticket_id)
+      if (Number.isInteger(id) && id > 0) {
+        const { data } = await admin.from('till_tickets').select('client_id').eq('id', id).maybeSingle()
+        clientId = data?.client_id ?? null
+      }
+    }
+    if (!clientId) return
+
+    const { error } = await admin
+      .from('profiles')
+      .update({ stripe_customer_id: customerId })
+      .eq('id', clientId)
+      .is('stripe_customer_id', null)
+    if (error) {
+      void logError('stripe/webhook', `remember customer: ${error.message}`, {
+        session: session.id,
+        client_id: clientId,
+        customer: customerId,
+      })
+    }
+  } catch (err) {
+    void logError('stripe/webhook', err, { step: 'remember_customer', session: session.id })
   }
 }
 

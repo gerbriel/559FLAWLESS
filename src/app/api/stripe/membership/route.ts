@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { z } from 'zod'
 import { getStripe, stripeConfigured, siteUrl } from '@/lib/stripe'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { checkoutCustomer } from '@/lib/stripe-customer'
 import { createClient } from '@/lib/supabase/server'
 import { membershipPeriodLabel } from '@/types/memberships'
 
@@ -87,17 +88,6 @@ export async function POST(request: NextRequest) {
       .limit(1),
   ])
 
-  // A Stripe customer this person already has, from an earlier membership, so
-  // a second plan does not mint a second customer (050 gap 1).
-  const { data: prior } = await admin
-    .from('client_memberships')
-    .select('stripe_customer_id')
-    .eq('client_id', user.id)
-    .not('stripe_customer_id', 'is', null)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
   if (!plan || !plan.is_active || !plan.sell_online || plan.price_cents <= 0) {
     return NextResponse.json({ error: 'not_for_sale' }, { status: 404 })
   }
@@ -119,15 +109,21 @@ export async function POST(request: NextRequest) {
     membership_id: String(plan.id),
     client_id: user.id,
   }
-  const customer = prior?.stripe_customer_id ?? undefined
+  // The client's one Stripe customer (091), so a second plan, a deposit and
+  // a bag all land on the same person at Stripe (050 gap 1). The membership
+  // row still gets its own copy from the webhook, as before.
+  const stripe = getStripe()
+  const payer = (
+    await checkoutCustomer(admin, stripe, { userId: user.id, email: user.email }, renewing ? 'subscription' : 'payment')
+  ).params
   // The webhook is what enrols; these are only where the browser lands.
   const success_url = `${siteUrl()}/memberships/welcome?joined=1`
   const cancel_url = `${siteUrl()}/memberships`
 
   const session = renewing
-    ? await getStripe().checkout.sessions.create({
+    ? await stripe.checkout.sessions.create({
         mode: 'subscription',
-        ...(customer ? { customer } : { customer_email: user.email ?? undefined }),
+        ...payer,
         line_items: [
           {
             quantity: 1,
@@ -149,9 +145,9 @@ export async function POST(request: NextRequest) {
         cancel_url,
         metadata: { ...metadata, auto_renew: '1' },
       })
-    : await getStripe().checkout.sessions.create({
+    : await stripe.checkout.sessions.create({
         mode: 'payment',
-        ...(customer ? { customer } : { customer_email: user.email ?? undefined }),
+        ...payer,
         line_items: [
           {
             quantity: 1,

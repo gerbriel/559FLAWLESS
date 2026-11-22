@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { z } from 'zod'
 import { getStripe, stripeConfigured, siteUrl } from '@/lib/stripe'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { checkoutCustomer } from '@/lib/stripe-customer'
 import { createClient } from '@/lib/supabase/server'
 import { isStaff } from '@/types/database'
 
@@ -101,9 +102,22 @@ export async function POST(request: NextRequest) {
   const description = (lines ?? []).map((l) => l.name_snapshot).join(' + ') || 'Appointment'
 
   const stripe = getStripe()
+  // The client's one Stripe customer (091), but only when the client is the
+  // one holding this Checkout link. A customer on the session offers their
+  // saved cards, and Checkout here cannot be made to ask for the CVC again
+  // (stripe 22.4.0 has no require_cvc_recollection on Checkout), so a link
+  // staff open for a client, or a booking with no account behind it, stays
+  // email only and can only be paid with a card typed in.
+  const payer =
+    appointment.client_id && appointment.client_id === user.id
+      ? (await checkoutCustomer(supabase, stripe, {
+          userId: appointment.client_id,
+          email: appointment.guest_email,
+        })).params
+      : { customer_email: appointment.guest_email ?? undefined }
   const session = await stripe.checkout.sessions.create({
     mode: 'payment',
-    customer_email: appointment.guest_email ?? undefined,
+    ...payer,
     line_items: [
       {
         quantity: 1,

@@ -604,14 +604,19 @@ export async function POST(request: NextRequest) {
 
     if (paymentMethod !== 'phone_link') return { ok: true, ticket }
 
-    let email: string | null = null
-    if (clientId) {
-      const { data: who } = await admin.from('profiles').select('email').eq('id', clientId).maybeSingle()
-      email = who?.email?.trim() || null
-    }
-
     let session: Stripe.Checkout.Session | null = null
     try {
+      // Email only, never the client's Stripe customer (091): the QR code is
+      // on the till's screen and the link can be emailed, so whoever holds it
+      // is not necessarily the client, and a customer on the session would
+      // offer them the client's saved cards. Checkout cannot be made to ask
+      // for the CVC again (no require_cvc_recollection on Checkout in stripe
+      // 22.4.0), so the card is always typed in.
+      let email: string | null = null
+      if (clientId) {
+        const { data: who } = await admin.from('profiles').select('email').eq('id', clientId).maybeSingle()
+        email = who?.email?.trim() || null
+      }
       const metadata = { kind: 'till_ticket', ticket_id: String(ticket.id) }
       session = await getStripe().checkout.sessions.create({
         mode: 'payment',

@@ -7,7 +7,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { normalizeCouponCode, couponCutCents } from '../src/lib/coupon-code'
+import { normalizeCouponCode, couponCutCents, couponCustomerAllows } from '../src/lib/coupon-code'
 
 let passed = 0
 let failed = 0
@@ -59,6 +59,43 @@ test('an empty bag or an empty coupon cuts nothing', () => {
   assert.equal(couponCutCents({ percent_off: 20, amount_off_cents: null }, 0), 0)
   assert.equal(couponCutCents({ percent_off: null, amount_off_cents: null }, 5000), 0)
   assert.equal(couponCutCents({ percent_off: 0, amount_off_cents: 0 }, 5000), 0)
+})
+
+console.log('\ncoupon customer rules')
+
+const open = { customer: null, customerAccount: false, firstTimeOnly: false }
+
+test('an unrestricted code works for a guest and a customer', () => {
+  assert.equal(couponCustomerAllows(open, null), true)
+  assert.equal(couponCustomerAllows(open, 'cus_a'), true)
+})
+
+test('first purchase only needs a customer', () => {
+  const first = { ...open, firstTimeOnly: true }
+  assert.equal(couponCustomerAllows(first, null), false)
+  assert.equal(couponCustomerAllows(first, undefined), false)
+  assert.equal(couponCustomerAllows(first, ''), false)
+  assert.equal(couponCustomerAllows(first, 'cus_a'), true)
+})
+
+test('a customer-locked code works only for that customer', () => {
+  const locked = { ...open, customer: 'cus_a' }
+  assert.equal(couponCustomerAllows(locked, 'cus_a'), true)
+  assert.equal(couponCustomerAllows(locked, 'cus_b'), false)
+  assert.equal(couponCustomerAllows(locked, null), false)
+})
+
+test('locked and first purchase together need both', () => {
+  const both = { customer: 'cus_a', customerAccount: false, firstTimeOnly: true }
+  assert.equal(couponCustomerAllows(both, 'cus_a'), true)
+  assert.equal(couponCustomerAllows(both, 'cus_b'), false)
+  assert.equal(couponCustomerAllows(both, null), false)
+})
+
+test('a code locked to a customer account is always refused', () => {
+  const acct = { ...open, customerAccount: true }
+  assert.equal(couponCustomerAllows(acct, 'cus_a'), false)
+  assert.equal(couponCustomerAllows(acct, null), false)
 })
 
 console.log(`\n${passed} passed, ${failed} failed\n`)
