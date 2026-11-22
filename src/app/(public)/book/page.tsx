@@ -4,7 +4,12 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { requestNow } from '@/lib/time'
 import { interestedServiceId } from '@/lib/interest'
-import { membershipIsCurrent } from '@/types/memberships'
+import {
+  includedAllowances,
+  includedSessionsLeft,
+  membershipIsCurrent,
+  membershipPeriodLabel,
+} from '@/types/memberships'
 import { Container, Section } from '@/components/ui/section'
 import {
   BookingFlow,
@@ -207,7 +212,7 @@ export default async function BookPage({ searchParams }: Props) {
     const { data: held } = await supabase
       .from('client_memberships')
       .select(
-        'id, status, current_period_start, current_period_end, memberships!client_memberships_membership_id_fkey(name, included_sessions_per_period, membership_services(services(slug))), membership_redemptions(sessions, redeemed_for_period_start)'
+        'id, status, current_period_start, current_period_end, memberships!client_memberships_membership_id_fkey(name, included_sessions_per_period, period_months, membership_services(service_id, sessions_per_period, services(slug, name))), membership_redemptions(service_id, sessions, redeemed_for_period_start)'
       )
       .eq('client_id', user.id)
       .eq('status', 'active')
@@ -218,24 +223,87 @@ export default async function BookPage({ searchParams }: Props) {
       const plan = held.memberships as unknown as {
         name: string
         included_sessions_per_period: number
-        membership_services: { services: { slug: string } | null }[] | null
+        period_months: number
+        membership_services:
+          | {
+              service_id: number
+              sessions_per_period: number | null
+              services: { slug: string; name: string } | null
+            }[]
+          | null
       } | null
-      const used = ((held.membership_redemptions ?? []) as {
-        sessions: number
-        redeemed_for_period_start: string
-      }[])
-        .filter((r) => r.redeemed_for_period_start === held.current_period_start)
-        .reduce((n, r) => n + r.sessions, 0)
-      const total = plan?.included_sessions_per_period ?? 0
-      const left = Math.max(total - used, 0)
+      const scope = plan?.membership_services ?? []
+      // Each allowance this period (088): one per treatment with its own
+      // number, or the shared pool.
+      const allowances = plan
+        ? includedAllowances(
+            plan,
+            scope.map((r) => ({
+              service_id: r.service_id,
+              sessions_per_period: r.sessions_per_period,
+              name: r.services?.name ?? null,
+            })),
+            (held.membership_redemptions ?? []) as {
+              service_id: number | null
+              sessions: number
+              redeemed_for_period_start: string
+            }[],
+            held.current_period_start
+          )
+        : []
+      const left = includedSessionsLeft(allowances)
+      const total = allowances.reduce((n, a) => n + a.total, 0)
       if (plan && left > 0) {
+        const leftOf = (a: (typeof allowances)[number]) => Math.max(a.total - a.used, 0)
+        const pool = allowances.find((a) => a.serviceId === null)
+        const poolLeft = pool ? leftOf(pool) : 0
+        // A treatment is still covered when its own allowance has something
+        // left, or when it draws from a pool that does.
+        const stillCovered = (r: (typeof scope)[number]) => {
+          if (r.sessions_per_period === null) return poolLeft > 0
+          const own = allowances.find((a) => a.serviceId === r.service_id)
+          return !!own && leftOf(own) > 0
+        }
         // Only what this studio's menu actually offers, so the pre-tick lands.
         const bookable = new Set(scopedServices.map((s) => s.slug))
+        const poolNames = scope
+          .filter((r) => r.sessions_per_period === null)
+          .map((r) => r.services?.name)
+          .filter((n): n is string => !!n)
+        // "1 Custom Corrective Facial and 1 Full Brazilian", what is left of
+        // each allowance, empty ones left out.
+        const parts = allowances.flatMap((a) => {
+          const n = leftOf(a)
+          if (n === 0) return []
+          if (a.serviceId !== null) {
+            const name = a.serviceName ?? 'treatment'
+            return [n === 1 ? `1 ${name}` : `${n} ${name} visits`]
+          }
+          const noun = n === 1 ? 'treatment' : 'treatments'
+          return [
+            poolNames.length > 0
+              ? `${n} ${noun} (${poolNames.join(' or ')})`
+              : `${n} ${noun}, any on the menu`,
+          ]
+        })
+        const listed =
+          parts.length <= 1
+            ? parts.join('')
+            : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
+        const span = [1, 3, 12].includes(plan.period_months)
+          ? `this ${membershipPeriodLabel(plan.period_months)}`
+          : 'this period'
         membership = {
           planName: plan.name,
           left,
           total,
-          coveredServiceSlugs: (plan.membership_services ?? [])
+          leftLabel: `Covered ${span}: ${listed}`,
+          // Only an empty scope is "any treatment". An empty
+          // coveredServiceSlugs can also mean every covered treatment was
+          // filtered out as not bookable here.
+          anyTreatment: scope.length === 0,
+          coveredServiceSlugs: scope
+            .filter(stillCovered)
             .map((m) => m.services?.slug)
             .filter((slug): slug is string => !!slug && bookable.has(slug)),
         }

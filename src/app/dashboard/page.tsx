@@ -7,7 +7,8 @@ import { PendingQueue } from '@/components/shared/PendingQueue'
 import { formatMoney } from '@/lib/utils'
 import { dateKeyInTimeZone, formatTimeInTimeZone, zonedTimeToUtc, addDaysToDateKey , requestNow } from '@/lib/time'
 import { isFrontDesk, isManager, type UserRole } from '@/types/database'
-import { chunked, needsFollowUp, sessionsLeftThisPeriod } from '@/lib/member-follow-up'
+import { chunked, needsFollowUp } from '@/lib/member-follow-up'
+import { includedAllowances, includedSessionsLeft } from '@/types/memberships'
 
 export const dynamic = 'force-dynamic'
 
@@ -279,20 +280,30 @@ async function countMembersToFollowUp(
   const { data } = await supabase
     .from('client_memberships')
     .select(
-      'client_id, status, current_period_start, current_period_end, memberships!client_memberships_membership_id_fkey(included_sessions_per_period), membership_redemptions(sessions, redeemed_for_period_start)'
+      'client_id, status, current_period_start, current_period_end, memberships!client_memberships_membership_id_fkey(included_sessions_per_period, membership_services(service_id, sessions_per_period)), membership_redemptions(service_id, sessions, redeemed_for_period_start)'
     )
     .eq('status', 'active')
     .gt('current_period_end', new Date(now).toISOString())
 
   const rows = (data ?? []).map((m) => {
-    const plan = m.memberships as unknown as { included_sessions_per_period: number } | null
+    const plan = m.memberships as unknown as {
+      included_sessions_per_period: number
+      membership_services: { service_id: number; sessions_per_period: number | null }[] | null
+    } | null
     const spent = (m.membership_redemptions ?? []) as unknown as {
+      service_id: number | null
       sessions: number
       redeemed_for_period_start: string
     }[]
+    // Everything left across the plan's allowances (088): per treatment or
+    // the shared pool, counted the way the Members list counts it.
     return {
       m,
-      left: sessionsLeftThisPeriod(plan?.included_sessions_per_period ?? 0, m.current_period_start, spent),
+      left: plan
+        ? includedSessionsLeft(
+            includedAllowances(plan, plan.membership_services ?? [], spent, m.current_period_start)
+          )
+        : 0,
     }
   })
   const candidates = rows.filter((r) => r.left > 0)

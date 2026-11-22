@@ -12,7 +12,13 @@ import { membershipIsCurrent, type ClientMembership } from '@/types/memberships'
 
 export type FollowUpRedemption = { sessions: number; redeemed_for_period_start: string }
 
-/** Included sessions left in the current period. Never below zero. */
+/**
+ * Included sessions left in the current period, counting the plan as one
+ * shared pool. Never below zero. A per-treatment plan (088) has pool 0, so
+ * callers that may hold one should count with includedAllowances() and
+ * includedSessionsLeft() from '@/types/memberships' instead, which split the
+ * spend by allowance the way the database trigger does.
+ */
 export function sessionsLeftThisPeriod(
   included: number,
   currentPeriodStart: string,

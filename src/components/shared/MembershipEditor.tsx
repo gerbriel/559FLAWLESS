@@ -10,9 +10,10 @@ import { Button } from '@/components/ui/button'
 import { Field, Input, Select, Textarea } from '@/components/ui/field'
 import { formatMoney, slugify } from '@/lib/utils'
 import {
-  describeMembershipBenefit,
+  describeIncluded,
   describeProductPerk,
   membershipPeriodLabel,
+  type IncludedAllowance,
   type Membership,
   type MembershipProductPerk,
 } from '@/types/memberships'
@@ -113,6 +114,23 @@ function wholeIn(text: string, min: number, max: number): number | null {
   return n
 }
 
+/**
+ * How a plan's included treatments are counted. 'each' gives every listed
+ * treatment its own allowance per period (membership_services
+ * .sessions_per_period); 'shared' is one pool, included_sessions_per_period,
+ * spent on any listed treatment. A plan is one or the other, never both.
+ */
+type IncludedMode = 'each' | 'shared'
+
+/** One row of the per-treatment list as typed. The count stays a string until save. */
+type EachDraft = { serviceId: number; count: string }
+
+/** One scope row as loaded: a number means its own allowance, null the shared pool. */
+export interface MembershipScopeRow {
+  service_id: number
+  sessions_per_period: number | null
+}
+
 type Draft = Omit<Membership, 'id' | 'created_at' | 'updated_at' | 'stripe_price_id'>
 
 const BLANK: Draft = {
@@ -153,7 +171,7 @@ const PERIODS = [1, 3, 6, 12]
  */
 export function MembershipEditor({
   plan,
-  scopeServiceIds = [],
+  scopeRows = [],
   memberPrices = [],
   productPerks = [],
   services,
@@ -162,8 +180,11 @@ export function MembershipEditor({
   trigger = 'button',
 }: {
   plan?: Membership
-  /** Which services this plan's included sessions may be spent on. */
-  scopeServiceIds?: number[]
+  /**
+   * Which services this plan's included treatments cover, and for a
+   * per-treatment plan how many of each per period.
+   */
+  scopeRows?: MembershipScopeRow[]
   /** Services a member pays a set price for (078), e.g. the Brazilian at $25. */
   memberPrices?: { service_id: number; price_cents: number }[]
   /** Retail perks this plan already grants (086), loaded like the member prices. */
@@ -182,7 +203,43 @@ export function MembershipEditor({
 
   const [form, setForm] = useState<Draft>(plan ?? BLANK)
   const [price, setPrice] = useState(money(plan?.price_cents ?? 0))
-  const [scope, setScope] = useState<number[]>(scopeServiceIds)
+  // Per-treatment when any saved row carries its own number, or for a new
+  // plan; the shared pool when the plan already counts that way.
+  const [mode, setMode] = useState<IncludedMode>(() =>
+    scopeRows.some((r) => r.sessions_per_period !== null) ||
+    !plan ||
+    plan.included_sessions_per_period === 0
+      ? 'each'
+      : 'shared'
+  )
+  const [scope, setScope] = useState<number[]>(() =>
+    scopeRows.filter((r) => r.sessions_per_period === null).map((r) => r.service_id)
+  )
+  const [each, setEach] = useState<EachDraft[]>(() =>
+    scopeRows.flatMap((r) =>
+      r.sessions_per_period === null
+        ? []
+        : [{ serviceId: r.service_id, count: String(r.sessions_per_period) }]
+    )
+  )
+
+  /** Switching modes carries the list of treatments across, so nothing is retyped. */
+  function chooseMode(next: IncludedMode) {
+    if (next === mode) return
+    if (next === 'each' && each.length === 0 && scope.length > 0) {
+      setEach(scope.map((serviceId) => ({ serviceId, count: '1' })))
+    }
+    if (next === 'shared' && scope.length === 0 && each.length > 0) {
+      setScope(each.map((r) => r.serviceId))
+    }
+    // A pool of 0 hides the checklist and saves no scope at all, so carrying
+    // the treatments across into a 0 pool would delete every one of them on
+    // save. Start the pool at one per treatment instead.
+    if (next === 'shared' && form.included_sessions_per_period === 0 && each.length > 0) {
+      set('included_sessions_per_period', Math.min(each.length, 31))
+    }
+    setMode(next)
+  }
   const [prices, setPrices] = useState<{ serviceId: number; price: string }[]>(
     memberPrices.map((p) => ({ serviceId: p.service_id, price: money(p.price_cents) }))
   )
@@ -257,14 +314,58 @@ export function MembershipEditor({
   const priceCents = toCents(price) ?? 0
   const period = membershipPeriodLabel(form.period_months)
 
-  // What the included treatments are worth at the menu price. The benefit is
-  // spent dearest-first (src/lib/memberships.ts), so the dearest in scope is
-  // the honest figure — and with nothing in scope, any treatment qualifies, so
-  // it is the dearest on the menu.
+  // What the included treatments are worth at the menu price. Per treatment,
+  // that is each one's price times its allowance. For the shared pool the
+  // benefit is spent dearest-first (src/lib/memberships.ts), so the dearest in
+  // scope is the honest figure, and with nothing in scope any treatment
+  // qualifies, so it is the dearest on the menu.
+  const eachCounts = each.map((r) => ({ serviceId: r.serviceId, count: wholeIn(r.count, 1, 31) }))
+  const sharedCount = mode === 'shared' ? form.included_sessions_per_period : 0
   const inScope = scope.length > 0 ? services.filter((s) => scope.includes(s.id)) : services
   const dearestCents = inScope.reduce((n, s) => Math.max(n, s.price_cents), 0)
-  const includedListCents = dearestCents * form.included_sessions_per_period
+  const includedListCents =
+    mode === 'each'
+      ? eachCounts.reduce(
+          (n, r) =>
+            n + (services.find((s) => s.id === r.serviceId)?.price_cents ?? 0) * (r.count ?? 0),
+          0
+        )
+      : dearestCents * sharedCount
   const underwater = includedListCents > 0 && includedListCents > priceCents
+
+  // The included line as the plan card prints it, from what is typed now.
+  const draftAllowances: IncludedAllowance[] =
+    mode === 'each'
+      ? eachCounts.flatMap((r) =>
+          r.count === null
+            ? []
+            : [
+                {
+                  serviceId: r.serviceId,
+                  serviceName: services.find((s) => s.id === r.serviceId)?.name ?? null,
+                  total: r.count,
+                  used: 0,
+                },
+              ]
+        )
+      : sharedCount > 0
+        ? [{ serviceId: null, serviceName: null, total: sharedCount, used: 0 }]
+        : []
+  const poolNames =
+    mode === 'shared'
+      ? services.filter((s) => scope.includes(s.id)).map((s) => s.name)
+      : []
+  const includedLine = draftAllowances.length > 0 ? describeIncluded(draftAllowances, period, poolNames) : ''
+  const benefitLine = [
+    includedLine,
+    form.service_discount_pct > 0
+      ? includedLine
+        ? `${form.service_discount_pct}% off the rest of the visit`
+        : `${form.service_discount_pct}% off every visit`
+      : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
 
   async function save(e: React.FormEvent) {
     e.preventDefault()
@@ -283,6 +384,33 @@ export function MembershipEditor({
       toast.error('One of the member prices is not a number.')
       return
     }
+    if (parsedPrices.some((p) => p.cents === 0)) {
+      toast.error(
+        'A member price has to be above zero. To include a treatment, add it under included treatments instead.'
+      )
+      return
+    }
+    // The included treatments as they will be saved. Per treatment: every
+    // row its own number and no shared pool. Shared: one pool and no row
+    // numbers. Never a mix.
+    const parsedEach = each.map((r) => ({ serviceId: r.serviceId, count: wholeIn(r.count, 1, 31) }))
+    if (mode === 'each' && parsedEach.some((r) => r.count === null)) {
+      toast.error('Each included treatment needs a number per period, a whole number from 1 to 31.')
+      return
+    }
+    const includedPool = mode === 'shared' ? form.included_sessions_per_period : 0
+    if (mode === 'shared' && includedPool === 0 && scope.length > 0) {
+      toast.error(
+        `Treatments are ticked but none are included. Set how many treatments are included each ${period}, or untick them all.`
+      )
+      return
+    }
+    const scopeToSave: MembershipScopeRow[] =
+      mode === 'each'
+        ? parsedEach.map((r) => ({ service_id: r.serviceId, sessions_per_period: r.count ?? 1 }))
+        : includedPool > 0
+          ? scope.map((serviceId) => ({ service_id: serviceId, sessions_per_period: null }))
+          : []
     const parsedPerks: {
       id: number | null
       kind: PerkDraft['kind']
@@ -326,7 +454,8 @@ export function MembershipEditor({
     }
     if (
       form.service_discount_pct === 0 &&
-      form.included_sessions_per_period === 0 &&
+      includedPool === 0 &&
+      (mode !== 'each' || parsedEach.length === 0) &&
       parsedPrices.length === 0 &&
       parsedPerks.length === 0
     ) {
@@ -339,7 +468,10 @@ export function MembershipEditor({
       toast.error('The member discount is a percentage between 0 and 90.')
       return
     }
-    if (form.included_sessions_per_period < 0 || form.included_sessions_per_period > 31) {
+    if (
+      mode === 'shared' &&
+      (!Number.isInteger(includedPool) || includedPool < 0 || includedPool > 31)
+    ) {
       toast.error('Included treatments has to be a whole number, and 31 is already absurd.')
       return
     }
@@ -352,7 +484,7 @@ export function MembershipEditor({
       price_cents: cents,
       period_months: form.period_months,
       service_discount_pct: form.service_discount_pct,
-      included_sessions_per_period: form.included_sessions_per_period,
+      included_sessions_per_period: includedPool,
       sell_online: form.sell_online,
       auto_renew_offered: form.auto_renew_offered,
       is_active: form.is_active,
@@ -376,20 +508,20 @@ export function MembershipEditor({
       return
     }
 
-    // Replace the scope wholesale. Two statements rather than a diff: the list
-    // is a handful of rows, and "what is ticked now" is easier to be sure of
-    // than "what changed".
-    const wanted = form.included_sessions_per_period > 0 ? scope : []
-    const { error: clearError } = await supabase
-      .from('membership_services')
-      .delete()
-      .eq('membership_id', saved.id)
-
-    if (!clearError && wanted.length > 0) {
-      await supabase
-        .from('membership_services')
-        .insert(wanted.map((serviceId) => ({ membership_id: saved.id, service_id: serviceId })))
-    }
+    // Replace the scope wholesale rather than diffing it: the list is a
+    // handful of rows, nothing references them (redemptions carry the service
+    // id, not the row), and "what is listed now" is easier to be sure of than
+    // "what changed". replace_membership_scope() (088) does the delete and the
+    // insert in one transaction, so a booking in between never sees the plan
+    // with no scope, which would read as "any treatment". Each row carries its
+    // own allowance, or null for the shared pool.
+    const { error: scopeError } = await supabase.rpc('replace_membership_scope', {
+      p_membership: saved.id,
+      p_rows: scopeToSave.map((r) => ({
+        service_id: r.service_id,
+        sessions_per_period: r.sessions_per_period,
+      })),
+    })
 
     // Member prices, replaced wholesale for the same reason as the scope.
     const { error: clearPricesError } = await supabase
@@ -462,6 +594,11 @@ export function MembershipEditor({
     }
 
     setBusy(false)
+    if (scopeError) {
+      toast.error(scopeError.message || 'The plan saved, but its included treatments did not.')
+      router.refresh()
+      return
+    }
     if (perksError) {
       toast.error(perksError.message || 'The plan saved, but its product perks did not.')
       router.refresh()
@@ -473,6 +610,8 @@ export function MembershipEditor({
       setForm(BLANK)
       setPrice('0.00')
       setScope([])
+      setEach([])
+      setMode('each')
       setPrices([])
       setPerks([])
     }
@@ -630,66 +769,187 @@ export function MembershipEditor({
             />
           </Field>
 
-          <Field
-            label="Treatments included"
-            htmlFor="mem_sessions"
-            hint={`How many are covered each ${period}. 0 for none.`}
-          >
-            <Input
-              id="mem_sessions"
-              type="number"
-              min={0}
-              max={31}
-              step={1}
-              required
-              value={form.included_sessions_per_period}
-              onChange={(e) => set('included_sessions_per_period', Number(e.target.value))}
-            />
-          </Field>
+          <fieldset className="sm:col-span-2">
+            <legend className="label-caps text-[var(--color-muted)]">
+              How included treatments work
+            </legend>
+            <div className="mt-3 space-y-2 text-sm">
+              <label className="flex cursor-pointer items-start gap-3">
+                <input
+                  type="radio"
+                  name="mem_included_mode"
+                  className="mt-1 h-4 w-4 accent-[var(--color-accent)]"
+                  checked={mode === 'each'}
+                  onChange={() => chooseMode('each')}
+                />
+                <span>
+                  A set number of each treatment
+                  <span className="block text-xs text-[var(--color-muted)]">
+                    For example 1 Custom Corrective Facial and 1 Full Brazilian each {period}.
+                    Each treatment has its own allowance, and one never uses up another.
+                  </span>
+                </span>
+              </label>
+              <label className="flex cursor-pointer items-start gap-3">
+                <input
+                  type="radio"
+                  name="mem_included_mode"
+                  className="mt-1 h-4 w-4 accent-[var(--color-accent)]"
+                  checked={mode === 'shared'}
+                  onChange={() => chooseMode('shared')}
+                />
+                <span>
+                  A shared number, spent on any listed treatment
+                  <span className="block text-xs text-[var(--color-muted)]">
+                    For example 2 treatments each {period}, any mix of the ones you tick.
+                  </span>
+                </span>
+              </label>
+            </div>
+          </fieldset>
 
-          {form.included_sessions_per_period > 0 && (
+          {mode === 'each' ? (
             <fieldset className="sm:col-span-2">
               <legend className="label-caps text-[var(--color-muted)]">
-                Which treatments a session covers
+                Included treatments
               </legend>
               <p className="mt-2 max-w-prose text-xs text-[var(--color-muted)]">
-                Tick nothing and an included treatment can be spent on anything on the
-                menu. The member discount is not narrowed by this — it applies to the
-                whole visit either way.
+                How many of each are covered every {period}, from 1 to 31. Leave the list
+                empty for a plan that includes no treatments. The member discount is not
+                narrowed by this. It applies to the whole visit either way.
               </p>
-              <div className="mt-3 max-h-56 overflow-y-auto border border-[var(--color-border)] p-3">
-                {services.length === 0 ? (
-                  <p className="text-sm text-[var(--color-muted)]">
-                    No services on the menu yet.
-                  </p>
-                ) : (
-                  <ul className="space-y-1.5">
-                    {services.map((s) => (
-                      <li key={s.id}>
-                        <label className="flex cursor-pointer items-center gap-2.5 text-sm">
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4 accent-[var(--color-accent)]"
-                            checked={scope.includes(s.id)}
-                            onChange={(e) =>
-                              setScope((current) =>
-                                e.target.checked
-                                  ? [...current, s.id]
-                                  : current.filter((id) => id !== s.id)
-                              )
-                            }
-                          />
-                          <span className="min-w-0 flex-1 truncate">{s.name}</span>
-                          <span className="tabular-nums text-xs text-[var(--color-muted)]">
-                            {formatMoney(s.price_cents)}
-                          </span>
-                        </label>
+              {each.length > 0 && (
+                <ul className="mt-3 space-y-2">
+                  {each.map((r, i) => {
+                    const svc = services.find((s) => s.id === r.serviceId)
+                    return (
+                      <li key={r.serviceId} className="flex items-center gap-3 text-sm">
+                        <span className="min-w-0 flex-1 truncate">
+                          {svc?.name ?? 'No longer on the menu'}
+                          {svc && (
+                            <span className="ml-2 text-xs text-[var(--color-muted)]">
+                              {formatMoney(svc.price_cents)}
+                            </span>
+                          )}
+                        </span>
+                        <Input
+                          aria-label={`How many ${svc?.name ?? 'of this treatment'} per ${period}`}
+                          type="number"
+                          min={1}
+                          max={31}
+                          step={1}
+                          className="w-20"
+                          value={r.count}
+                          onChange={(e) =>
+                            setEach((cur) =>
+                              cur.map((x, j) => (j === i ? { ...x, count: e.target.value } : x))
+                            )
+                          }
+                        />
+                        <span className="shrink-0 text-xs text-[var(--color-muted)]">
+                          per {period}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setEach((cur) => cur.filter((_, j) => j !== i))}
+                          className="flex h-8 w-8 items-center justify-center text-[var(--color-muted)] hover:text-red-700"
+                          aria-label={`Remove ${svc?.name ?? 'treatment'} from included treatments`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+                        </button>
                       </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
+                    )
+                  })}
+                </ul>
+              )}
+              <Select
+                aria-label="Add an included treatment"
+                className="mt-3"
+                value=""
+                onChange={(e) => {
+                  const id = Number(e.target.value)
+                  if (!services.some((s) => s.id === id) || each.some((r) => r.serviceId === id)) {
+                    return
+                  }
+                  setEach((cur) => [...cur, { serviceId: id, count: '1' }])
+                }}
+              >
+                <option value="">Add an included treatment…</option>
+                {services
+                  .filter((s) => !each.some((r) => r.serviceId === s.id))
+                  .map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+              </Select>
             </fieldset>
+          ) : (
+            <>
+              <Field
+                label="Treatments included"
+                htmlFor="mem_sessions"
+                hint={`How many are covered each ${period}, shared across the ticked treatments. 0 for none.`}
+              >
+                <Input
+                  id="mem_sessions"
+                  type="number"
+                  min={0}
+                  max={31}
+                  step={1}
+                  required
+                  value={form.included_sessions_per_period}
+                  onChange={(e) => set('included_sessions_per_period', Number(e.target.value))}
+                />
+              </Field>
+
+              {/* Still shown at 0 while anything is ticked, so a manager can
+                  untick what save would otherwise refuse. */}
+              {(form.included_sessions_per_period > 0 || scope.length > 0) && (
+                <fieldset className="sm:col-span-2">
+                  <legend className="label-caps text-[var(--color-muted)]">
+                    Which treatments a session covers
+                  </legend>
+                  <p className="mt-2 max-w-prose text-xs text-[var(--color-muted)]">
+                    Tick nothing and an included treatment can be spent on anything on the
+                    menu. The member discount is not narrowed by this. It applies to the
+                    whole visit either way.
+                  </p>
+                  <div className="mt-3 max-h-56 overflow-y-auto border border-[var(--color-border)] p-3">
+                    {services.length === 0 ? (
+                      <p className="text-sm text-[var(--color-muted)]">
+                        No services on the menu yet.
+                      </p>
+                    ) : (
+                      <ul className="space-y-1.5">
+                        {services.map((s) => (
+                          <li key={s.id}>
+                            <label className="flex cursor-pointer items-center gap-2.5 text-sm">
+                              <input
+                                type="checkbox"
+                                className="h-4 w-4 accent-[var(--color-accent)]"
+                                checked={scope.includes(s.id)}
+                                onChange={(e) =>
+                                  setScope((current) =>
+                                    e.target.checked
+                                      ? [...current, s.id]
+                                      : current.filter((id) => id !== s.id)
+                                  )
+                                }
+                              />
+                              <span className="min-w-0 flex-1 truncate">{s.name}</span>
+                              <span className="tabular-nums text-xs text-[var(--color-muted)]">
+                                {formatMoney(s.price_cents)}
+                              </span>
+                            </label>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </fieldset>
+              )}
+            </>
           )}
 
           <fieldset className="sm:col-span-2">
@@ -1023,7 +1283,7 @@ export function MembershipEditor({
           <div>
             <dt className="label-caps text-[var(--color-muted)]">And gets</dt>
             <dd className="mt-1">
-              {describeMembershipBenefit(form) ||
+              {benefitLine ||
                 (prices.length > 0 && perks.length > 0
                   ? 'Member prices and product perks only'
                   : prices.length > 0
@@ -1035,7 +1295,7 @@ export function MembershipEditor({
                         ))}
             </dd>
           </div>
-          {form.included_sessions_per_period > 0 && (
+          {draftAllowances.length > 0 && (
             <div>
               <dt className="label-caps text-[var(--color-muted)]">Included, at menu price</dt>
               <dd className="mt-1 tabular-nums">

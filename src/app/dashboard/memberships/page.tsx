@@ -6,20 +6,21 @@ import { Badge } from '@/components/ui/badge'
 import { EmptyState, PageHeader, Panel, StatTile } from '@/components/ui/dashboard'
 import {
   MembershipEditor,
+  type MembershipScopeRow,
   type MembershipServiceOption,
 } from '@/components/shared/MembershipEditor'
 import { formatMoney } from '@/lib/utils'
 import { requestNow } from '@/lib/time'
 import { isManager } from '@/types/database'
 import {
-  describeMembershipBenefit,
+  describeIncluded,
+  includedAllowances,
   membershipIsCurrent,
   membershipPeriodLabel,
   describeProductPerk,
   type ClientMembership,
   type Membership,
   type MembershipProductPerk,
-  type MembershipService,
 } from '@/types/memberships'
 
 export const dynamic = 'force-dynamic'
@@ -75,7 +76,9 @@ export default async function MembershipsPage() {
         )
         .order('sort_order')
         .order('id'),
-      supabase.from('membership_services').select('membership_id, service_id'),
+      supabase
+        .from('membership_services')
+        .select('membership_id, service_id, sessions_per_period, services(name)'),
       supabase
         .from('services')
         .select('id, name, price_cents')
@@ -103,7 +106,10 @@ export default async function MembershipsPage() {
     ])
 
   const rows = (plans ?? []) as Membership[]
-  const scopeRows = (scopes ?? []) as MembershipService[]
+  const scopeRows = (scopes ?? []) as unknown as (MembershipScopeRow & {
+    membership_id: number
+    services: { name: string } | null
+  })[]
   const serviceOptions = (services ?? []) as MembershipServiceOption[]
   const holders = (held ?? []) as Pick<
     ClientMembership,
@@ -130,8 +136,38 @@ export default async function MembershipsPage() {
   const memberPricesFor = (planId: number) =>
     (memberPriceRows ?? []).filter((r) => r.membership_id === planId)
 
-  const scopeFor = (planId: number) =>
-    scopeRows.filter((s) => s.membership_id === planId).map((s) => s.service_id)
+  const scopeFor = (planId: number): MembershipScopeRow[] =>
+    scopeRows
+      .filter((s) => s.membership_id === planId)
+      .map((s) => ({ service_id: s.service_id, sessions_per_period: s.sessions_per_period }))
+
+  // The plan's line, the same sentence the public plan card prints:
+  // "1 Custom Corrective Facial and 1 Full Brazilian included each month",
+  // then the member percentage.
+  const benefitLine = (plan: Membership): string => {
+    const rows = scopeRows.filter((s) => s.membership_id === plan.id)
+    const allowances = includedAllowances(
+      plan,
+      rows.map((r) => ({
+        service_id: r.service_id,
+        sessions_per_period: r.sessions_per_period,
+        name: r.services?.name ?? null,
+      })),
+      [],
+      ''
+    )
+    const included = describeIncluded(
+      allowances,
+      membershipPeriodLabel(plan.period_months),
+      rows
+        .filter((r) => r.sessions_per_period === null)
+        .map((r) => r.services?.name ?? '')
+    )
+    const pct = plan.service_discount_pct
+    const discount =
+      pct > 0 ? (included ? `${pct}% off the rest of the visit` : `${pct}% off every visit`) : ''
+    return [included, discount].filter(Boolean).join(' · ')
+  }
 
   const liveHolders = holders.filter((h) => membershipIsCurrent(h, now))
   const countFor = (planId: number) =>
@@ -229,21 +265,14 @@ export default async function MembershipsPage() {
                       </p>
                       {/* Empty for a plan that grants only member prices or
                           product perks; their own lines below say what it gives. */}
-                      {describeMembershipBenefit(plan) && (
+                      {benefitLine(plan) && (
                         <p className="mt-1 text-xs text-[var(--color-muted)]">
-                          {describeMembershipBenefit(plan)}
+                          {benefitLine(plan)}
                         </p>
                       )}
-                      {plan.included_sessions_per_period > 0 && (
+                      {plan.included_sessions_per_period > 0 && scoped.length === 0 && (
                         <p className="mt-1 text-xs text-[var(--color-muted)]">
-                          {scoped.length === 0
-                            ? 'An included treatment can be spent on anything on the menu.'
-                            : `Included treatments: ${scoped
-                                .map(
-                                  (id) =>
-                                    serviceOptions.find((s) => s.id === id)?.name ?? `#${id}`
-                                )
-                                .join(', ')}`}
+                          An included treatment can be spent on anything on the menu.
                         </p>
                       )}
                       {memberPricesFor(plan.id).length > 0 && (
@@ -272,7 +301,7 @@ export default async function MembershipsPage() {
                     <div className="shrink-0">
                       <MembershipEditor
                         plan={plan}
-                        scopeServiceIds={scoped}
+                        scopeRows={scoped}
                         memberPrices={memberPricesFor(plan.id)}
                         productPerks={perksFor(plan.id)}
                         services={serviceOptions}

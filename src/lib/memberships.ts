@@ -9,8 +9,10 @@
  *     through `membershipDiscountCents`.
  *   • An included session is a scarce thing, and scarce things are settled by
  *     the database. `membership_redemptions` carries a trigger that counts the
- *     period's spend under a row lock on the membership, so two bookings racing
- *     for the last included facial cannot both win. This module ASKS for the
+ *     period's spend under a row lock on the membership (per treatment when
+ *     the treatment has its own allowance, from the shared pool otherwise;
+ *     see 088), so two bookings racing for the last included facial cannot
+ *     both win. This module ASKS for the
  *     redemption and believes the answer — it never decides for itself that a
  *     session was available.
  *
@@ -27,7 +29,11 @@
 
 import 'server-only'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { membershipDiscountCents, type MembershipProductPerk } from '@/types/memberships'
+import {
+  includedAllowances,
+  membershipDiscountCents,
+  type MembershipProductPerk,
+} from '@/types/memberships'
 import type { PerkAvailability } from '@/lib/member-product-perks'
 
 /** One priced service line on the visit, as `priceService()` produced it. */
@@ -117,36 +123,65 @@ export async function applyMembershipBenefit(opts: {
   // Which lines a session paid for, so a member price is never applied twice.
   const claimedServiceIds = new Set<number>()
 
-  if (plan.included_sessions_per_period > 0 && lines.length > 0) {
-    // Which treatments a session may be spent on. NO ROWS MEANS ANY TREATMENT
+  if (lines.length > 0) {
+    // Which treatments a session may be spent on, and which of them carry an
+    // allowance of their own (088). NO ROWS MEANS ANY TREATMENT from the pool
     // — see the table comment in 050. An empty list is "not narrowed yet", not
     // "usable nowhere".
     const [{ data: scoped }, { data: spent }] = await Promise.all([
-      supabase.from('membership_services').select('service_id').eq('membership_id', plan.id),
+      supabase
+        .from('membership_services')
+        .select('service_id, sessions_per_period')
+        .eq('membership_id', plan.id),
       supabase
         .from('membership_redemptions')
-        .select('sessions')
+        .select('service_id, sessions, redeemed_for_period_start')
         .eq('client_membership_id', held.id)
         .eq('redeemed_for_period_start', held.current_period_start),
     ])
 
-    const scope = new Set((scoped ?? []).map((r) => r.service_id))
-    const alreadySpent = (spent ?? []).reduce((n, r) => n + r.sessions, 0)
-    const remaining = plan.included_sessions_per_period - alreadySpent
+    const scope = scoped ?? []
+    const inScope = new Set(scope.map((r) => r.service_id))
+    // What this period has left, per allowance. The same counting rule as the
+    // trigger; it only decides what to ASK for, never what was granted.
+    const remaining = new Map<number | null, number>(
+      includedAllowances(plan, scope, spent ?? [], held.current_period_start).map((a) => [
+        a.serviceId,
+        Math.max(a.total - a.used, 0),
+      ])
+    )
+    const ownAllowance = new Set(
+      scope.filter((r) => r.sessions_per_period != null).map((r) => r.service_id)
+    )
 
-    // Dearest first: a session is worth what it saves, and a client who books a
-    // $150 facial alongside a $40 brow wax means the facial. Duplicates are
-    // dropped because the redemption's unique key is one row per service per
-    // appointment.
+    // Which allowance a line draws from: its own when the treatment has one,
+    // otherwise the pool (key null) when the treatment is in scope or the
+    // plan has no scope at all. A treatment with its own allowance never
+    // falls back to the pool, matching the trigger.
+    const allowanceFor = (serviceId: number): number | null | undefined => {
+      if (ownAllowance.has(serviceId)) return serviceId
+      if (inScope.size === 0 || inScope.has(serviceId)) return null
+      return undefined
+    }
+
+    // Dearest first within each allowance: a session is worth what it saves,
+    // and a client who books a $150 facial alongside a $40 brow wax means the
+    // facial. Sorting the whole visit once is dearest first inside every
+    // allowance too. Duplicates are dropped because the redemption's unique
+    // key is one row per service per appointment.
     const eligible = lines
-      .filter((l) => l.priceCents > 0 && (scope.size === 0 || scope.has(l.serviceId)))
+      .filter((l) => l.priceCents > 0 && allowanceFor(l.serviceId) !== undefined)
       .sort((a, b) => b.priceCents - a.priceCents)
 
     const seen = new Set<number>()
+    // Allowances the database has refused this visit. Each is its own count
+    // in the trigger, so a refusal on one says nothing about the others.
+    const exhausted = new Set<number | null>()
 
     for (const line of eligible) {
-      if (sessionsSpent >= remaining) break
       if (seen.has(line.serviceId)) continue
+      const key = allowanceFor(line.serviceId) as number | null
+      if (exhausted.has(key) || (remaining.get(key) ?? 0) <= 0) continue
       seen.add(line.serviceId)
 
       const { data: row, error } = await supabase
@@ -163,11 +198,12 @@ export async function applyMembershipBenefit(opts: {
         .single()
 
       if (error || !row) {
-        // 23514 is the allowance trigger: somebody else spent the session
-        // between the count above and this insert. Nothing else is claimable
-        // either, so stop asking. Any other failure is this line's problem —
-        // 23505 means it was already claimed — so move on and price the rest.
-        if (error?.code === '23514') break
+        // 23514 is the allowance trigger: somebody else spent this allowance
+        // between the count above and this insert (or the membership stopped
+        // being current). Stop asking against this allowance; others may
+        // still have room. Any other failure is this line's problem — 23505
+        // means it was already claimed — so move on and price the rest.
+        if (error?.code === '23514') exhausted.add(key)
         continue
       }
 
@@ -175,6 +211,7 @@ export async function applyMembershipBenefit(opts: {
       claimedServiceIds.add(line.serviceId)
       coveredCents += line.priceCents
       sessionsSpent += 1
+      remaining.set(key, (remaining.get(key) ?? 0) - 1)
     }
   }
 

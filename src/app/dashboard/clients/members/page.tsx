@@ -15,10 +15,13 @@ import {
 import { SectionTabs } from '@/components/layout/SectionTabs'
 import { MemberRenewalToggle } from '@/components/shared/MemberRenewalToggle'
 import { formatDateTimeInTimeZone, requestNow } from '@/lib/time'
-import { chunked, needsFollowUp, sessionsLeftThisPeriod } from '@/lib/member-follow-up'
+import { chunked, needsFollowUp } from '@/lib/member-follow-up'
 import { isFrontDesk, isManager, type UserRole } from '@/types/database'
 import {
   MEMBERSHIP_STATUS_LABELS,
+  allowancesLeftLabel,
+  includedAllowances,
+  includedSessionsLeft,
   membershipIsCurrent,
   type ClientMembership,
   type MembershipBookingIntent,
@@ -37,7 +40,7 @@ const ENDED_LIMIT = 200
  * `string` collapses the result.
  */
 const MEMBER_SELECT =
-  'id, client_id, membership_id, status, current_period_start, current_period_end, cancel_at_period_end, ended_at, auto_renew, stripe_subscription_id, profiles!client_memberships_client_id_fkey(first_name, last_name, email, phone), memberships!client_memberships_membership_id_fkey(name, included_sessions_per_period, period_months), membership_redemptions(sessions, redeemed_for_period_start)'
+  'id, client_id, membership_id, status, current_period_start, current_period_end, cancel_at_period_end, ended_at, auto_renew, stripe_subscription_id, profiles!client_memberships_client_id_fkey(first_name, last_name, email, phone), memberships!client_memberships_membership_id_fkey(name, included_sessions_per_period, period_months, membership_services(service_id, sessions_per_period, services(name))), membership_redemptions(service_id, sessions, redeemed_for_period_start)'
 
 const FILTERS = ['all', 'needs_follow_up', 'payment_failed', 'renewing', 'ended'] as const
 type Filter = (typeof FILTERS)[number]
@@ -89,8 +92,15 @@ type Person = {
   email: string | null
   phone: string | null
 }
-type Plan = { name: string; included_sessions_per_period: number; period_months: number }
-type Spent = { sessions: number; redeemed_for_period_start: string }
+type Plan = {
+  name: string
+  included_sessions_per_period: number
+  period_months: number
+  membership_services:
+    | { service_id: number; sessions_per_period: number | null; services: { name: string } | null }[]
+    | null
+}
+type Spent = { service_id: number | null; sessions: number; redeemed_for_period_start: string }
 
 interface Props {
   searchParams: Promise<{ filter?: string; page?: string }>
@@ -201,14 +211,23 @@ export default async function MembersPage({ searchParams }: Props) {
     const plan = m.memberships as Plan | null
     // An active row past its end date grants nothing, so it has nothing left.
     const current = membershipIsCurrent(m, now)
-    const left =
-      plan && current
-        ? sessionsLeftThisPeriod(
-            plan.included_sessions_per_period,
-            m.current_period_start,
-            (m.membership_redemptions ?? []) as Spent[]
-          )
-        : 0
+    // Each allowance this period, per treatment or the shared pool (088).
+    // The follow-up rule takes one number, so it gets everything left across
+    // them all.
+    const allowances = plan
+      ? includedAllowances(
+          plan,
+          (plan.membership_services ?? []).map((r) => ({
+            service_id: r.service_id,
+            sessions_per_period: r.sessions_per_period,
+            name: r.services?.name ?? null,
+          })),
+          (m.membership_redemptions ?? []) as Spent[],
+          m.current_period_start
+        )
+      : []
+    const left = current ? includedSessionsLeft(allowances) : 0
+    const leftLabel = allowancesLeftLabel(allowances)
     const visit = nextVisit.get(m.client_id) ?? null
     const renewing = m.status === 'active' && m.auto_renew && !m.cancel_at_period_end
     return {
@@ -216,6 +235,7 @@ export default async function MembersPage({ searchParams }: Props) {
       person: m.profiles as Person | null,
       plan,
       left,
+      leftLabel,
       current,
       visit,
       renewing,
@@ -360,7 +380,7 @@ export default async function MembersPage({ searchParams }: Props) {
             </div>
 
             <ul className="divide-y divide-[var(--color-border)]">
-              {pageRows.map(({ row, person, plan, left, current, visit, renewing }) => {
+              {pageRows.map(({ row, person, plan, leftLabel, current, visit, renewing }) => {
                 const name = `${person?.first_name ?? ''} ${person?.last_name ?? ''}`.trim()
                 const label = name || person?.email || 'Unnamed client'
                 const isEnded = row.status === 'cancelled' || row.status === 'expired'
@@ -422,12 +442,12 @@ export default async function MembersPage({ searchParams }: Props) {
                     <div className="text-sm tabular-nums">
                       {!current || !plan ? (
                         <span className="text-[var(--color-muted)]">Not current</span>
-                      ) : plan.included_sessions_per_period === 0 ? (
+                      ) : !leftLabel ? (
                         <span className="text-[var(--color-muted)]">Discount only</span>
                       ) : (
                         <>
-                          {left} of {plan.included_sessions_per_period}
-                          <span className="lg:hidden"> left this period</span>
+                          {leftLabel}
+                          <span className="lg:hidden"> this period</span>
                         </>
                       )}
                     </div>

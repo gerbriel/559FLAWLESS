@@ -47,6 +47,11 @@ export type Membership = {
 export type MembershipService = {
   membership_id: number
   service_id: number
+  /**
+   * Null: this treatment draws from the plan's shared pool. Set (1 to 31):
+   * this treatment has its own N per period and never touches the pool (088).
+   */
+  sessions_per_period: number | null
 }
 
 /**
@@ -368,4 +373,162 @@ function describePerkOffer(
   if (perk.product_id !== null) return `Buy ${buy} ${product}, get the ${next} ${cut}`
   if (perk.category_id !== null) return `Buy ${buy} in ${category}, get the ${next} ${cut}`
   return `Buy ${buy} products, get the ${next} ${cut}`
+}
+
+/**
+ * One included allowance on a plan for the current period (088). A plan has
+ * one per treatment that carries its own `sessions_per_period`, plus the
+ * shared pool when `included_sessions_per_period` is above zero.
+ * `serviceId: null` is the pool. `used` may exceed `total` (a session handed
+ * out by hand, a plan shrunk mid-period); the labels clamp what is left.
+ */
+export interface IncludedAllowance {
+  serviceId: number | null
+  serviceName: string | null
+  total: number
+  used: number
+}
+
+/**
+ * Every allowance a plan grants this period and how much of each is spent.
+ * Per-treatment rows come first in scope order, the pool last. The counting
+ * is the same sentence as membership_redemption_within_allowance() in 088: a
+ * redemption on a treatment with its own allowance counts only there, and
+ * the pool counts everything else in the period, including legacy rows with
+ * no service. The trigger is the authority; this is for screens.
+ */
+export function includedAllowances(
+  plan: { included_sessions_per_period: number },
+  scope: { service_id: number; sessions_per_period: number | null; name?: string | null }[],
+  redemptions: { service_id: number | null; sessions: number; redeemed_for_period_start: string }[],
+  periodStart: string
+): IncludedAllowance[] {
+  const thisPeriod = redemptions.filter((r) => samePeriodStart(r.redeemed_for_period_start, periodStart))
+  const out: IncludedAllowance[] = []
+  const own = new Set<number>()
+
+  for (const row of scope) {
+    if (row.sessions_per_period == null || own.has(row.service_id)) continue
+    own.add(row.service_id)
+    out.push({
+      serviceId: row.service_id,
+      serviceName: row.name?.trim() || null,
+      total: row.sessions_per_period,
+      used: thisPeriod
+        .filter((r) => r.service_id === row.service_id)
+        .reduce((n, r) => n + r.sessions, 0),
+    })
+  }
+
+  if (plan.included_sessions_per_period > 0) {
+    out.push({
+      serviceId: null,
+      serviceName: null,
+      total: plan.included_sessions_per_period,
+      used: thisPeriod
+        .filter((r) => r.service_id === null || !own.has(r.service_id))
+        .reduce((n, r) => n + r.sessions, 0),
+    })
+  }
+  return out
+}
+
+/**
+ * Period starts arrive as timestamptz strings, and PostgREST and JS do not
+ * always spell one instant the same way ("+00:00" against "Z", fractional
+ * seconds). Compare the instant, falling back to the text when either side
+ * does not parse.
+ */
+function samePeriodStart(a: string, b: string): boolean {
+  if (a === b) return true
+  const x = Date.parse(a)
+  const y = Date.parse(b)
+  return Number.isFinite(x) && Number.isFinite(y) && x === y
+}
+
+/** "A", "A and B", "A, B and C". */
+function andList(items: string[]): string {
+  if (items.length <= 1) return items.join('')
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
+}
+
+/** "A", "A or B", "A, B or C". */
+function orList(items: string[]): string {
+  if (items.length <= 1) return items.join('')
+  return `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}`
+}
+
+const UNNAMED_TREATMENT = 'this treatment'
+
+/**
+ * "1 Custom Corrective Facial", "2 Custom Corrective Facial visits". A
+ * treatment name is not a countable noun ("2 Full Brazilians" is wrong and
+ * "2 Brow Waxs" worse), so a count above one reads as visits of it.
+ */
+function treatmentCount(count: number, name: string | null): string {
+  return `${count} ${treatmentNoun(count, name)}`
+}
+
+/** "Custom Corrective Facial", "Custom Corrective Facial visits", "visits of this treatment". */
+function treatmentNoun(count: number, name: string | null): string {
+  if (count === 1) return name ?? UNNAMED_TREATMENT
+  return name ? `${name} visits` : `visits of ${UNNAMED_TREATMENT}`
+}
+
+/**
+ * What a plan includes, in one line (088):
+ *   per-treatment  "1 Custom Corrective Facial and 1 Full Brazilian included each month"
+ *   pool           "2 treatments included each month: Custom Corrective Facial or Full Brazilian"
+ *   mixed          the two joined with ", plus "
+ * `periodLabel` is membershipPeriodLabel()'s word. `poolServiceNames` are the
+ * treatments the pool may be spent on; empty means any treatment and the
+ * colon is left off. Returns '' when nothing is included.
+ */
+export function describeIncluded(
+  allowances: IncludedAllowance[],
+  periodLabel: string,
+  poolServiceNames: string[]
+): string {
+  const parts: string[] = []
+  const each = allowances.filter((a) => a.serviceId !== null && a.total > 0)
+  if (each.length > 0) {
+    parts.push(
+      `${andList(each.map((a) => treatmentCount(a.total, a.serviceName)))} included each ${periodLabel}`
+    )
+  }
+  const pool = allowances.find((a) => a.serviceId === null && a.total > 0)
+  if (pool) {
+    const names = poolServiceNames.map((n) => n.trim()).filter(Boolean)
+    const head =
+      pool.total === 1
+        ? `1 treatment included each ${periodLabel}`
+        : `${pool.total} treatments included each ${periodLabel}`
+    parts.push(names.length > 0 ? `${head}: ${orList(names)}` : head)
+  }
+  return parts.join(', plus ')
+}
+
+/**
+ * What is left this period, in one line (088):
+ * "1 of 1 Custom Corrective Facial and 0 of 1 Full Brazilian left",
+ * "1 of 2 Custom Corrective Facial visits left", "1 of 2 treatments left", or both joined with " and " (pool last).
+ * Left never reads below zero. Returns '' when nothing is included.
+ */
+export function allowancesLeftLabel(allowances: IncludedAllowance[]): string {
+  const parts = allowances
+    .filter((a) => a.total > 0)
+    .map((a) => {
+      const left = Math.max(a.total - a.used, 0)
+      if (a.serviceId !== null) {
+        // "1 of 2 Custom Corrective Facial visits", "0 of 1 Full Brazilian".
+        return `${left} of ${a.total} ${treatmentNoun(a.total, a.serviceName)}`
+      }
+      return `${left} of ${a.total} ${a.total === 1 ? 'treatment' : 'treatments'}`
+    })
+  return parts.length > 0 ? `${andList(parts)} left` : ''
+}
+
+/** Everything left across every allowance, never below zero per allowance. */
+export function includedSessionsLeft(allowances: IncludedAllowance[]): number {
+  return allowances.reduce((n, a) => n + Math.max(a.total - a.used, 0), 0)
 }

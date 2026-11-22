@@ -65,10 +65,26 @@ export interface BookableProvider {
  */
 export interface BookingMembership {
   planName: string
-  /** Covered visits left this period, before this booking. */
+  /** Covered visits left this period across every allowance, before this booking. */
   left: number
   total: number
-  /** The plan's scope, already narrowed to what is bookable here. */
+  /**
+   * What is still covered, per treatment: "Covered this month: 1 Custom
+   * Corrective Facial and 1 Full Brazilian" (088). No closing full stop.
+   */
+  leftLabel: string
+  /**
+   * True only when the plan has no scope rows at all, so an included session
+   * may be spent on any treatment (050). Read this, never an empty
+   * coveredServiceSlugs, to mean "any".
+   */
+  anyTreatment: boolean
+  /**
+   * The plan's scope, narrowed to what is bookable here and to the
+   * treatments whose allowance still has something left. Ignored when
+   * anyTreatment is true. Empty with anyTreatment false means nothing covered
+   * is bookable here, not "any treatment".
+   */
   coveredServiceSlugs: string[]
 }
 
@@ -631,17 +647,19 @@ export function BookingFlow({
     // Covered visits still left after this one, for the "book your next" link.
     // `left` was counted before this booking, and redemptions are claimed the
     // moment a booking is made (pending or confirmed), so it already accounts
-    // for every visit booked earlier. This visit spends one only if it holds a
-    // covered service; an empty scope means any treatment (050). No covered
-    // service, no link: this booking said nothing about the membership.
-    const bookedCovered =
-      !!membership &&
-      selected.some(
-        (s) =>
-          membership.coveredServiceSlugs.length === 0 ||
-          membership.coveredServiceSlugs.includes(s.slug)
-      )
-    const coveredLeftAfter = membership && bookedCovered ? membership.left - 1 : 0
+    // for every visit booked earlier. This visit spends one per distinct
+    // covered service it holds (two covered treatments in one visit spend
+    // two); anyTreatment means every selected service is covered (050). No
+    // covered service, no link: this booking said nothing about the membership.
+    const coveredBooked = membership
+      ? new Set(
+          selected
+            .filter((s) => membership.anyTreatment || membership.coveredServiceSlugs.includes(s.slug))
+            .map((s) => s.slug)
+        ).size
+      : 0
+    const coveredLeftAfter =
+      membership && coveredBooked > 0 ? Math.max(membership.left - coveredBooked, 0) : 0
 
     return (
       <div className="mx-auto max-w-lg py-16 text-center">
@@ -859,8 +877,7 @@ export function BookingFlow({
           <div>
             {membership && (
               <p className="mb-8 border-l-2 border-[var(--color-accent)] bg-[var(--color-clay-soft)] p-4 text-sm dark:bg-[var(--color-surface)]">
-                {membership.planName}: {membership.left} of {membership.total} covered visits
-                left this period. Pick your date and the studio will confirm it.
+                {membership.leftLabel}. Pick your date and the studio will confirm it.
               </p>
             )}
             <h2 className="display text-3xl">Choose your services</h2>

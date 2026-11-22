@@ -3,14 +3,16 @@ import { GiveBackSession } from '@/components/shared/GiveBackSession'
 import { BadgeCheck } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
-import { ClientMembershipControls } from '@/components/shared/ClientMembershipControls'
+import { ClientMembershipControls, type EnrolPlan } from '@/components/shared/ClientMembershipControls'
 import { MemberRenewalToggle } from '@/components/shared/MemberRenewalToggle'
 import { formatMoney } from '@/lib/utils'
 import { formatDateInTimeZone } from '@/lib/time'
 import {
   MEMBERSHIP_CHARGE_STATUS_LABELS,
   MEMBERSHIP_STATUS_LABELS,
-  describeMembershipBenefit,
+  allowancesLeftLabel,
+  describeIncluded,
+  includedAllowances,
   membershipIsCurrent,
   membershipPeriodLabel,
   type ClientMembership,
@@ -56,7 +58,7 @@ export async function ClientMembershipPanel({
       // and `'a' + 'b'` widens to `string`, collapsing the result type.
       .from('client_memberships')
       .select(
-        'id, client_id, membership_id, status, price_cents_snapshot, started_at, current_period_start, current_period_end, cancel_at_period_end, cancelled_at, ended_at, note, auto_renew, stripe_subscription_id, memberships!client_memberships_membership_id_fkey(id, name, slug, description, price_cents, period_months, service_discount_pct, included_sessions_per_period, is_active, sort_order)'
+        'id, client_id, membership_id, status, price_cents_snapshot, started_at, current_period_start, current_period_end, cancel_at_period_end, cancelled_at, ended_at, note, auto_renew, stripe_subscription_id, memberships!client_memberships_membership_id_fkey(id, name, slug, description, price_cents, period_months, service_discount_pct, included_sessions_per_period, is_active, sort_order, membership_services(service_id, sessions_per_period, services(name)))'
       )
       .eq('client_id', clientId)
       .order('started_at', { ascending: false })
@@ -65,12 +67,12 @@ export async function ClientMembershipPanel({
       ? supabase
           .from('memberships')
           .select(
-            'id, name, slug, description, price_cents, period_months, service_discount_pct, included_sessions_per_period, stripe_price_id, is_active, sort_order, created_at, updated_at'
+            'id, name, slug, description, price_cents, period_months, service_discount_pct, included_sessions_per_period, stripe_price_id, is_active, sort_order, created_at, updated_at, membership_services(service_id, sessions_per_period, services(name))'
           )
           .eq('is_active', true)
           .order('sort_order')
           .order('id')
-      : Promise.resolve({ data: [] as Membership[] }),
+      : Promise.resolve({ data: [] as EnrolPlan[] }),
   ])
 
   const held = (rows ?? []) as (Pick<
@@ -109,7 +111,7 @@ export async function ClientMembershipPanel({
       ? supabase
           .from('membership_redemptions')
           .select(
-            'id, sessions, value_cents, appointments!membership_redemptions_appointment_id_fkey(id, starts_at, status), services!membership_redemptions_service_id_fkey(name)'
+            'id, service_id, sessions, value_cents, redeemed_for_period_start, appointments!membership_redemptions_appointment_id_fkey(id, starts_at, status), services!membership_redemptions_service_id_fkey(name)'
           )
           .eq('client_membership_id', live.id)
           .eq('redeemed_for_period_start', live.current_period_start)
@@ -127,7 +129,45 @@ export async function ClientMembershipPanel({
     .map((c) => c.id)
 
   const plan = live ? (live.memberships as unknown as Membership | null) : null
-  const sessionsSpent = (spent ?? []).reduce((n, r) => n + r.sessions, 0)
+  // Each allowance this period, per treatment or the shared pool (088).
+  const planScope = (live?.memberships as unknown as {
+    membership_services:
+      | { service_id: number; sessions_per_period: number | null; services: { name: string } | null }[]
+      | null
+  } | null)?.membership_services ?? []
+  const allowances =
+    live && plan
+      ? includedAllowances(
+          plan,
+          planScope.map((r) => ({
+            service_id: r.service_id,
+            sessions_per_period: r.sessions_per_period,
+            name: r.services?.name ?? null,
+          })),
+          ((spent ?? []) as { service_id: number | null; sessions: number; redeemed_for_period_start: string }[]),
+          live.current_period_start
+        )
+      : []
+  const leftLine = allowancesLeftLabel(allowances)
+  const includedLine = plan
+    ? describeIncluded(
+        allowances,
+        membershipPeriodLabel(plan.period_months),
+        planScope.filter((r) => r.sessions_per_period === null).map((r) => r.services?.name ?? '')
+      )
+    : ''
+  const benefitLine = plan
+    ? [
+        includedLine,
+        plan.service_discount_pct > 0
+          ? includedLine
+            ? `${plan.service_discount_pct}% off the rest of the visit`
+            : `${plan.service_discount_pct}% off every visit`
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : ''
   const lapsed = held.find((h) => !membershipIsCurrent(h, now)) ?? null
   // A card Stripe could not charge. Not current (the benefit is paused), but
   // not over either: Stripe retries, and the member can fix the card.
@@ -165,16 +205,12 @@ export async function ClientMembershipPanel({
             )}
           </p>
 
-          {describeMembershipBenefit(plan) && (
-            <p className="text-xs text-[var(--color-muted)]">
-              {describeMembershipBenefit(plan)}
-            </p>
+          {benefitLine && (
+            <p className="text-xs text-[var(--color-muted)]">{benefitLine}</p>
           )}
 
-          {plan.included_sessions_per_period > 0 && (
-            <p className="text-xs text-[var(--color-muted)]">
-              {sessionsSpent} of {plan.included_sessions_per_period} used this period.
-            </p>
+          {leftLine && (
+            <p className="text-xs text-[var(--color-muted)]">{leftLine} this period.</p>
           )}
 
           {/* Which visits used them — each one a link, and for a manager a way
@@ -307,7 +343,7 @@ export async function ClientMembershipPanel({
             // holds 050's one-live index, so the enrol form would only meet a
             // raw unique-violation error. The controls get that row instead.
             liveMembershipId={controlled?.id ?? null}
-            plans={(plans ?? []) as Membership[]}
+            plans={(plans ?? []) as unknown as EnrolPlan[]}
             dueChargeIds={dueChargeIds}
             cancelAtPeriodEnd={controlled?.cancel_at_period_end ?? false}
             stripeSubscriptionId={controlled?.stripe_subscription_id ?? null}

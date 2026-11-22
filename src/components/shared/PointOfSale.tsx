@@ -24,7 +24,12 @@ import { Field, Input, Select } from '@/components/ui/field'
 import { createClient } from '@/lib/supabase/client'
 import { cn, formatMoney } from '@/lib/utils'
 import { formatDateTimeInTimeZone } from '@/lib/time'
-import { membershipDiscountCents, type MembershipProductPerk } from '@/types/memberships'
+import {
+  allowancesLeftLabel,
+  includedAllowances,
+  membershipDiscountCents,
+  type MembershipProductPerk,
+} from '@/types/memberships'
 import { bestProductPerk, type PerkAvailability, type PerkUnit } from '@/lib/member-product-perks'
 import { sellPackage } from '@/app/dashboard/packages/actions'
 import { packageErrorMessage } from '@/app/dashboard/packages/errors'
@@ -258,8 +263,14 @@ export function PointOfSale({
   // route applies it for real; this only shows staff the figure first.
   const [membership, setMembership] = useState<{
     name: string
-    left: number
+    /** What is left of each allowance this period, keyed by service id, or null for the shared pool (088). */
+    remaining: Map<number | null, number>
+    /** Every treatment in the plan's scope. Empty means any treatment, from the pool. */
     scope: number[]
+    /** Treatments with an allowance of their own. They never draw from the pool. */
+    own: number[]
+    /** "1 of 1 Custom Corrective Facial and 0 of 1 Full Brazilian left", or '' when nothing is included. */
+    leftLabel: string
     pct: number
     prices: Map<number, number>
     /** Retail perks (086), for the retail preview. */
@@ -287,7 +298,7 @@ export function PointOfSale({
       const { data: held } = await supabase
         .from('client_memberships')
         .select(
-          'id, membership_id, current_period_start, memberships!client_memberships_membership_id_fkey(name, included_sessions_per_period, service_discount_pct, membership_services(service_id), membership_member_prices(service_id, price_cents), membership_product_perks(id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order, max_uses, uses_window, max_units_per_use)), membership_redemptions(sessions, redeemed_for_period_start)'
+          'id, membership_id, current_period_start, memberships!client_memberships_membership_id_fkey(name, included_sessions_per_period, service_discount_pct, membership_services(service_id, sessions_per_period, services(name)), membership_member_prices(service_id, price_cents), membership_product_perks(id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order, max_uses, uses_window, max_units_per_use)), membership_redemptions(service_id, sessions, redeemed_for_period_start)'
         )
         .eq('client_id', customerId)
         .eq('status', 'active')
@@ -328,21 +339,37 @@ export function PointOfSale({
           name: string
           included_sessions_per_period: number
           service_discount_pct: number
-          membership_services: { service_id: number }[]
+          membership_services: {
+            service_id: number
+            sessions_per_period: number | null
+            services: { name: string } | null
+          }[]
           membership_member_prices: { service_id: number; price_cents: number }[]
           membership_product_perks: MembershipProductPerk[] | null
         } | null
         if (held && plan) {
-          const used = ((held.membership_redemptions ?? []) as {
-            sessions: number
-            redeemed_for_period_start: string
-          }[])
-            .filter((r) => r.redeemed_for_period_start === held.current_period_start)
-            .reduce((n, r) => n + r.sessions, 0)
+          const allowances = includedAllowances(
+            plan,
+            plan.membership_services.map((r) => ({
+              service_id: r.service_id,
+              sessions_per_period: r.sessions_per_period,
+              name: r.services?.name ?? null,
+            })),
+            (held.membership_redemptions ?? []) as {
+              service_id: number | null
+              sessions: number
+              redeemed_for_period_start: string
+            }[],
+            held.current_period_start
+          )
           setMembership({
             name: plan.name,
-            left: Math.max(plan.included_sessions_per_period - used, 0),
+            remaining: new Map(allowances.map((a) => [a.serviceId, Math.max(a.total - a.used, 0)])),
             scope: plan.membership_services.map((r) => r.service_id),
+            own: plan.membership_services
+              .filter((r) => r.sessions_per_period != null)
+              .map((r) => r.service_id),
+            leftLabel: allowancesLeftLabel(allowances),
             pct: plan.service_discount_pct,
             prices: new Map(plan.membership_member_prices.map((r) => [r.service_id, r.price_cents])),
             perks: plan.membership_product_perks ?? [],
@@ -491,18 +518,28 @@ export function PointOfSale({
         ? customExtra
         : retailSubtotal
   // The membership on a services sale, previewed the way applyMembershipBenefit
-  // computes it: included sessions dearest-first, one per service, then member
-  // prices on the rest, then the plan percentage.
+  // computes it: each line draws from its own allowance when the treatment has
+  // one, otherwise from the shared pool (088); dearest-first within each
+  // allowance, one per service; then member prices on the rest, then the plan
+  // percentage.
   const memberCut = (() => {
     if (!sellingServices || !membership) return 0
+    const allowanceFor = (serviceId: number): number | null | undefined => {
+      if (membership.own.includes(serviceId)) return serviceId
+      if (membership.scope.length === 0 || membership.scope.includes(serviceId)) return null
+      return undefined
+    }
+    const remaining = new Map(membership.remaining)
     const coveredIds = new Set<number>()
     let covered = 0
     const eligible = [...serviceLines]
-      .filter((l) => l.price_cents > 0 && (membership.scope.length === 0 || membership.scope.includes(l.id)))
+      .filter((l) => l.price_cents > 0 && allowanceFor(l.id) !== undefined)
       .sort((a, b) => b.price_cents - a.price_cents)
     for (const l of eligible) {
-      if (coveredIds.size >= membership.left) break
       if (coveredIds.has(l.id)) continue
+      const key = allowanceFor(l.id) as number | null
+      if ((remaining.get(key) ?? 0) <= 0) continue
+      remaining.set(key, (remaining.get(key) ?? 0) - 1)
       coveredIds.add(l.id)
       covered += l.price_cents
     }
@@ -1749,8 +1786,8 @@ export function PointOfSale({
 
           {membership && (
             <p className="text-xs leading-relaxed text-[var(--color-muted)]">
-              {membership.name} member · {membership.left}{' '}
-              {membership.left === 1 ? 'facial' : 'facials'} left this period. Applied
+              {membership.name} member
+              {membership.leftLabel ? ` · ${membership.leftLabel} this period` : ''}. Applied
               automatically to services rung up here.
               {membership.perks.length > 0 &&
                 ' Their product perks apply to retail too, when they beat the multibuy deal; the sale works out the best single discount.'}

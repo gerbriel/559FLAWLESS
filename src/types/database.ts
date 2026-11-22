@@ -2372,6 +2372,19 @@ export type Database = {
         Returns: number
       }
       /**
+       * Replace a plan's membership_services rows in one transaction, so a
+       * booking never sees the plan with no scope mid-save. Manager only
+       * (raises otherwise); each row's service must exist and
+       * sessions_per_period is null (the shared pool) or 1 to 31. Added in 088.
+       */
+      replace_membership_scope: {
+        Args: {
+          p_membership: number
+          p_rows: { service_id: number; sessions_per_period: number | null }[]
+        }
+        Returns: undefined
+      }
+      /**
        * Replace a provider's cached busy intervals for one window with what
        * Google just reported. Windowed, so syncing next month leaves this
        * month alone. Added in 027.

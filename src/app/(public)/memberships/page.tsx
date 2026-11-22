@@ -8,8 +8,13 @@ import { MembershipSelfService } from '@/components/shared/MembershipSelfService
 import { formatMoney } from '@/lib/utils'
 import { requestNow } from '@/lib/time'
 import {
+  allowancesLeftLabel,
+  describeIncluded,
   describeProductPerk,
+  includedAllowances,
+  includedSessionsLeft,
   membershipIsCurrent,
+  membershipPeriodLabel,
   type MembershipProductPerk,
 } from '@/types/memberships'
 
@@ -31,6 +36,22 @@ const VISITS_CONFIRMED =
 type NamedPerk = MembershipProductPerk & {
   products: { name: string } | null
   product_categories: { name: string } | null
+}
+
+/** A scope row with its treatment's name, as the embeds return it (088). */
+type NamedScope = {
+  service_id: number
+  sessions_per_period: number | null
+  services: { name: string } | null
+}
+
+/** The scope rows in the shape includedAllowances() reads. */
+function scopeWithNames(rows: NamedScope[] | null) {
+  return (rows ?? []).map((r) => ({
+    service_id: r.service_id,
+    sessions_per_period: r.sessions_per_period,
+    name: r.services?.name ?? null,
+  }))
 }
 
 /** The sentence a perk prints: its own label, or the plain description. */
@@ -73,7 +94,7 @@ export default async function MembershipsPage({ searchParams }: Props) {
     supabase
       .from('memberships')
       .select(
-        'id, name, description, price_cents, period_months, included_sessions_per_period, auto_renew_offered, membership_services(services(name)), membership_member_prices(price_cents, services(name, price_cents)), membership_product_perks(id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order, max_uses, uses_window, max_units_per_use, products(name), product_categories(name))'
+        'id, name, description, price_cents, period_months, included_sessions_per_period, auto_renew_offered, membership_services(service_id, sessions_per_period, services(name)), membership_member_prices(price_cents, services(name, price_cents)), membership_product_perks(id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order, max_uses, uses_window, max_units_per_use, products(name), product_categories(name))'
       )
       .eq('is_active', true)
       .eq('sell_online', true)
@@ -88,7 +109,7 @@ export default async function MembershipsPage({ searchParams }: Props) {
     ? await supabase
         .from('client_memberships')
         .select(
-          'id, status, current_period_start, current_period_end, auto_renew, cancel_at_period_end, stripe_subscription_id, memberships!client_memberships_membership_id_fkey(name, included_sessions_per_period, membership_product_perks(id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order, max_uses, uses_window, max_units_per_use, products(name), product_categories(name))), membership_redemptions(sessions, redeemed_for_period_start)'
+          'id, status, current_period_start, current_period_end, auto_renew, cancel_at_period_end, stripe_subscription_id, memberships!client_memberships_membership_id_fkey(name, included_sessions_per_period, membership_services(service_id, sessions_per_period, services(name)), membership_member_prices(services(name)), membership_product_perks(id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order, max_uses, uses_window, max_units_per_use, products(name), product_categories(name))), membership_redemptions(service_id, sessions, redeemed_for_period_start)'
         )
         .eq('client_id', user.id)
         .in('status', ['active', 'past_due'])
@@ -105,16 +126,44 @@ export default async function MembershipsPage({ searchParams }: Props) {
     | {
         name: string
         included_sessions_per_period: number
+        membership_services: NamedScope[] | null
+        membership_member_prices: { services: { name: string } | null }[] | null
         membership_product_perks: NamedPerk[] | null
       }
     | null
-  const used = ((mine?.membership_redemptions ?? []) as {
-    sessions: number
-    redeemed_for_period_start: string
-  }[])
-    .filter((r) => r.redeemed_for_period_start === mine?.current_period_start)
-    .reduce((n, r) => n + r.sessions, 0)
-  const left = minePlan ? Math.max(minePlan.included_sessions_per_period - used, 0) : 0
+  // Each allowance this period: one per treatment with its own number, or
+  // the shared pool. "1 of 1 Custom Corrective Facial and 0 of 1 Full
+  // Brazilian left".
+  const mineAllowances =
+    mine && minePlan
+      ? includedAllowances(
+          minePlan,
+          scopeWithNames(minePlan.membership_services),
+          (mine.membership_redemptions ?? []) as {
+            service_id: number | null
+            sessions: number
+            redeemed_for_period_start: string
+          }[],
+          mine.current_period_start
+        )
+      : []
+  const left = includedSessionsLeft(mineAllowances)
+  const leftLine = allowancesLeftLabel(mineAllowances)
+  // Treatments this plan sells at a member price, named, for the how-to line.
+  // None, and the line says nothing about member prices.
+  const memberPriceNames = [
+    ...new Set(
+      (minePlan?.membership_member_prices ?? [])
+        .map((m) => m.services?.name?.trim())
+        .filter((n): n is string => !!n)
+    ),
+  ]
+  const memberPriceLine =
+    memberPriceNames.length === 0
+      ? ''
+      : memberPriceNames.length === 1
+        ? `Add ${memberPriceNames[0]} to any visit at the member price.`
+        : `Add ${memberPriceNames.slice(0, -1).join(', ')} or ${memberPriceNames[memberPriceNames.length - 1]} to any visit at the member price.`
 
   // The holder's own retail perks, each limited one with what is left of it
   // this window. A failed count shows no figure rather than a wrong one.
@@ -201,12 +250,18 @@ export default async function MembershipsPage({ searchParams }: Props) {
             )}
 
             <p className="mt-3 text-sm">
-              <strong className="tabular-nums">{left}</strong> of{' '}
-              {minePlan.included_sessions_per_period} facials left · {renewalLine}
+              {leftLine ? (
+                <>
+                  <strong className="tabular-nums">{leftLine}</strong> · {renewalLine}
+                </>
+              ) : (
+                renewalLine
+              )}
             </p>
             <p className="mt-2 max-w-prose text-sm text-[var(--color-muted)]">
-              Book a corrective facial as usual and it is covered automatically once the
-              studio confirms it. Add a Brazilian to any visit at the member price.{' '}
+              {mineAllowances.length > 0 &&
+                'Book an included treatment as usual and it is covered automatically once the studio confirms it. '}
+              {memberPriceLine && `${memberPriceLine} `}
               {VISITS_CONFIRMED}
             </p>
 
@@ -247,11 +302,14 @@ export default async function MembershipsPage({ searchParams }: Props) {
         ) : (
           <ul className="mt-14 grid gap-8 lg:grid-cols-2">
             {(plans ?? []).map((p) => {
-              const covers = ((p.membership_services ?? []) as unknown as {
-                services: { name: string } | null
-              }[])
-                .map((s) => s.services?.name)
-                .filter(Boolean) as string[]
+              const scopeRows = (p.membership_services ?? []) as unknown as NamedScope[]
+              const includedLine = describeIncluded(
+                includedAllowances(p, scopeWithNames(scopeRows), [], ''),
+                membershipPeriodLabel(p.period_months),
+                scopeRows
+                  .filter((s) => s.sessions_per_period === null)
+                  .map((s) => s.services?.name ?? '')
+              )
               const memberPrices = (p.membership_member_prices ?? []) as unknown as {
                 price_cents: number
                 services: { name: string; price_cents: number } | null
@@ -283,13 +341,10 @@ export default async function MembershipsPage({ searchParams }: Props) {
                   )}
 
                   <ul className="mt-6 space-y-2.5 text-sm">
-                    {p.included_sessions_per_period > 0 && (
+                    {includedLine && (
                       <li className="flex gap-2.5">
                         <Check className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-accent)]" strokeWidth={2} />
-                        <span>
-                          {p.included_sessions_per_period} included:{' '}
-                          {covers.length > 0 ? covers.join(' or ') : 'any treatment'}
-                        </span>
+                        <span>{includedLine}</span>
                       </li>
                     )}
                     {memberPrices.map((m, i) => (
@@ -359,7 +414,7 @@ export default async function MembershipsPage({ searchParams }: Props) {
                   )}
                   <p className="mt-4 text-xs text-[var(--color-muted)]">
                     Prefer to pay in person? Ask at your next visit and we will set it up at
-                    the counter. Unused facials do not carry past the end date.
+                    the counter. Unused included treatments do not carry past the end date.
                   </p>
                 </li>
               )

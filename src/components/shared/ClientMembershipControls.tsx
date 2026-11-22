@@ -8,12 +8,51 @@ import { Button } from '@/components/ui/button'
 import { Field, Select, Textarea } from '@/components/ui/field'
 import { formatMoney } from '@/lib/utils'
 import {
-  describeMembershipBenefit,
+  describeIncluded,
+  includedAllowances,
   membershipPeriodLabel,
   type Membership,
   membershipErrorMessage,
   type MembershipChargeMethod,
 } from '@/types/memberships'
+
+/**
+ * A plan offered in the enrol form, with its scope rows (088) so the line
+ * under the picker can say "1 Custom Corrective Facial and 1 Full Brazilian"
+ * rather than a bare count.
+ */
+export type EnrolPlan = Membership & {
+  membership_services:
+    | { service_id: number; sessions_per_period: number | null; services: { name: string } | null }[]
+    | null
+}
+
+/** What a plan grants, per treatment or from the pool, plus any discount. */
+function describeEnrolPlan(plan: EnrolPlan): string {
+  const scope = plan.membership_services ?? []
+  const allowances = includedAllowances(
+    plan,
+    scope.map((r) => ({
+      service_id: r.service_id,
+      sessions_per_period: r.sessions_per_period,
+      name: r.services?.name ?? null,
+    })),
+    [],
+    ''
+  )
+  const included = describeIncluded(
+    allowances,
+    membershipPeriodLabel(plan.period_months),
+    scope.filter((r) => r.sessions_per_period === null).map((r) => r.services?.name ?? '')
+  )
+  const discount =
+    plan.service_discount_pct > 0
+      ? included
+        ? `${plan.service_discount_pct}% off the rest of the visit`
+        : `${plan.service_discount_pct}% off every visit`
+      : ''
+  return [included, discount].filter(Boolean).join(' · ')
+}
 
 /**
  * The write half of the membership panel on a client's record.
@@ -39,7 +78,7 @@ export function ClientMembershipControls({
   clientId: string
   /** Null when the client has nothing current — the enrol form is shown. */
   liveMembershipId: number | null
-  plans: Membership[]
+  plans: EnrolPlan[]
   /** Charges still owed, oldest first. Usually none or one. */
   dueChargeIds: number[]
   cancelAtPeriodEnd: boolean
@@ -258,7 +297,7 @@ export function ClientMembershipControls({
         {chosen && (
           <p className="text-xs text-[var(--color-muted)]">
             {[
-              describeMembershipBenefit(chosen),
+              describeEnrolPlan(chosen),
               'The first period starts today and shows as due until the money is recorded.',
             ]
               .filter(Boolean)
