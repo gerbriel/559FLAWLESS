@@ -11,10 +11,13 @@ import {
   allowancesLeftLabel,
   describeIncluded,
   describeProductPerk,
+  eachPeriodPhrase,
   includedAllowances,
   includedSessionsLeft,
+  includedWorthCents,
   membershipIsCurrent,
   membershipPeriodLabel,
+  poolDearestCents,
   type MembershipProductPerk,
 } from '@/types/memberships'
 
@@ -42,7 +45,7 @@ type NamedPerk = MembershipProductPerk & {
 type NamedScope = {
   service_id: number
   sessions_per_period: number | null
-  services: { name: string } | null
+  services: { name: string; price_cents?: number } | null
 }
 
 /** The scope rows in the shape includedAllowances() reads. */
@@ -94,7 +97,7 @@ export default async function MembershipsPage({ searchParams }: Props) {
     supabase
       .from('memberships')
       .select(
-        'id, name, description, price_cents, period_months, included_sessions_per_period, auto_renew_offered, membership_services(service_id, sessions_per_period, services(name)), membership_member_prices(price_cents, services(name, price_cents)), membership_product_perks(id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order, max_uses, uses_window, max_units_per_use, products(name), product_categories(name))'
+        'id, name, description, price_cents, period_months, included_sessions_per_period, auto_renew_offered, membership_services(service_id, sessions_per_period, services(name, price_cents)), membership_member_prices(price_cents, services(name, price_cents)), membership_product_perks(id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order, max_uses, uses_window, max_units_per_use, products(name), product_categories(name))'
       )
       .eq('is_active', true)
       .eq('sell_online', true)
@@ -190,6 +193,22 @@ export default async function MembershipsPage({ searchParams }: Props) {
         }
       })
   )
+
+  // A pool that may be spent on anything is worth the dearest treatment on
+  // the menu. Asked once for the page, and only when a plan needs it.
+  const needsMenuDearest = (plans ?? []).some(
+    (p) => p.included_sessions_per_period > 0 && (p.membership_services ?? []).length === 0
+  )
+  const { data: dearestRow } = needsMenuDearest
+    ? await supabase
+        .from('services')
+        .select('price_cents')
+        .eq('is_active', true)
+        .order('price_cents', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+    : { data: null }
+  const menuDearestCents = dearestRow?.price_cents ?? 0
 
   const dateLabel = (iso: string) =>
     new Date(iso).toLocaleDateString('en-US', {
@@ -303,8 +322,26 @@ export default async function MembershipsPage({ searchParams }: Props) {
           <ul className="mt-14 grid gap-8 lg:grid-cols-2">
             {(plans ?? []).map((p) => {
               const scopeRows = (p.membership_services ?? []) as unknown as NamedScope[]
+              const allowances = includedAllowances(p, scopeWithNames(scopeRows), [], '')
+              // What the included treatments cost at the menu price. Member
+              // prices and product perks are not counted. Shown only when it
+              // beats the plan price: a zero saving is never advertised.
+              const menuPrice = (serviceId: number) =>
+                scopeRows.find((s) => s.service_id === serviceId)?.services?.price_cents ?? 0
+              const worthCents = includedWorthCents(
+                allowances,
+                menuPrice,
+                poolDearestCents(
+                  scopeRows.map((s) => ({
+                    sessions_per_period: s.sessions_per_period,
+                    price_cents: s.services?.price_cents ?? 0,
+                  })),
+                  menuDearestCents
+                )
+              )
+              const savingCents = worthCents - p.price_cents
               const includedLine = describeIncluded(
-                includedAllowances(p, scopeWithNames(scopeRows), [], ''),
+                allowances,
                 membershipPeriodLabel(p.period_months),
                 scopeRows
                   .filter((s) => s.sessions_per_period === null)
@@ -336,6 +373,25 @@ export default async function MembershipsPage({ searchParams }: Props) {
                         : `for ${months}, paid up front`}
                     </span>
                   </p>
+                  {savingCents > 0 && (
+                    <p className="mt-3 flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm tabular-nums">
+                      <span>
+                        <span className="label-caps mr-1.5 text-[var(--color-muted)]">Menu value</span>
+                        <span className="text-red-700 line-through dark:text-red-400">
+                          {formatMoney(worthCents)}
+                        </span>
+                      </span>
+                      <span>
+                        <span className="label-caps mr-1.5 text-[var(--color-muted)]">Member price</span>
+                        <span className="text-emerald-800 dark:text-emerald-400">
+                          {formatMoney(p.price_cents)}
+                        </span>
+                      </span>
+                      <span className="text-emerald-800 dark:text-emerald-400">
+                        You save {formatMoney(savingCents)} {eachPeriodPhrase(p.period_months)}
+                      </span>
+                    </p>
+                  )}
                   {p.description && (
                     <p className="mt-4 text-sm text-[var(--color-muted)]">{p.description}</p>
                   )}

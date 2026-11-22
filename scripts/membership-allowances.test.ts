@@ -15,6 +15,8 @@ import {
   describeIncluded,
   includedAllowances,
   includedSessionsLeft,
+  includedWorthCents,
+  poolDearestCents,
 } from '../src/types/memberships'
 
 let passed = 0
@@ -227,6 +229,58 @@ test('no em dashes in any sentence', () => {
   for (const s of [describeIncluded(a, 'month', ['Full Brazilian']), allowancesLeftLabel(a)]) {
     assert.ok(!s.includes('—'), s)
   }
+})
+
+// What the included treatments are worth at the menu price (the editor's
+// underwater warning and the plan cards' "Menu value").
+const MENU: Record<number, number> = { [FACIAL]: 12000, [BRAZILIAN]: 7000, [BROW]: 2000 }
+const priceOf = (id: number) => MENU[id] ?? 0
+const MENU_DEAREST = 15000
+
+test('worth: per-treatment is each price times its count', () => {
+  const a = includedAllowances({ included_sessions_per_period: 0 }, [
+    { service_id: FACIAL, sessions_per_period: 1 },
+    { service_id: BROW, sessions_per_period: 2 },
+  ], [], '')
+  assert.equal(includedWorthCents(a, priceOf, 0), 12000 + 2 * 2000)
+})
+
+test('worth: pool is the dearest in scope times the pool', () => {
+  const scope = [
+    { service_id: BRAZILIAN, sessions_per_period: null, price_cents: MENU[BRAZILIAN] },
+    { service_id: BROW, sessions_per_period: null, price_cents: MENU[BROW] },
+  ]
+  const a = includedAllowances({ included_sessions_per_period: 2 }, scope, [], '')
+  const pool = poolDearestCents(scope, MENU_DEAREST)
+  assert.equal(pool, 7000)
+  assert.equal(includedWorthCents(a, priceOf, pool), 14000)
+})
+
+test('worth: a pool with an empty scope is the dearest on the menu', () => {
+  const a = includedAllowances({ included_sessions_per_period: 1 }, [], [], '')
+  assert.equal(poolDearestCents([], MENU_DEAREST), MENU_DEAREST)
+  assert.equal(includedWorthCents(a, priceOf, poolDearestCents([], MENU_DEAREST)), 15000)
+})
+
+test('worth: mixed counts own rows at their price and the pool at its dearest', () => {
+  const scope = [
+    { service_id: FACIAL, sessions_per_period: 1, price_cents: MENU[FACIAL] },
+    { service_id: BRAZILIAN, sessions_per_period: null, price_cents: MENU[BRAZILIAN] },
+    { service_id: BROW, sessions_per_period: null, price_cents: MENU[BROW] },
+  ]
+  const a = includedAllowances({ included_sessions_per_period: 2 }, scope, [], '')
+  // The facial has its own allowance, so it never sets the pool's figure.
+  const pool = poolDearestCents(scope, MENU_DEAREST)
+  assert.equal(pool, 7000)
+  assert.equal(includedWorthCents(a, priceOf, pool), 12000 + 2 * 7000)
+})
+
+test('worth: what is used does not lower it, and nothing included is zero', () => {
+  const a = includedAllowances({ included_sessions_per_period: 1 }, [], [
+    { service_id: FACIAL, sessions: 1, redeemed_for_period_start: PERIOD },
+  ], PERIOD)
+  assert.equal(includedWorthCents(a, priceOf, 9000), 9000)
+  assert.equal(includedWorthCents([], priceOf, 9000), 0)
 })
 
 console.log(`\n${passed} passed, ${failed} failed\n`)

@@ -12,7 +12,9 @@ import { formatMoney, slugify } from '@/lib/utils'
 import {
   describeIncluded,
   describeProductPerk,
+  includedWorthCents,
   membershipPeriodLabel,
+  poolDearestCents,
   type IncludedAllowance,
   type Membership,
   type MembershipProductPerk,
@@ -314,24 +316,9 @@ export function MembershipEditor({
   const priceCents = toCents(price) ?? 0
   const period = membershipPeriodLabel(form.period_months)
 
-  // What the included treatments are worth at the menu price. Per treatment,
-  // that is each one's price times its allowance. For the shared pool the
-  // benefit is spent dearest-first (src/lib/memberships.ts), so the dearest in
-  // scope is the honest figure, and with nothing in scope any treatment
-  // qualifies, so it is the dearest on the menu.
   const eachCounts = each.map((r) => ({ serviceId: r.serviceId, count: wholeIn(r.count, 1, 31) }))
   const sharedCount = mode === 'shared' ? form.included_sessions_per_period : 0
-  const inScope = scope.length > 0 ? services.filter((s) => scope.includes(s.id)) : services
-  const dearestCents = inScope.reduce((n, s) => Math.max(n, s.price_cents), 0)
-  const includedListCents =
-    mode === 'each'
-      ? eachCounts.reduce(
-          (n, r) =>
-            n + (services.find((s) => s.id === r.serviceId)?.price_cents ?? 0) * (r.count ?? 0),
-          0
-        )
-      : dearestCents * sharedCount
-  const underwater = includedListCents > 0 && includedListCents > priceCents
+  const priceOf = (id: number) => services.find((s) => s.id === id)?.price_cents ?? 0
 
   // The included line as the plan card prints it, from what is typed now.
   const draftAllowances: IncludedAllowance[] =
@@ -351,6 +338,19 @@ export function MembershipEditor({
       : sharedCount > 0
         ? [{ serviceId: null, serviceName: null, total: sharedCount, used: 0 }]
         : []
+  // What the included treatments are worth at the menu price: the same
+  // includedWorthCents() the plan cards print as "Menu value", so the warning
+  // and the advertised saving can never disagree.
+  const includedListCents = includedWorthCents(
+    draftAllowances,
+    priceOf,
+    poolDearestCents(
+      scope.map((id) => ({ sessions_per_period: null, price_cents: priceOf(id) })),
+      services.reduce((n, s) => Math.max(n, s.price_cents), 0)
+    )
+  )
+  const underwater = includedListCents > 0 && includedListCents > priceCents
+
   const poolNames =
     mode === 'shared'
       ? services.filter((s) => scope.includes(s.id)).map((s) => s.name)

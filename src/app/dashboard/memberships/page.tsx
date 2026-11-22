@@ -14,9 +14,12 @@ import { requestNow } from '@/lib/time'
 import { isManager } from '@/types/database'
 import {
   describeIncluded,
+  eachPeriodPhrase,
   includedAllowances,
+  includedWorthCents,
   membershipIsCurrent,
   membershipPeriodLabel,
+  poolDearestCents,
   describeProductPerk,
   type ClientMembership,
   type Membership,
@@ -78,7 +81,7 @@ export default async function MembershipsPage() {
         .order('id'),
       supabase
         .from('membership_services')
-        .select('membership_id, service_id, sessions_per_period, services(name)'),
+        .select('membership_id, service_id, sessions_per_period, services(name, price_cents)'),
       supabase
         .from('services')
         .select('id, name, price_cents')
@@ -108,7 +111,7 @@ export default async function MembershipsPage() {
   const rows = (plans ?? []) as Membership[]
   const scopeRows = (scopes ?? []) as unknown as (MembershipScopeRow & {
     membership_id: number
-    services: { name: string } | null
+    services: { name: string; price_cents: number } | null
   })[]
   const serviceOptions = (services ?? []) as MembershipServiceOption[]
   const holders = (held ?? []) as Pick<
@@ -167,6 +170,27 @@ export default async function MembershipsPage() {
     const discount =
       pct > 0 ? (included ? `${pct}% off the rest of the visit` : `${pct}% off every visit`) : ''
     return [included, discount].filter(Boolean).join(' · ')
+  }
+
+  // What the included treatments are worth at the menu price, by the same
+  // rule as the editor's warning and the public card's "Menu value". A pool
+  // open to anything is worth the dearest active treatment.
+  const menuDearestCents = serviceOptions.reduce((n, s) => Math.max(n, s.price_cents), 0)
+  const savingsLine = (plan: Membership): string => {
+    const rows = scopeRows.filter((s) => s.membership_id === plan.id)
+    const worth = includedWorthCents(
+      includedAllowances(plan, rows, [], ''),
+      (id) => rows.find((r) => r.service_id === id)?.services?.price_cents ?? 0,
+      poolDearestCents(
+        rows.map((r) => ({
+          sessions_per_period: r.sessions_per_period,
+          price_cents: r.services?.price_cents ?? 0,
+        })),
+        menuDearestCents
+      )
+    )
+    if (worth <= plan.price_cents) return ''
+    return `Menu value ${formatMoney(worth)}, member price ${formatMoney(plan.price_cents)}, saves ${formatMoney(worth - plan.price_cents)} ${eachPeriodPhrase(plan.period_months)}`
   }
 
   const liveHolders = holders.filter((h) => membershipIsCurrent(h, now))
@@ -268,6 +292,11 @@ export default async function MembershipsPage() {
                       {benefitLine(plan) && (
                         <p className="mt-1 text-xs text-[var(--color-muted)]">
                           {benefitLine(plan)}
+                        </p>
+                      )}
+                      {savingsLine(plan) && (
+                        <p className="mt-1 text-xs tabular-nums text-[var(--color-muted)]">
+                          {savingsLine(plan)}
                         </p>
                       )}
                       {plan.included_sessions_per_period > 0 && scoped.length === 0 && (

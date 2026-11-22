@@ -258,6 +258,12 @@ export function membershipPeriodLabel(periodMonths: number): string {
   return `${periodMonths} months`
 }
 
+/** "each month", "each quarter", "each year", "every 6 months": a saving's period. */
+export function eachPeriodPhrase(periodMonths: number): string {
+  const label = membershipPeriodLabel(periodMonths)
+  return /^\d/.test(label) ? `every ${label}` : `each ${label}`
+}
+
 /**
  * What holding this grants, in one line. A plan always grants at least one of
  * the two — the database refuses a plan that grants neither — so this never
@@ -531,4 +537,43 @@ export function allowancesLeftLabel(allowances: IncludedAllowance[]): string {
 /** Everything left across every allowance, never below zero per allowance. */
 export function includedSessionsLeft(allowances: IncludedAllowance[]): number {
   return allowances.reduce((n, a) => n + Math.max(a.total - a.used, 0), 0)
+}
+
+/**
+ * What the shared pool's one session is worth at the menu price: the dearest
+ * treatment it may be spent on, because the benefit is spent dearest-first
+ * (src/lib/memberships.ts). `scope` is the plan's membership_services rows
+ * with each treatment's menu price. No rows means any treatment qualifies, so
+ * the figure is `menuDearestCents`, the dearest active treatment on the menu.
+ * Rows that carry their own allowance never draw from the pool and are left
+ * out; a scope made only of those leaves the pool nothing to spend on (0).
+ */
+export function poolDearestCents(
+  scope: { sessions_per_period: number | null; price_cents: number }[],
+  menuDearestCents: number
+): number {
+  if (scope.length === 0) return Math.max(Math.trunc(menuDearestCents), 0)
+  return scope
+    .filter((r) => r.sessions_per_period === null)
+    .reduce((n, r) => Math.max(n, Math.trunc(r.price_cents)), 0)
+}
+
+/**
+ * What a plan's included treatments are worth at the menu price, in integer
+ * cents, for one period. Per-treatment rows are that treatment's price times
+ * its allowance; the pool row is `poolCents` (poolDearestCents()) times the
+ * pool. `used` is ignored: this is what the plan grants, not what is left.
+ * Member prices and product perks are not part of it. The editor's
+ * "underwater" warning and the plan cards' "Menu value" both read this.
+ */
+export function includedWorthCents(
+  allowances: IncludedAllowance[],
+  priceOf: (serviceId: number) => number,
+  poolCents: number
+): number {
+  return allowances.reduce((n, a) => {
+    const count = Math.max(Math.trunc(a.total), 0)
+    const each = a.serviceId === null ? poolCents : priceOf(a.serviceId)
+    return n + Math.max(Math.trunc(each), 0) * count
+  }, 0)
 }
