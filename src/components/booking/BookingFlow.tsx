@@ -113,6 +113,7 @@ export function BookingFlow({
   initialServiceSlug,
   initialAddSlugs = [],
   membership,
+  memberNoDeposit = false,
   signedInUserId,
   signedInEmail,
   signedInName,
@@ -131,6 +132,12 @@ export function BookingFlow({
   initialAddSlugs?: string[]
   /** The signed-in member's covered visits, for `?membership=1`. */
   membership?: BookingMembership
+  /**
+   * True when the signed-in client holds a current membership. Members put
+   * no deposit down: the plan is the payment in advance. Preview only; the
+   * booking engine decides the same thing from the database.
+   */
+  memberNoDeposit?: boolean
   /** Present when the profile can be written back to — see `submit`. */
   signedInUserId?: string | null
   signedInEmail?: string | null
@@ -303,7 +310,8 @@ export function BookingFlow({
   const requiresAge = selected.some((s) => s.requires_age_verification)
   const minAge = Math.max(0, ...selected.map((s) => s.min_age))
   const patchTestHours = Math.max(0, ...selected.map((s) => s.patch_test_hours))
-  const depositCents = selected.reduce((n, s) => n + s.deposit_cents, 0)
+  const menuDepositCents = selected.reduce((n, s) => n + s.deposit_cents, 0)
+  const depositCents = memberNoDeposit ? 0 : menuDepositCents
 
   const ageGateSatisfied = !requiresAge || ageConfirmed
 
@@ -1610,6 +1618,12 @@ export function BookingFlow({
                 <div className="flex justify-between border-t border-[var(--color-border)] pt-4">
                   <dt>Due now</dt>
                   <dd className="tabular-nums">{formatMoney(depositCents)}</dd>
+                </div>
+              )}
+              {memberNoDeposit && menuDepositCents > 0 && (
+                <div className="flex justify-between border-t border-[var(--color-border)] pt-4 text-[var(--color-muted)]">
+                  <dt>Deposit</dt>
+                  <dd>None. Your membership covers it.</dd>
                 </div>
               )}
             </dl>

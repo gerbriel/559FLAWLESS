@@ -235,7 +235,7 @@ export default async function MembershipsPage({ searchParams }: Props) {
         <SectionHeading
           eyebrow="Membership"
           title="A season of good skin."
-          lede={`Corrective facials across a season, paid once or renewing. ${VISITS_CONFIRMED}`}
+          lede={`Corrective facials across a season, paid once or renewing. Members book without a deposit. ${VISITS_CONFIRMED}`}
         />
 
         {joined && !mine && (

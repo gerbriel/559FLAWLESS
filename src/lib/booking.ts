@@ -632,6 +632,31 @@ async function applyVisitPromotions(opts: {
   return visitDiscount
 }
 
+/**
+ * Does this client hold a membership that grants anything right now? The
+ * same test as membership_is_current() in migration 050: status active and
+ * the period not yet over. Reads with the admin client because the public
+ * booking path has no session; the answer only ever waives a deposit, never
+ * grants a treatment, so a wrong `true` costs the studio a deposit and a
+ * wrong `false` costs the member a refundable one.
+ */
+async function holdsCurrentMembership(
+  supabase: ReturnType<typeof createAdminClient>,
+  clientId: string | null,
+  now: Date
+): Promise<boolean> {
+  if (!clientId) return false
+  const { data } = await supabase
+    .from('client_memberships')
+    .select('id')
+    .eq('client_id', clientId)
+    .eq('status', 'active')
+    .gt('current_period_end', now.toISOString())
+    .limit(1)
+    .maybeSingle()
+  return !!data
+}
+
 export async function createBooking(req: BookingRequest): Promise<BookingOutcome> {
   const supabase = createAdminClient()
   const now = new Date()
@@ -707,7 +732,16 @@ export async function createBooking(req: BookingRequest): Promise<BookingOutcome
 
   // Deposits add up across services; the studio-wide default only applies when
   // none of the booked services set one of their own.
-  const depositCents = priced.depositCents || settings?.default_deposit_cents || 0
+  //
+  // A member puts nothing down. The membership is the payment in advance (a
+  // plan paid once, or one that renews by card), so asking a member for a
+  // deposit on top would be asking them to prepay twice. Current means what
+  // membership_is_current() means: active, and the period has not run out.
+  // past_due is not current: that card failed, so the advance has not arrived.
+  const memberNoDeposit = await holdsCurrentMembership(supabase, req.clientId, now)
+  const depositCents = memberNoDeposit
+    ? 0
+    : priced.depositCents || settings?.default_deposit_cents || 0
   const endsAt = new Date(requested.getTime() + durationMinutes * MINUTE_MS)
 
   const { data: appointment, error: insertError } = await supabase

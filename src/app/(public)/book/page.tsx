@@ -208,6 +208,20 @@ export default async function BookPage({ searchParams }: Props) {
   // presentation: whether a visit is actually covered is decided when the
   // studio confirms it, by the redemption, not by this banner.
   let membership: BookingMembership | undefined
+  // Any current member books without a deposit, whichever way they got here.
+  // Same test as membership_is_current(): active, period not over.
+  let memberNoDeposit = false
+  if (user) {
+    const { data: current } = await supabase
+      .from('client_memberships')
+      .select('id')
+      .eq('client_id', user.id)
+      .eq('status', 'active')
+      .gt('current_period_end', new Date(requestNow()).toISOString())
+      .limit(1)
+      .maybeSingle()
+    memberNoDeposit = !!current
+  }
   if (membershipParam === '1' && user) {
     const { data: held } = await supabase
       .from('client_memberships')
@@ -452,6 +466,7 @@ export default async function BookPage({ searchParams }: Props) {
             isNewClient={isNewClient}
             initialServiceSlug={initialSlug}
             membership={membership}
+            memberNoDeposit={memberNoDeposit}
             initialAddSlugs={addSlugs}
             // Everything the profile already holds, so the details step can ask
             // for what is missing and nothing else — and write back whatever
