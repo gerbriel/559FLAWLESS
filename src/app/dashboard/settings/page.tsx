@@ -224,13 +224,6 @@ export default async function SettingsPage() {
           visible: userIsAdmin,
         },
         {
-          href: '/dashboard/settings/memberships',
-          label: 'Memberships',
-          description:
-            'Standing arrangements: what a member pays each period and what holding one grants — a discount on every visit, some treatments included, or both. Nothing here charges a card. Each period is recorded by hand from the member’s own record, and a membership stops granting its benefit the day its period runs out.',
-          visible: userIsManager,
-        },
-        {
           href: '/dashboard/settings/errors',
           label: 'What went wrong',
           description:

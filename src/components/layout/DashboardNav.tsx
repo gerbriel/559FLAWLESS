@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
+  BadgeCheck,
   FolderTree,
   Layers,
   BarChart3,
@@ -260,6 +261,14 @@ const TREE: NavEntry[] = [
           // for select, so a provider following this would get a heading over
           // an empty list.
           visible: (r) => isFrontDesk(r),
+        },
+        {
+          href: '/dashboard/memberships',
+          label: 'Memberships',
+          icon: BadgeCheck,
+          // The page gates on is_manager (050 memberships_write), so the row
+          // matches.
+          visible: (r) => isManager(r),
         },
         { href: '/dashboard/inventory', label: 'Inventory', icon: Package, visible: () => true },
         {

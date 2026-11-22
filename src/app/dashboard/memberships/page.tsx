@@ -37,14 +37,14 @@ export const dynamic = 'force-dynamic'
  * for everyone, and a membership that silently fails to charge is worse than
  * one that plainly has to be asked for.
  */
-export default async function MembershipsSettingsPage() {
+export default async function MembershipsPage() {
   const supabase = await createClient()
   const now = requestNow()
 
   const {
     data: { user },
   } = await supabase.auth.getUser()
-  if (!user) redirect('/login?next=/dashboard/settings/memberships')
+  if (!user) redirect('/login?next=/dashboard/memberships')
 
   const { data: profile } = await supabase
     .from('profiles')
@@ -52,7 +52,7 @@ export default async function MembershipsSettingsPage() {
     .eq('id', user.id)
     .maybeSingle()
 
-  if (!profile || !isManager(profile.role)) redirect('/dashboard/settings')
+  if (!profile || !isManager(profile.role)) redirect('/dashboard')
 
   const [{ data: plans }, { data: scopes }, { data: services }, { data: held }, { data: memberPriceRows }] =
     await Promise.all([
@@ -107,7 +107,7 @@ export default async function MembershipsSettingsPage() {
   return (
     <div className="max-w-4xl">
       <PageHeader
-        eyebrow="Settings"
+        eyebrow="Catalog"
         title="Memberships"
         lede="A standing arrangement rather than a purchase: the member pays every period and the studio takes the benefit off every visit automatically. What a plan grants is read fresh on each visit; what a member pays is frozen on the day they joined."
         actions={<MembershipEditor services={serviceOptions} />}
