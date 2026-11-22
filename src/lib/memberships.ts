@@ -28,6 +28,7 @@
 import 'server-only'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { membershipDiscountCents, type MembershipProductPerk } from '@/types/memberships'
+import type { PerkAvailability } from '@/lib/member-product-perks'
 
 /** One priced service line on the visit, as `priceService()` produced it. */
 export interface MembershipBenefitLine {
@@ -239,7 +240,7 @@ export async function applyMembershipBenefit(opts: {
 
 /** One literal, for the same reason as HELD_MEMBERSHIP_SELECT. */
 const PERK_HOLDER_SELECT =
-  'id, membership_id, memberships!client_memberships_membership_id_fkey(id, name)'
+  'id, membership_id, current_period_start, memberships!client_memberships_membership_id_fkey(id, name)'
 
 /**
  * The retail perks (086) the client's current membership grants, or null when
@@ -251,11 +252,29 @@ const PERK_HOLDER_SELECT =
  * client at the till); this only answers what that person is entitled to.
  * "Current" is the same sentence as applyMembershipBenefit's: status 'active'
  * and the period has not run out.
+ *
+ * `availability` is how many times each LIMITED perk (087, max_uses set) has
+ * already won inside its window, from perk_uses_so_far(); unlimited perks are
+ * left out, and bestProductPerk treats a missing entry as unused. A failed
+ * count reads as spent rather than unused: a member losing one discount is a
+ * smaller mistake than a limited perk that never runs out. These counts only
+ * pick the likely winner; the use itself is spent by claim_perk_use(), which
+ * the checkout and the till call once the order exists and which counts
+ * again under a lock.
  */
+export interface CurrentMembershipPerks {
+  clientMembershipId: number
+  planName: string
+  /** The held membership's current period start, an ISO instant. */
+  currentPeriodStart: string
+  perks: MembershipProductPerk[]
+  availability: PerkAvailability[]
+}
+
 export async function currentMembershipPerks(
   clientId: string | null,
   now?: Date
-): Promise<{ clientMembershipId: number; planName: string; perks: MembershipProductPerk[] } | null> {
+): Promise<CurrentMembershipPerks | null> {
   if (!clientId) return null
   const supabase = createAdminClient()
   const at = now ?? new Date()
@@ -274,11 +293,37 @@ export async function currentMembershipPerks(
 
   const { data: perks } = await supabase
     .from('membership_product_perks')
-    .select('id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order')
+    .select(
+      'id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order, max_uses, uses_window, max_units_per_use'
+    )
     .eq('membership_id', plan.id)
     .order('sort_order', { ascending: true })
     .order('id', { ascending: true })
   if (!perks || perks.length === 0) return null
 
-  return { clientMembershipId: held.id, planName: plan.name, perks }
+  const availability = await Promise.all(
+    perks
+      .filter((p) => p.max_uses != null)
+      .map(async (p): Promise<PerkAvailability> => {
+        const { data, error } = await supabase.rpc('perk_uses_so_far', {
+          p_client_membership: held.id,
+          p_perk: p.id,
+          p_window: p.uses_window,
+          p_period_start: held.current_period_start,
+        })
+        if (error || typeof data !== 'number') {
+          console.error('perk_uses_so_far failed', error, { perkId: p.id })
+          return { perkId: p.id, usesSoFar: p.max_uses ?? 0 }
+        }
+        return { perkId: p.id, usesSoFar: data }
+      })
+  )
+
+  return {
+    clientMembershipId: held.id,
+    planName: plan.name,
+    currentPeriodStart: held.current_period_start,
+    perks,
+    availability,
+  }
 }

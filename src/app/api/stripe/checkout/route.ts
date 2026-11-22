@@ -128,7 +128,10 @@ export async function POST(request: NextRequest) {
     }))
   })
   const memberPerks = await currentMembershipPerks(user?.id ?? null)
-  const memberBest = memberPerks ? bestProductPerk(memberPerks.perks, units) : null
+  // A limited perk (087) whose uses are spent sits out; the next best competes.
+  let memberBest = memberPerks
+    ? bestProductPerk(memberPerks.perks, units, memberPerks.availability)
+    : null
   const memberCents = memberBest?.off ?? 0
 
   // The promo code, checked before any order row exists so a bad code leaves
@@ -157,22 +160,28 @@ export async function POST(request: NextRequest) {
   // discount per Checkout Session anyway, so this is also the only honest
   // reading of a code plus a running deal. Ties go coupon, then membership,
   // then multibuy: a code the shopper typed should not silently lose a tie,
-  // and a member's own entitlement outranks a deal anyone gets.
-  let source: 'coupon' | 'membership' | 'multibuy' | null = null
-  let discount = 0
-  if (coupon !== null && couponCents > 0) {
-    source = 'coupon'
-    discount = couponCents
+  // and a member's own entitlement outranks a deal anyone gets. A function,
+  // because a perk that loses its claim below (no use left) is priced out and
+  // the competition is run again without it.
+  type Source = 'coupon' | 'membership' | 'multibuy'
+  function settle(memberOff: number): { source: Source | null; discount: number } {
+    let won: Source | null = null
+    let cut = 0
+    if (coupon !== null && couponCents > 0) {
+      won = 'coupon'
+      cut = couponCents
+    }
+    if (memberOff > cut) {
+      won = 'membership'
+      cut = memberOff
+    }
+    if (multibuy && multibuyCents > cut) {
+      won = 'multibuy'
+      cut = multibuyCents
+    }
+    return { source: won, discount: cut }
   }
-  if (memberCents > discount) {
-    source = 'membership'
-    discount = memberCents
-  }
-  if (multibuy && multibuyCents > discount) {
-    source = 'multibuy'
-    discount = multibuyCents
-  }
-  const couponWins = source === 'coupon'
+  let { source, discount } = settle(memberCents)
 
   const { data: order, error: orderError } = await admin
     .from('orders')
@@ -220,6 +229,65 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'checkout_failed' }, { status: 500 })
   }
 
+  // A membership perk that won is claimed now, after the order exists and
+  // BEFORE Stripe sees a figure: claim_perk_use (087) takes a lock, counts
+  // the uses, and writes the redemption row only if one is left, so two
+  // checkouts racing for a last use cannot both get it. A perk refused here
+  // sits out and the competition is run again, as often as it takes, so the
+  // shopper still gets the best cut they are actually entitled to. An rpc
+  // that errors fails the checkout: online there is no one to make good an
+  // uncounted use, so none is ever given away.
+  if (source === 'membership' && memberPerks && memberBest) {
+    const pricedSource = source
+    const pricedCents = discount
+    const refused = new Set<number>()
+    while (source === 'membership' && memberBest) {
+      const { data: claimed, error: claimError } = await admin.rpc('claim_perk_use', {
+        p_perk: memberBest.perk.id,
+        p_client_membership: memberPerks.clientMembershipId,
+        p_client: user?.id ?? null,
+        p_order: order.id,
+        p_discount_cents: discount,
+        p_units: memberBest.units,
+      })
+      if (claimError || typeof claimed !== 'boolean') {
+        await admin.from('orders').delete().eq('id', order.id)
+        console.error('perk claim failed', claimError, { orderId: order.id })
+        return NextResponse.json({ error: 'checkout_failed' }, { status: 500 })
+      }
+      if (claimed) break
+      refused.add(memberBest.perk.id)
+      memberBest = bestProductPerk(
+        memberPerks.perks.filter((p) => !refused.has(p.id)),
+        units,
+        memberPerks.availability
+      )
+      ;({ source, discount } = settle(memberBest?.off ?? 0))
+    }
+
+    if (source !== pricedSource || discount !== pricedCents) {
+      // The order was written with the refused perk's figure. A pickup order
+      // online carries no tax or shipping, so the total is the lines less the
+      // new cut; the items trigger only recomputes it when a line moves.
+      const { error: repriceError } = await admin
+        .from('orders')
+        .update({
+          discount_cents: discount,
+          deal_discount_cents: discount,
+          discount_source: source,
+          client_membership_id: source === 'membership' ? memberPerks.clientMembershipId : null,
+          total_cents: Math.max(subtotal - discount, 0),
+        })
+        .eq('id', order.id)
+      if (repriceError) {
+        await admin.from('orders').delete().eq('id', order.id)
+        console.error('order reprice failed', repriceError, { orderId: order.id })
+        return NextResponse.json({ error: 'checkout_failed' }, { status: 500 })
+      }
+    }
+  }
+  const couponWins = source === 'coupon'
+
   const stripe = getStripe()
 
   // A winning promo code reaches Stripe as the promotion code itself, so
@@ -231,51 +299,67 @@ export async function POST(request: NextRequest) {
   // plan: line items stay at list price (the receipt shows the deal rather
   // than quietly cheaper bottles), and the webhook's recorded payment matches
   // the order total.
-  let discounts: ({ coupon: string } | { promotion_code: string })[] | undefined
-  if (couponWins) {
-    discounts = [{ promotion_code: coupon!.promotionCodeId }]
-  } else if (discount > 0) {
-    const dealName = source === 'membership' ? memberPerks!.planName : multibuy!.name
-    const stripeCoupon = await stripe.coupons.create({
-      amount_off: discount,
-      currency: 'usd',
-      duration: 'once',
-      name: dealName.slice(0, 40),
-    })
-    discounts = [{ coupon: stripeCoupon.id }]
-  }
+  // If Stripe refuses or is unreachable there is no session to expire, so
+  // nothing would ever cancel this order or hand back a perk use it claimed.
+  // Removing the order removes its redemption row with it (order_id cascades).
+  let session: Awaited<ReturnType<typeof stripe.checkout.sessions.create>>
+  try {
+    let discounts: ({ coupon: string } | { promotion_code: string })[] | undefined
+    if (couponWins) {
+      discounts = [{ promotion_code: coupon!.promotionCodeId }]
+    } else if (discount > 0) {
+      const dealName = source === 'membership' ? memberPerks!.planName : multibuy!.name
+      const stripeCoupon = await stripe.coupons.create({
+        amount_off: discount,
+        currency: 'usd',
+        duration: 'once',
+        name: dealName.slice(0, 40),
+      })
+      discounts = [{ coupon: stripeCoupon.id }]
+    }
 
-  const session = await stripe.checkout.sessions.create({
-    mode: 'payment',
-    customer_email: email,
-    ...(discounts ? { discounts } : {}),
-    line_items: lines.map((line) => {
-      const p = byId.get(line.productId)!
-      return {
-        quantity: line.qty,
-        price_data: {
-          currency: 'usd',
-          unit_amount: p.price_cents,
-          product_data: { name: p.name },
-        },
-      }
-    }),
-    // `amount` rides along for the confirmation page's ad pixel, which needs a
-    // value and has no other honest way to get one: the page is public, the
-    // order may be a guest's, and letting it look totals up by guessable id
-    // would leak every order's value to anyone counting upward. This is
-    // marketing telemetry only — the webhook remains the record of payment,
-    // and a client editing their own URL edits nothing but their own ad
-    // attribution. It is fixed before Stripe has priced the session, so for
-    // a promotion code it carries our estimate (couponCents), which can be
-    // a cent off Stripe's rounding; the order row carries Stripe's figure.
-    success_url: `${siteUrl()}/shop/confirmation?order=${order.id}&amount=${Math.max(
-      subtotal - discount,
-      0
-    )}`,
-    cancel_url: `${siteUrl()}/cart?cancelled=1`,
-    metadata: { kind: 'product_order', order_id: String(order.id) },
-  })
+    session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      customer_email: email,
+      ...(discounts ? { discounts } : {}),
+      line_items: lines.map((line) => {
+        const p = byId.get(line.productId)!
+        return {
+          quantity: line.qty,
+          price_data: {
+            currency: 'usd',
+            unit_amount: p.price_cents,
+            product_data: { name: p.name },
+          },
+        }
+      }),
+      // `amount` rides along for the confirmation page's ad pixel, which needs a
+      // value and has no other honest way to get one: the page is public, the
+      // order may be a guest's, and letting it look totals up by guessable id
+      // would leak every order's value to anyone counting upward. This is
+      // marketing telemetry only — the webhook remains the record of payment,
+      // and a client editing their own URL edits nothing but their own ad
+      // attribution. It is fixed before Stripe has priced the session, so for
+      // a promotion code it carries our estimate (couponCents), which can be
+      // a cent off Stripe's rounding; the order row carries Stripe's figure.
+      success_url: `${siteUrl()}/shop/confirmation?order=${order.id}&amount=${Math.max(
+        subtotal - discount,
+        0
+      )}`,
+      cancel_url: `${siteUrl()}/cart?cancelled=1`,
+      metadata: { kind: 'product_order', order_id: String(order.id) },
+      // Thirty minutes, Stripe's minimum (the default is a day). A member perk
+      // with a limit was claimed above when the order was written, and a
+      // shopper who backs out holds that use until the session expires and the
+      // webhook's checkout.session.expired cancels the order. Half an hour is
+      // as soon as Stripe lets it come back.
+      expires_at: Math.floor(Date.now() / 1000) + 30 * 60,
+    })
+  } catch (stripeError) {
+    await admin.from('orders').delete().eq('id', order.id)
+    console.error('stripe session create failed', stripeError, { orderId: order.id })
+    return NextResponse.json({ error: 'checkout_failed' }, { status: 500 })
+  }
 
   // What Stripe will actually take off, to the cent. For a promotion code
   // that is Stripe's own rounding of the percent, which the order must match
@@ -300,11 +384,12 @@ export async function POST(request: NextRequest) {
     })
     .eq('id', order.id)
 
-  // The deal's paper trail, for a multibuy win only: a membership win is
-  // recorded on the order itself (discount_source, client_membership_id), and
-  // a promo code is counted by Stripe. Written now rather than in the webhook,
-  // because an abandoned checkout leaves an unpaid order AND its redemption
-  // row behind, and both read as what they are: an order that never happened.
+  // The deal's paper trail. A promo code is counted by Stripe, and a
+  // membership perk win was written by claim_perk_use above, before Stripe.
+  // A multibuy win lands in promotion_redemptions, written now rather than in
+  // the webhook: an abandoned checkout leaves an unpaid order AND its
+  // redemption row behind, and both read as what they are, an order that
+  // never happened.
   if (multibuy && source === 'multibuy' && discount > 0) {
     await admin.from('promotion_redemptions').insert({
       promotion_id: multibuy.id,

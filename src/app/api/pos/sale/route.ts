@@ -314,25 +314,10 @@ export async function POST(request: NextRequest) {
       priceCents: l.unit_price_cents,
     }))
   )
-  const memberBest = memberPerks ? bestProductPerk(memberPerks.perks, units) : null
-  const memberCents = memberBest?.off ?? 0
-
-  const source: 'membership' | 'multibuy' | null =
-    memberCents > 0 && memberCents >= multibuyCents
-      ? 'membership'
-      : multibuy && multibuyCents > 0
-        ? 'multibuy'
-        : null
-  const promoDiscount = source === 'membership' ? memberCents : source === 'multibuy' ? multibuyCents : 0
-
-  // The manager's hand-typed discount rides on top of the winning deal but is
-  // verified HERE — a front-desk request simply loses the field, and the sum
-  // can never exceed the products being sold. A custom amount is already the
-  // desk's own figure; discounting it as well would be the same thing twice.
-  const manual = isManager(staff.role as UserRole)
-    ? Math.min(parsed.data.discountCents, Math.max(productSubtotal - promoDiscount, 0))
-    : 0
-  const discount = promoDiscount + manual
+  // A limited perk (087) whose uses are spent sits out; the next best competes.
+  let memberBest = memberPerks
+    ? bestProductPerk(memberPerks.perks, units, memberPerks.availability)
+    : null
 
   const { data: rateSetting } = await admin
     .from('site_settings')
@@ -344,12 +329,43 @@ export async function POST(request: NextRequest) {
   const parsedRate = Number(rateSetting?.text_value)
   const taxRate =
     Number.isFinite(parsedRate) && parsedRate >= 0 && parsedRate < 1 ? parsedRate : DEFAULT_TAX_RATE
-  // Tax follows what the customer actually pays, not the pre-deal figure. A
-  // custom amount is taxed only when the desk says it is goods — an add-on
-  // treatment or an old balance is not.
-  const taxableCents =
-    Math.max(productSubtotal - discount, 0) + (custom?.taxable ? customCents : 0)
-  const tax = Math.round(taxableCents * taxRate)
+
+  /**
+   * The whole price of the sale for a given member perk cut. A function,
+   * because a perk that loses its claim below (no use left) is priced out and
+   * the sale is priced again without it.
+   */
+  const staffRole = staff.role as UserRole
+  const typedDiscount = parsed.data.discountCents
+  function priceSale(memberCents: number) {
+    const source: 'membership' | 'multibuy' | null =
+      memberCents > 0 && memberCents >= multibuyCents
+        ? 'membership'
+        : multibuy && multibuyCents > 0
+          ? 'multibuy'
+          : null
+    const promoDiscount =
+      source === 'membership' ? memberCents : source === 'multibuy' ? multibuyCents : 0
+
+    // The manager's hand-typed discount rides on top of the winning deal but
+    // is verified HERE: a front-desk request simply loses the field, and the
+    // sum can never exceed the products being sold. A custom amount is
+    // already the desk's own figure; discounting it as well would be the same
+    // thing twice.
+    const manual = isManager(staffRole)
+      ? Math.min(typedDiscount, Math.max(productSubtotal - promoDiscount, 0))
+      : 0
+    const discount = promoDiscount + manual
+
+    // Tax follows what the customer actually pays, not the pre-deal figure. A
+    // custom amount is taxed only when the desk says it is goods; an add-on
+    // treatment or an old balance is not.
+    const taxableCents =
+      Math.max(productSubtotal - discount, 0) + (custom?.taxable ? customCents : 0)
+    const tax = Math.round(taxableCents * taxRate)
+    return { source, promoDiscount, discount, tax }
+  }
+  let { source, promoDiscount, discount, tax } = priceSale(memberBest?.off ?? 0)
 
   const { data: order, error: orderError } = await admin
     .from('orders')
@@ -383,6 +399,68 @@ export async function POST(request: NextRequest) {
       { error: 'sale_failed', message: 'Could not start that sale.' },
       { status: 500 }
     )
+  }
+
+  // A membership perk that won is claimed now, before the lines go in (the
+  // items trigger rolls the total up from discount_cents and tax_cents, so
+  // they must be final first). claim_perk_use (087) takes a lock, counts the
+  // uses and writes the redemption row only if one is left. A perk refused
+  // there, or one whose claim errors, sits out and the sale is priced again
+  // without it: the desk never hands over a discount that was not counted,
+  // and the receipt staff see comes from this response, so it shows what was
+  // actually charged.
+  if (source === 'membership' && memberPerks && memberBest) {
+    const pricedSource = source
+    const pricedDiscount = discount
+    const refused = new Set<number>()
+    while (source === 'membership' && memberBest) {
+      const { data: claimed, error: claimError } = await admin.rpc('claim_perk_use', {
+        p_perk: memberBest.perk.id,
+        p_client_membership: memberPerks.clientMembershipId,
+        p_client: clientId ?? null,
+        p_order: order.id,
+        p_discount_cents: promoDiscount,
+        p_units: memberBest.units,
+      })
+      if (claimError || typeof claimed !== 'boolean') {
+        void logError('pos/sale', claimError?.message ?? 'claim_perk_use returned no answer', {
+          step: 'perk_claim',
+          order_id: order.id,
+          perk_id: memberBest.perk.id,
+        })
+      } else if (claimed) {
+        break
+      }
+      refused.add(memberBest.perk.id)
+      memberBest = bestProductPerk(
+        memberPerks.perks.filter((p) => !refused.has(p.id)),
+        units,
+        memberPerks.availability
+      )
+      ;({ source, promoDiscount, discount, tax } = priceSale(memberBest?.off ?? 0))
+    }
+
+    if (source !== pricedSource || discount !== pricedDiscount) {
+      const { error: repriceError } = await admin
+        .from('orders')
+        .update({
+          tax_cents: tax,
+          discount_cents: discount,
+          discount_source: source,
+          client_membership_id: source === 'membership' ? memberPerks.clientMembershipId : null,
+          deal_discount_cents: promoDiscount,
+        })
+        .eq('id', order.id)
+      if (repriceError) {
+        // Still a cart: nothing paid, nothing off the shelf, so removing it is clean.
+        await admin.from('orders').delete().eq('id', order.id)
+        void logError('pos/sale', repriceError.message, { step: 'perk_reprice', order_id: order.id })
+        return NextResponse.json(
+          { error: 'sale_failed', message: 'Could not price that sale.' },
+          { status: 500 }
+        )
+      }
+    }
   }
 
   const { error: itemsError } = await admin.from('order_items').insert([
@@ -436,6 +514,9 @@ export async function POST(request: NextRequest) {
 
   if (payError || !paid) {
     void logError('pos/sale', payError.message, { step: 'mark_paid' })
+    // Nothing was sold, so a perk use claimed for it goes back now rather
+    // than waiting out claim_perk_use's in-flight window on a dead cart.
+    await admin.from('membership_perk_redemptions').delete().eq('order_id', order.id)
     return NextResponse.json(
       { error: 'sale_failed', message: 'The sale was not completed. Nothing was charged.' },
       { status: 500 }
@@ -461,8 +542,9 @@ export async function POST(request: NextRequest) {
     void logError('pos/sale', paymentError.message, { step: 'record_payment', order_id: paid.id })
   }
 
-  // The deal's paper trail — who it was and how much came off. A multibuy win
-  // only: a membership win is recorded on the order itself. Best effort: the
+  // The deal's paper trail: who it was and how much came off. A membership
+  // perk win was written by claim_perk_use above, before the sale went
+  // through; a multibuy win lands in promotion_redemptions. Best effort: the
   // sale stands either way.
   if (multibuy && source === 'multibuy' && promoDiscount > 0) {
     const { error: redemptionError } = await admin.from('promotion_redemptions').insert({

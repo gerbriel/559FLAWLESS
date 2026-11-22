@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Field, Input, Select } from '@/components/ui/field'
 import { formatMoney } from '@/lib/utils'
 import { normalizeCouponCode } from '@/lib/coupon-code'
-import { bestProductPerk, type PerkUnit } from '@/lib/member-product-perks'
+import { bestProductPerk, type PerkAvailability, type PerkUnit } from '@/lib/member-product-perks'
 import type { MembershipProductPerk } from '@/types/memberships'
 import { trackCartEvent } from './ClientAnalytics'
 import { trackMetaEvent } from './MetaPixelEvent'
@@ -41,7 +41,13 @@ export function CartView() {
   const [products, setProducts] = useState<CartProduct[]>([])
   // The signed-in shopper's current plan and its product perks, for a preview
   // line only. Checkout re-reads the membership and decides on the server.
-  const [member, setMember] = useState<{ name: string; perks: MembershipProductPerk[] } | null>(
+  const [member, setMember] = useState<{
+    name: string
+    perks: MembershipProductPerk[]
+    availability: PerkAvailability[]
+    /** Limited perks whose use count failed to load: left out of the figure. */
+    unchecked: number[]
+  } | null>(
     null
   )
   const [loading, setLoading] = useState(true)
@@ -131,7 +137,7 @@ export function CartView() {
       const { data } = await createClient()
         .from('client_memberships')
         .select(
-          'id, memberships!client_memberships_membership_id_fkey(name, membership_product_perks(id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order))'
+          'id, current_period_start, memberships!client_memberships_membership_id_fkey(name, membership_product_perks(id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order, max_uses, uses_window, max_units_per_use))'
         )
         .eq('client_id', userId)
         .eq('status', 'active')
@@ -144,7 +150,35 @@ export function CartView() {
         membership_product_perks: MembershipProductPerk[] | null
       } | null
       const perks = plan?.membership_product_perks ?? []
-      setMember(plan && perks.length > 0 ? { name: plan.name, perks } : null)
+      if (!data || !plan || perks.length === 0) {
+        setMember(null)
+        return
+      }
+
+      // Uses so far, for the perks that have a limit. A failed count is not
+      // read as zero (that would promise a discount checkout may refuse) nor
+      // as spent: the perk is left out of the figure, and if it would have
+      // won, the line says checkout decides.
+      const supabase = createClient()
+      const counted = await Promise.all(
+        perks
+          .filter((perk) => perk.max_uses !== null)
+          .map(async (perk) => {
+            const { data: uses, error } = await supabase.rpc('perk_uses_so_far', {
+              p_client_membership: data.id,
+              p_perk: perk.id,
+              p_window: perk.uses_window,
+              p_period_start: data.current_period_start,
+            })
+            return { perkId: perk.id, usesSoFar: !error && typeof uses === 'number' ? uses : null }
+          })
+      )
+      if (cancelled) return
+      const availability: PerkAvailability[] = counted.flatMap((c) =>
+        c.usesSoFar === null ? [] : [{ perkId: c.perkId, usesSoFar: c.usesSoFar }]
+      )
+      const unchecked = counted.filter((c) => c.usesSoFar === null).map((c) => c.perkId)
+      setMember({ name: plan.name, perks, availability, unchecked })
     }
 
     void load()
@@ -170,7 +204,25 @@ export function CartView() {
       priceCents: r.product.price_cents,
     }))
   )
-  const memberPerk = member ? bestProductPerk(member.perks, units) : null
+  // The winner as far as the counts that loaded can say. A perk whose count
+  // failed may still have uses: priced as if it did, and if it then wins,
+  // no figure is shown, only that checkout decides.
+  const likelyPerk = member ? bestProductPerk(member.perks, units, member.availability) : null
+  const memberPending = !!likelyPerk && !!member?.unchecked.includes(likelyPerk.perk.id)
+  const memberPerk =
+    member && !memberPending
+      ? bestProductPerk(
+          member.perks.filter((p) => !member.unchecked.includes(p.id)),
+          units,
+          member.availability
+        )
+      : null
+  // Nothing applies now, but something would have without the limits: the
+  // perk that would have won has been used up for this window.
+  const spentPerk =
+    member && !memberPerk && !memberPending
+      ? bestProductPerk(member.perks, units)?.perk ?? null
+      : null
 
   async function checkout(e: React.FormEvent) {
     e.preventDefault()
@@ -492,6 +544,12 @@ export function CartView() {
                     <dd className="tabular-nums">&minus;{formatMoney(memberPerk.off)}</dd>
                   </div>
                 )}
+                {memberPending && member && (
+                  <div className="flex justify-between text-[var(--color-muted)]">
+                    <dt>Member savings ({member.name})</dt>
+                    <dd>Checked at checkout</dd>
+                  </div>
+                )}
                 {coupon && (
                   <div className="flex justify-between text-[var(--color-muted)]">
                     <dt>Code {coupon}</dt>
@@ -503,6 +561,12 @@ export function CartView() {
                   <dd>Calculated at checkout</dd>
                 </div>
               </dl>
+              {spentPerk && member && (
+                <p className="mt-3 text-xs text-[var(--color-muted)]">
+                  Your {member.name} perk has been used this{' '}
+                  {spentPerk.uses_window === 'month' ? 'month' : 'period'}.
+                </p>
+              )}
               {memberPerk && (
                 <p className="mt-3 text-xs text-[var(--color-muted)]">
                   Your member savings are a preview. The best single discount applies at

@@ -97,7 +97,7 @@ export default async function MembershipsPage() {
       supabase.from('product_categories').select('id, name, is_active').order('name'),
       supabase
         .from('membership_product_perks')
-        .select('id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order')
+        .select('id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order, max_uses, uses_window, max_units_per_use')
         .order('sort_order')
         .order('id'),
     ])

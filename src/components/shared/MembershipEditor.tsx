@@ -44,11 +44,54 @@ export interface MembershipNamedOption {
  */
 type PerkDraft = {
   key: string
+  /**
+   * The saved row's id, or null for a perk added on this screen. Saving
+   * updates a saved row in place rather than replacing it: its uses (087)
+   * are counted by perk id, so a new id would hand every member fresh uses.
+   */
+  id: number | null
   scope: string
   kind: MembershipProductPerk['kind']
   percent: string
   buyQty: string
   label: string
+  /** 'none' is unlimited; otherwise the window the use count resets on. */
+  limit: 'none' | MembershipProductPerk['uses_window']
+  maxUses: string
+  maxUnits: string
+}
+
+/**
+ * The three limit columns as they will be saved, or a message saying which
+ * field is out of range. Blank "Items per use" means every eligible item.
+ */
+function perkLimits(
+  p: PerkDraft
+):
+  | {
+      ok: true
+      max_uses: number | null
+      uses_window: MembershipProductPerk['uses_window']
+      max_units_per_use: number | null
+    }
+  | { ok: false; message: string } {
+  const max_uses = p.limit === 'none' ? null : wholeIn(p.maxUses, 1, 99)
+  if (p.limit !== 'none' && max_uses === null) {
+    return { ok: false, message: 'A limited product perk needs a number of uses, from 1 to 99.' }
+  }
+  const max_units_per_use = p.maxUnits.trim() === '' ? null : wholeIn(p.maxUnits, 1, 99)
+  if (p.maxUnits.trim() !== '' && max_units_per_use === null) {
+    return {
+      ok: false,
+      message: 'Items per use is a whole number from 1 to 99, or blank for every eligible item.',
+    }
+  }
+  return {
+    ok: true,
+    max_uses,
+    uses_window: p.limit === 'month' ? 'month' : 'period',
+    max_units_per_use,
+  }
 }
 
 function perkScope(p: Pick<MembershipProductPerk, 'product_id' | 'category_id'>): string {
@@ -148,11 +191,15 @@ export function MembershipEditor({
       .sort((a, b) => a.sort_order - b.sort_order || a.id - b.id)
       .map((p) => ({
         key: `saved-${p.id}`,
+        id: p.id,
         scope: perkScope(p),
         kind: p.kind,
         percent: String(p.percent_off),
         buyQty: p.buy_qty === null ? '' : String(p.buy_qty),
         label: p.label ?? '',
+        limit: p.max_uses === null ? 'none' : p.uses_window,
+        maxUses: p.max_uses === null ? '' : String(p.max_uses),
+        maxUnits: p.max_units_per_use === null ? '' : String(p.max_units_per_use),
       }))
   )
 
@@ -165,11 +212,15 @@ export function MembershipEditor({
       ...cur,
       {
         key: `new-${crypto.randomUUID()}`,
+        id: null,
         scope: 'all',
         kind: 'percent_off',
         percent: '10',
         buyQty: '',
         label: '',
+        limit: 'none',
+        maxUses: '',
+        maxUnits: '',
       },
     ])
   }
@@ -179,9 +230,19 @@ export function MembershipEditor({
     const percent = wholeIn(p.percent, 1, 100)
     const buy = p.kind === 'buy_get' ? wholeIn(p.buyQty, 1, 10) : null
     if (percent === null || (p.kind === 'buy_get' && buy === null)) return null
+    const limits = perkLimits(p)
+    if (!limits.ok) return null
     const ids = scopeIds(p.scope)
     return describeProductPerk(
-      { kind: p.kind, percent_off: percent, buy_qty: buy, ...ids },
+      {
+        kind: p.kind,
+        percent_off: percent,
+        buy_qty: buy,
+        ...ids,
+        max_uses: limits.max_uses,
+        uses_window: limits.uses_window,
+        max_units_per_use: limits.max_units_per_use,
+      },
       {
         product: products.find((x) => x.id === ids.product_id)?.name,
         category: categories.find((x) => x.id === ids.category_id)?.name,
@@ -223,12 +284,16 @@ export function MembershipEditor({
       return
     }
     const parsedPerks: {
+      id: number | null
       kind: PerkDraft['kind']
       percent_off: number
       buy_qty: number | null
       product_id: number | null
       category_id: number | null
       label: string | null
+      max_uses: number | null
+      uses_window: MembershipProductPerk['uses_window']
+      max_units_per_use: number | null
     }[] = []
     for (const p of perks) {
       const percent = wholeIn(p.percent, 1, 100)
@@ -241,13 +306,22 @@ export function MembershipEditor({
         toast.error('A "buy some, get one cheaper" perk needs how many to buy, from 1 to 10.')
         return
       }
+      const limits = perkLimits(p)
+      if (!limits.ok) {
+        toast.error(limits.message)
+        return
+      }
       const ids = scopeIds(p.scope)
       parsedPerks.push({
+        id: p.id,
         kind: p.kind,
         percent_off: percent,
         buy_qty: buy,
         ...ids,
         label: p.label.trim() || null,
+        max_uses: limits.max_uses,
+        uses_window: limits.uses_window,
+        max_units_per_use: limits.max_units_per_use,
       })
     }
     if (
@@ -332,18 +406,59 @@ export function MembershipEditor({
       )
     }
 
-    // Product perks, replaced wholesale too. Order on the screen is the order
-    // on the plan card.
-    const { error: clearPerksError } = await supabase
-      .from('membership_product_perks')
-      .delete()
-      .eq('membership_id', saved.id)
-    let perksError = clearPerksError
-    if (!clearPerksError && parsedPerks.length > 0) {
-      const { error: insertPerksError } = await supabase
+    // Product perks, NOT replaced wholesale like the scope and the prices: a
+    // limited perk's uses (087) are counted by perk id, so deleting and
+    // reinserting would give every member their uses back on every save.
+    // Saved rows are updated in place by id, new ones inserted, and only the
+    // rows the manager removed are deleted (their use history stays, with
+    // perk_id gone null). Order on the screen is the order on the plan card.
+    let perksError: { message: string } | null = null
+    const keptIds = new Set(
+      parsedPerks.flatMap((p) => (p.id !== null ? [p.id] : []))
+    )
+    const removedIds = isNew
+      ? []
+      : productPerks.map((p) => p.id).filter((id) => !keptIds.has(id))
+    if (removedIds.length > 0) {
+      const { error: removeError } = await supabase
         .from('membership_product_perks')
-        .insert(parsedPerks.map((p, i) => ({ ...p, membership_id: saved.id, sort_order: i })))
-      perksError = insertPerksError
+        .delete()
+        .eq('membership_id', saved.id)
+        .in('id', removedIds)
+      perksError = removeError
+    }
+    // A perk inserted now gets its id written back into the draft, so the
+    // next save from this still-open editor updates it instead of adding it
+    // a second time. parsedPerks is built from `perks` in order, so index i
+    // is the same draft in both.
+    const insertedIds = new Map<string, number>()
+    for (const [i, { id, ...fields }] of parsedPerks.entries()) {
+      if (perksError) break
+      const row = { ...fields, membership_id: saved.id, sort_order: i }
+      if (id !== null && !isNew) {
+        const { error: updateError } = await supabase
+          .from('membership_product_perks')
+          .update(row)
+          .eq('id', id)
+          .eq('membership_id', saved.id)
+        perksError = updateError
+      } else {
+        const { data: inserted, error: insertError } = await supabase
+          .from('membership_product_perks')
+          .insert(row)
+          .select('id')
+          .single()
+        perksError = insertError
+        if (inserted) insertedIds.set(perks[i].key, inserted.id)
+      }
+    }
+    if (insertedIds.size > 0) {
+      setPerks((cur) =>
+        cur.map((d) => {
+          const newId = insertedIds.get(d.key)
+          return newId === undefined ? d : { ...d, id: newId }
+        })
+      )
     }
 
     setBusy(false)
@@ -748,6 +863,57 @@ export function MembershipEditor({
                             />
                           </Field>
                         )}
+                        <Field label="Limit" htmlFor={`perk_limit_${p.key}`}>
+                          <Select
+                            id={`perk_limit_${p.key}`}
+                            value={p.limit}
+                            onChange={(e) => {
+                              const v = e.target.value
+                              const limit = v === 'period' || v === 'month' ? v : 'none'
+                              setPerk(i, {
+                                limit,
+                                maxUses: limit !== 'none' && !p.maxUses ? '1' : p.maxUses,
+                              })
+                            }}
+                          >
+                            <option value="none">Unlimited</option>
+                            <option value="period">Per membership period</option>
+                            <option value="month">Per calendar month</option>
+                          </Select>
+                        </Field>
+                        {p.limit !== 'none' && (
+                          <Field
+                            label="Uses"
+                            htmlFor={`perk_uses_${p.key}`}
+                            hint="1 to 99. One use is one order where this perk is the discount."
+                          >
+                            <Input
+                              id={`perk_uses_${p.key}`}
+                              type="number"
+                              min={1}
+                              max={99}
+                              step={1}
+                              value={p.maxUses}
+                              onChange={(e) => setPerk(i, { maxUses: e.target.value })}
+                            />
+                          </Field>
+                        )}
+                        <Field
+                          label="Items per use"
+                          htmlFor={`perk_units_${p.key}`}
+                          hint="Leave blank to discount every eligible item."
+                        >
+                          <Input
+                            id={`perk_units_${p.key}`}
+                            type="number"
+                            min={1}
+                            max={99}
+                            step={1}
+                            value={p.maxUnits}
+                            placeholder="Every item"
+                            onChange={(e) => setPerk(i, { maxUnits: e.target.value })}
+                          />
+                        </Field>
                         <Field
                           label="Label"
                           htmlFor={`perk_label_${p.key}`}

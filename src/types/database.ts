@@ -60,6 +60,7 @@ import type {
   MembershipService,
   MembershipMemberPrice,
   MembershipProductPerk,
+  MembershipPerkRedemption,
   MembershipStatus,
   MembershipCharge,
   MembershipRedemption,
@@ -2211,6 +2212,23 @@ export type Database = {
           Rel<'membership_product_perks_category_id_fkey', ['category_id'], 'product_categories', ['id']>,
         ]
       >
+      // One row per order a product perk won, added in 087. Uses are counted
+      // from here through perk_uses_so_far(); claim_perk_use() writes them.
+      // perk_id goes null when the perk is deleted.
+      membership_perk_redemptions: TableDef<
+        MembershipPerkRedemption,
+        [
+          Rel<'membership_perk_redemptions_perk_id_fkey', ['perk_id'], 'membership_product_perks', ['id']>,
+          Rel<
+            'membership_perk_redemptions_client_membership_id_fkey',
+            ['client_membership_id'],
+            'client_memberships',
+            ['id']
+          >,
+          ToProfile<'membership_perk_redemptions', 'client_id'>,
+          Rel<'membership_perk_redemptions_order_id_fkey', ['order_id'], 'orders', ['id'], true>,
+        ]
+      >
       client_memberships: TableDef<
         ClientMembership,
         [
@@ -2874,6 +2892,38 @@ export type Database = {
        * back to its normal price ('repriced'); a past one is left as it was
        * ('returned'). Manager and up.
        */
+      /**
+       * How many orders one product perk has won on one membership inside
+       * its window (087): 'period' from p_period_start, 'month' from the
+       * first of the month in America/Los_Angeles. Cancelled orders do not
+       * count. Own membership or staff; service role (JWT role claim) always.
+       */
+      perk_uses_so_far: {
+        Args: {
+          p_client_membership: number
+          p_perk: number
+          p_window: 'period' | 'month'
+          p_period_start: string
+        }
+        Returns: number
+      }
+      /**
+       * Spend one use of a product perk on an order (087), under an advisory
+       * lock. True: the redemption row is written (or already was for this
+       * order). False: no use left, price the order without the perk.
+       * Service role only.
+       */
+      claim_perk_use: {
+        Args: {
+          p_perk: number
+          p_client_membership: number
+          p_client: string | null
+          p_order: number
+          p_discount_cents: number
+          p_units: number
+        }
+        Returns: boolean
+      }
       /** Delete an online hold whose deposit was never paid (080). Service role only. */
       release_unpaid_hold: { Args: { p_appointment: string }; Returns: boolean }
       /** The sweep behind release_unpaid_hold; returns how many it released. */

@@ -76,6 +76,35 @@ export type MembershipProductPerk = {
   category_id: number | null
   label: string | null
   sort_order: number
+  /** Orders this perk may win inside uses_window (087). Null is unlimited. */
+  max_uses: number | null
+  /** 'period' is the member's current period; 'month' the calendar month in the studio's zone. */
+  uses_window: 'period' | 'month'
+  /**
+   * The most eligible units one use may discount (087). Null is unlimited.
+   * percent_off takes the dearest N; buy_get discounts at most N units.
+   */
+  max_units_per_use: number | null
+}
+
+/**
+ * One order a product perk won (087). Uses are counted from these rows,
+ * joined to orders that are not cancelled, so an abandoned checkout gives its
+ * use back once the webhook cancels the order. Written only by
+ * claim_perk_use().
+ */
+export type MembershipPerkRedemption = {
+  id: number
+  /** Null once the perk is deleted; the row stays for the reports. */
+  perk_id: number | null
+  client_membership_id: number
+  client_id: string | null
+  order_id: number
+  /** The deal's own cut, integer cents. */
+  discount_cents: number
+  /** Units the perk discounted on this order. */
+  units: number
+  created_at: string
 }
 
 /** Somebody holding a plan. */
@@ -267,6 +296,48 @@ function perkCutPhrase(percentOff: number): string {
  * an empty gap.
  */
 export function describeProductPerk(
+  perk: Pick<MembershipProductPerk, 'kind' | 'percent_off' | 'buy_qty' | 'product_id' | 'category_id'> &
+    Partial<Pick<MembershipProductPerk, 'max_uses' | 'uses_window' | 'max_units_per_use'>>,
+  names: { product?: string | null; category?: string | null }
+): string {
+  const limit = describePerkLimit(perk)
+  return limit ? `${describePerkOffer(perk, names)}, ${limit}` : describePerkOffer(perk, names)
+}
+
+const COUNT_WORDS = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten']
+
+/** "once", "twice", "3 times". */
+function timesPhrase(n: number): string {
+  if (n === 1) return 'once'
+  if (n === 2) return 'twice'
+  return `up to ${n} times`
+}
+
+/**
+ * The limit on a perk (087) in plain words, or '' when it has none:
+ * "once per period", "up to 3 times a month", "one item per use",
+ * "twice a month, up to two items per use". No em dash, no leading comma;
+ * describeProductPerk joins it to the offer.
+ */
+export function describePerkLimit(
+  perk: Partial<Pick<MembershipProductPerk, 'max_uses' | 'uses_window' | 'max_units_per_use'>>
+): string {
+  const parts: string[] = []
+  const uses = perk.max_uses == null ? 0 : Math.trunc(perk.max_uses)
+  if (uses >= 1) {
+    parts.push(`${timesPhrase(uses)} ${perk.uses_window === 'month' ? 'a month' : 'per period'}`)
+  }
+  const units = perk.max_units_per_use == null ? 0 : Math.trunc(perk.max_units_per_use)
+  if (units >= 1) {
+    const word = COUNT_WORDS[units] ?? String(units)
+    const noun = units === 1 ? 'item' : 'items'
+    parts.push(units === 1 ? `${word} ${noun} per use` : `up to ${word} ${noun} per use`)
+  }
+  return parts.join(', ')
+}
+
+/** The offer itself, without its limit. */
+function describePerkOffer(
   perk: Pick<MembershipProductPerk, 'kind' | 'percent_off' | 'buy_qty' | 'product_id' | 'category_id'>,
   names: { product?: string | null; category?: string | null }
 ): string {

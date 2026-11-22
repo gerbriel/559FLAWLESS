@@ -25,7 +25,7 @@ import { createClient } from '@/lib/supabase/client'
 import { cn, formatMoney } from '@/lib/utils'
 import { formatDateTimeInTimeZone } from '@/lib/time'
 import { membershipDiscountCents, type MembershipProductPerk } from '@/types/memberships'
-import { bestProductPerk, type PerkUnit } from '@/lib/member-product-perks'
+import { bestProductPerk, type PerkAvailability, type PerkUnit } from '@/lib/member-product-perks'
 import { sellPackage } from '@/app/dashboard/packages/actions'
 import { packageErrorMessage } from '@/app/dashboard/packages/errors'
 import {
@@ -264,6 +264,10 @@ export function PointOfSale({
     prices: Map<number, number>
     /** Retail perks (086), for the retail preview. */
     perks: MembershipProductPerk[]
+    /** Uses so far of each limited perk, this window. */
+    availability: PerkAvailability[]
+    /** Limited perks whose use count failed to load: left out of the preview. */
+    unchecked: number[]
   } | null>(null)
   const [applyTo, setApplyTo] = useState<string[]>([])
 
@@ -283,12 +287,42 @@ export function PointOfSale({
       const { data: held } = await supabase
         .from('client_memberships')
         .select(
-          'id, membership_id, current_period_start, memberships!client_memberships_membership_id_fkey(name, included_sessions_per_period, service_discount_pct, membership_services(service_id), membership_member_prices(service_id, price_cents), membership_product_perks(id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order)), membership_redemptions(sessions, redeemed_for_period_start)'
+          'id, membership_id, current_period_start, memberships!client_memberships_membership_id_fkey(name, included_sessions_per_period, service_discount_pct, membership_services(service_id), membership_member_prices(service_id, price_cents), membership_product_perks(id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order, max_uses, uses_window, max_units_per_use)), membership_redemptions(sessions, redeemed_for_period_start)'
         )
         .eq('client_id', customerId)
         .eq('status', 'active')
         .gt('current_period_end', new Date().toISOString())
         .maybeSingle()
+      const heldPerks =
+        ((held?.memberships as unknown as {
+          membership_product_perks: MembershipProductPerk[] | null
+        } | null)?.membership_product_perks ?? [])
+      // Staff may count any member's uses. A failed count is not read as
+      // zero (the sale route treats a failure as no discount, so the preview
+      // would promise one the receipt does not give): the perk is left out of
+      // the preview, and if it would have won, the line says the sale decides.
+      const counted = held
+        ? await Promise.all(
+            heldPerks
+              .filter((perk) => perk.max_uses !== null)
+              .map(async (perk) => {
+                const { data: uses, error } = await supabase.rpc('perk_uses_so_far', {
+                  p_client_membership: held.id,
+                  p_perk: perk.id,
+                  p_window: perk.uses_window,
+                  p_period_start: held.current_period_start,
+                })
+                return {
+                  perkId: perk.id,
+                  usesSoFar: !error && typeof uses === 'number' ? uses : null,
+                }
+              })
+          )
+        : []
+      const availability: PerkAvailability[] = counted.flatMap((c) =>
+        c.usesSoFar === null ? [] : [{ perkId: c.perkId, usesSoFar: c.usesSoFar }]
+      )
+      const unchecked = counted.filter((c) => c.usesSoFar === null).map((c) => c.perkId)
       if (alive) {
         const plan = held?.memberships as unknown as {
           name: string
@@ -312,6 +346,8 @@ export function PointOfSale({
             pct: plan.service_discount_pct,
             prices: new Map(plan.membership_member_prices.map((r) => [r.service_id, r.price_cents])),
             perks: plan.membership_product_perks ?? [],
+            availability,
+            unchecked,
           })
         } else {
           setMembership(null)
@@ -494,9 +530,37 @@ export function PointOfSale({
         }))
       )
     : []
+  // The winner as far as the counts that loaded can say. A perk whose count
+  // failed is priced as if it had uses; if it then wins, no figure is shown.
+  const likelyRetailPerk =
+    sellingRetail && membership
+      ? bestProductPerk(membership.perks, retailUnits, membership.availability)
+      : null
+  const retailPerkPending =
+    !!likelyRetailPerk && !!membership?.unchecked.includes(likelyRetailPerk.perk.id)
   const retailPerk =
-    sellingRetail && membership ? bestProductPerk(membership.perks, retailUnits) : null
+    sellingRetail && membership && !retailPerkPending
+      ? bestProductPerk(
+          membership.perks.filter((p) => !membership.unchecked.includes(p.id)),
+          retailUnits,
+          membership.availability
+        )
+      : null
   const perkCut = retailPerk?.off ?? 0
+  const perkWindow = (perk: MembershipProductPerk) =>
+    perk.uses_window === 'month' ? 'month' : 'period'
+  // "(used 1 of 3 this period)" beside a limited winning perk.
+  const retailPerkUses =
+    retailPerk && membership && retailPerk.perk.max_uses !== null
+      ? `(used ${
+          membership.availability.find((a) => a.perkId === retailPerk.perk.id)?.usesSoFar ?? 0
+        } of ${retailPerk.perk.max_uses} this ${perkWindow(retailPerk.perk)})`
+      : null
+  // Nothing applies, but a perk would have without its limit: it is used up.
+  const spentRetailPerk =
+    sellingRetail && membership && !retailPerk && !retailPerkPending
+      ? bestProductPerk(membership.perks, retailUnits)?.perk ?? null
+      : null
 
   const afterDiscount = Math.max(subtotal - memberCut - perkCut - manualDiscount, 0)
   // A custom amount is taxed only when the desk ticks that it is goods.
@@ -1598,8 +1662,23 @@ export function PointOfSale({
                 <dt className="text-[var(--color-muted)]">
                   Member perk, {membership.name}{' '}
                   <span className="text-xs">(preview)</span>
+                  {retailPerkUses && <span className="text-xs"> {retailPerkUses}</span>}
                 </dt>
                 <dd className="tabular-nums">&minus;{formatMoney(perkCut)}</dd>
+              </div>
+            )}
+            {retailPerkPending && membership && (
+              <div className="flex justify-between text-[var(--color-muted)]">
+                <dt>Member perk, {membership.name}</dt>
+                <dd>Checked at checkout</dd>
+              </div>
+            )}
+            {spentRetailPerk && membership && (
+              <div className="text-xs text-[var(--color-muted)]">
+                <dt className="sr-only">Member perk</dt>
+                <dd>
+                  Their {membership.name} perk has been used this {perkWindow(spentRetailPerk)}.
+                </dd>
               </div>
             )}
             {manualDiscount > 0 && (

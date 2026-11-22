@@ -27,6 +27,23 @@ const STUDIO_TZ = 'America/Los_Angeles'
 const VISITS_CONFIRMED =
   'Visits are booked separately, and each one is confirmed by the studio before it is on the calendar.'
 
+/** A perk row with the names it is scoped to, as the embeds return it. */
+type NamedPerk = MembershipProductPerk & {
+  products: { name: string } | null
+  product_categories: { name: string } | null
+}
+
+/** The sentence a perk prints: its own label, or the plain description. */
+function perkLine(perk: NamedPerk): string {
+  return (
+    perk.label?.trim() ||
+    describeProductPerk(perk, {
+      product: perk.products?.name,
+      category: perk.product_categories?.name,
+    })
+  )
+}
+
 interface Props {
   searchParams: Promise<{ joined?: string; later?: string }>
 }
@@ -56,7 +73,7 @@ export default async function MembershipsPage({ searchParams }: Props) {
     supabase
       .from('memberships')
       .select(
-        'id, name, description, price_cents, period_months, included_sessions_per_period, auto_renew_offered, membership_services(services(name)), membership_member_prices(price_cents, services(name, price_cents)), membership_product_perks(id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order, products(name), product_categories(name))'
+        'id, name, description, price_cents, period_months, included_sessions_per_period, auto_renew_offered, membership_services(services(name)), membership_member_prices(price_cents, services(name, price_cents)), membership_product_perks(id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order, max_uses, uses_window, max_units_per_use, products(name), product_categories(name))'
       )
       .eq('is_active', true)
       .eq('sell_online', true)
@@ -71,7 +88,7 @@ export default async function MembershipsPage({ searchParams }: Props) {
     ? await supabase
         .from('client_memberships')
         .select(
-          'id, status, current_period_start, current_period_end, auto_renew, cancel_at_period_end, stripe_subscription_id, memberships!client_memberships_membership_id_fkey(name, included_sessions_per_period), membership_redemptions(sessions, redeemed_for_period_start)'
+          'id, status, current_period_start, current_period_end, auto_renew, cancel_at_period_end, stripe_subscription_id, memberships!client_memberships_membership_id_fkey(name, included_sessions_per_period, membership_product_perks(id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order, max_uses, uses_window, max_units_per_use, products(name), product_categories(name))), membership_redemptions(sessions, redeemed_for_period_start)'
         )
         .eq('client_id', user.id)
         .in('status', ['active', 'past_due'])
@@ -85,7 +102,11 @@ export default async function MembershipsPage({ searchParams }: Props) {
   const pastDue = mine?.status === 'past_due'
 
   const minePlan = mine?.memberships as unknown as
-    | { name: string; included_sessions_per_period: number }
+    | {
+        name: string
+        included_sessions_per_period: number
+        membership_product_perks: NamedPerk[] | null
+      }
     | null
   const used = ((mine?.membership_redemptions ?? []) as {
     sessions: number
@@ -94,6 +115,32 @@ export default async function MembershipsPage({ searchParams }: Props) {
     .filter((r) => r.redeemed_for_period_start === mine?.current_period_start)
     .reduce((n, r) => n + r.sessions, 0)
   const left = minePlan ? Math.max(minePlan.included_sessions_per_period - used, 0) : 0
+
+  // The holder's own retail perks, each limited one with what is left of it
+  // this window. A failed count shows no figure rather than a wrong one.
+  const minePerks = await Promise.all(
+    [...(minePlan?.membership_product_perks ?? [])]
+      .sort((a, b) => a.sort_order - b.sort_order || a.id - b.id)
+      .map(async (perk) => {
+        if (!mine || perk.max_uses === null) return { perk, usesLine: null }
+        const { data: uses, error } = await supabase.rpc('perk_uses_so_far', {
+          p_client_membership: mine.id,
+          p_perk: perk.id,
+          p_window: perk.uses_window,
+          p_period_start: mine.current_period_start,
+        })
+        if (error || typeof uses !== 'number') return { perk, usesLine: null }
+        const span = perk.uses_window === 'month' ? 'this month' : 'this period'
+        const remaining = Math.max(perk.max_uses - uses, 0)
+        return {
+          perk,
+          usesLine:
+            remaining === 0
+              ? `Used ${span}`
+              : `${remaining} of ${perk.max_uses} ${perk.max_uses === 1 ? 'use' : 'uses'} left ${span}`,
+        }
+      })
+  )
 
   const dateLabel = (iso: string) =>
     new Date(iso).toLocaleDateString('en-US', {
@@ -163,6 +210,22 @@ export default async function MembershipsPage({ searchParams }: Props) {
               {VISITS_CONFIRMED}
             </p>
 
+            {minePerks.length > 0 && (
+              <ul className="mt-4 space-y-1.5 text-sm">
+                {minePerks.map(({ perk, usesLine }) => (
+                  <li key={perk.id} className="flex gap-2.5">
+                    <Check className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-accent)]" strokeWidth={2} />
+                    <span>
+                      {perkLine(perk)}
+                      {usesLine && (
+                        <span className="text-[var(--color-muted)]"> · {usesLine}</span>
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
             {!pastDue && (
               <ButtonLink href={left > 0 ? '/book?membership=1' : '/book'} className="mt-6">
                 {left > 0 ? 'Book a covered visit' : 'Book a visit'}
@@ -193,10 +256,7 @@ export default async function MembershipsPage({ searchParams }: Props) {
                 price_cents: number
                 services: { name: string; price_cents: number } | null
               }[]
-              const productPerks = ((p.membership_product_perks ?? []) as unknown as (MembershipProductPerk & {
-                products: { name: string } | null
-                product_categories: { name: string } | null
-              })[])
+              const productPerks = ((p.membership_product_perks ?? []) as unknown as NamedPerk[])
                 .slice()
                 .sort((a, b) => a.sort_order - b.sort_order || a.id - b.id)
               const months = p.period_months === 1 ? 'month' : `${p.period_months} months`
@@ -251,11 +311,7 @@ export default async function MembershipsPage({ searchParams }: Props) {
                       <li key={`perk-${perk.id}`} className="flex gap-2.5">
                         <Check className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-accent)]" strokeWidth={2} />
                         <span>
-                          {perk.label?.trim() ||
-                            describeProductPerk(perk, {
-                              product: perk.products?.name,
-                              category: perk.product_categories?.name,
-                            })}
+                          {perkLine(perk)}
                         </span>
                       </li>
                     ))}
