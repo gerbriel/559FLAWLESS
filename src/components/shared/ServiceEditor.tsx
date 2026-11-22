@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { revalidatePublic } from '@/lib/revalidate-public'
 import { toast } from 'sonner'
 import { Trash2, Plus, Lock } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
@@ -526,6 +527,7 @@ export function ServiceEditor({
           forms.failed.length === 1 ? 'one form was' : `${forms.failed.length} forms were`
         } not updated.`
       )
+      void revalidatePublic()
       router.refresh()
       return
     }
@@ -537,6 +539,7 @@ export function ServiceEditor({
     toast.success((isNew ? `${payload.name} added.` : 'Saved.') + formNote)
     setOpen(false)
     if (isNew) resetDraft()
+    void revalidatePublic()
     router.refresh()
   }
 
@@ -593,6 +596,7 @@ export function ServiceEditor({
     }
     toast.success(`${service.name} deleted.`)
     setOpen(false)
+    void revalidatePublic()
     router.refresh()
   }
 

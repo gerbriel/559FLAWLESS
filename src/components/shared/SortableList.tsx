@@ -2,6 +2,7 @@
 
 import { useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
+import { revalidatePublic } from '@/lib/revalidate-public'
 import { toast } from 'sonner'
 import { ArrowDown, ArrowUp, GripVertical } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
@@ -127,6 +128,7 @@ export function SortableList<T extends SortableItem>({
       )
       return
     }
+    if (kind !== 'memberships') void revalidatePublic()
     router.refresh()
   }
 

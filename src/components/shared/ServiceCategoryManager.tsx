@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { revalidatePublic } from '@/lib/revalidate-public'
 import { toast } from 'sonner'
 import {
   ExternalLink,
@@ -777,6 +778,7 @@ export function ServiceCategoryManager({
       setBusy(false)
       toast.success(`${name} added.`)
       setEditing(null)
+      void revalidatePublic()
       router.refresh()
       return
     }
@@ -794,6 +796,7 @@ export function ServiceCategoryManager({
           links.failed.length === 1 ? 'one form was' : `${links.failed.length} forms were`
         } not updated.`
       )
+      void revalidatePublic()
       router.refresh()
       return
     }
@@ -806,6 +809,7 @@ export function ServiceCategoryManager({
           : '')
     )
     setEditing(null)
+    void revalidatePublic()
     router.refresh()
   }
 
@@ -922,6 +926,7 @@ export function ServiceCategoryManager({
     } else {
       toast.success(`${plural(outcomes.length, 'service', 'services')} updated.`)
     }
+    void revalidatePublic()
     router.refresh()
   }
 
@@ -943,6 +948,7 @@ export function ServiceCategoryManager({
         ? `${category.name} is off the site. Its services keep their prices and their history.`
         : `${category.name} is back on the site.`
     )
+    void revalidatePublic()
     router.refresh()
   }
 
@@ -970,6 +976,7 @@ export function ServiceCategoryManager({
     const name = categories.find((c) => c.id === to)?.name ?? 'the other category'
     toast.success(`${plural(n, 'service', 'services')} moved to ${name}.`)
     setMoveTarget('')
+    void revalidatePublic()
     router.refresh()
   }
 
@@ -987,6 +994,7 @@ export function ServiceCategoryManager({
     }
     toast.success(`${category.name} deleted.`)
     setEditing(null)
+    void revalidatePublic()
     router.refresh()
   }
 
