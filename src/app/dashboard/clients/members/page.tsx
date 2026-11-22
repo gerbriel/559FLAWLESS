@@ -14,10 +14,11 @@ import {
 } from '@/components/ui/dashboard'
 import { SectionTabs } from '@/components/layout/SectionTabs'
 import { MemberRenewalToggle } from '@/components/shared/MemberRenewalToggle'
-import { formatDateTimeInTimeZone, requestNow } from '@/lib/time'
+import { formatDateInTimeZone, formatDateTimeInTimeZone, requestNow } from '@/lib/time'
 import { chunked, needsFollowUp } from '@/lib/member-follow-up'
 import { isFrontDesk, isManager, type UserRole } from '@/types/database'
 import {
+  MEMBERSHIP_CHARGE_STATUS_LABELS,
   MEMBERSHIP_STATUS_LABELS,
   allowancesLeftLabel,
   includedAllowances,
@@ -25,6 +26,7 @@ import {
   membershipIsCurrent,
   type ClientMembership,
   type MembershipBookingIntent,
+  type MembershipChargeStatus,
 } from '@/types/memberships'
 
 export const dynamic = 'force-dynamic'
@@ -40,7 +42,7 @@ const ENDED_LIMIT = 200
  * `string` collapses the result.
  */
 const MEMBER_SELECT =
-  'id, client_id, membership_id, status, current_period_start, current_period_end, cancel_at_period_end, ended_at, auto_renew, stripe_subscription_id, profiles!client_memberships_client_id_fkey(first_name, last_name, email, phone), memberships!client_memberships_membership_id_fkey(name, included_sessions_per_period, period_months, membership_services(service_id, sessions_per_period, services(name))), membership_redemptions(service_id, sessions, redeemed_for_period_start)'
+  'id, client_id, membership_id, status, current_period_start, current_period_end, cancel_at_period_end, ended_at, auto_renew, stripe_subscription_id, profiles!client_memberships_client_id_fkey(first_name, last_name, email, phone), memberships!client_memberships_membership_id_fkey(name, included_sessions_per_period, period_months, membership_services(service_id, sessions_per_period, services(name))), membership_redemptions(service_id, sessions, redeemed_for_period_start), membership_charges(period_start, status)'
 
 const FILTERS = ['all', 'needs_follow_up', 'payment_failed', 'renewing', 'ended'] as const
 type Filter = (typeof FILTERS)[number]
@@ -55,7 +57,7 @@ const FILTER_LABELS: Record<Filter, string> = {
 
 /** Same grid for the header row and every row under it. Stacks below `lg`. */
 const COLUMNS =
-  'lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1.3fr)_minmax(0,0.8fr)_minmax(0,1.1fr)_minmax(0,1.3fr)_minmax(0,1fr)_auto]'
+  'lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1.3fr)_minmax(0,0.8fr)_minmax(0,0.6fr)_minmax(0,1.1fr)_minmax(0,1.3fr)_minmax(0,1fr)_auto]'
 
 /**
  * Link pills, the same shape as the roster's: the filter lives in the URL
@@ -84,6 +86,7 @@ type MemberRow = Pick<
   profiles: unknown
   memberships: unknown
   membership_redemptions: unknown
+  membership_charges: unknown
 }
 
 type Person = {
@@ -101,6 +104,16 @@ type Plan = {
     | null
 }
 type Spent = { service_id: number | null; sessions: number; redeemed_for_period_start: string }
+type Due = { period_start: string; status: MembershipChargeStatus }
+
+/** The same tones the client record's charge list uses. */
+const DUES_TONES: Record<MembershipChargeStatus, 'success' | 'warning' | 'danger' | 'neutral'> = {
+  paid: 'success',
+  due: 'warning',
+  failed: 'danger',
+  refunded: 'neutral',
+  void: 'neutral',
+}
 
 interface Props {
   searchParams: Promise<{ filter?: string; page?: string }>
@@ -230,6 +243,13 @@ export default async function MembersPage({ searchParams }: Props) {
     const leftLabel = allowancesLeftLabel(allowances)
     const visit = nextVisit.get(m.client_id) ?? null
     const renewing = m.status === 'active' && m.auto_renew && !m.cancel_at_period_end
+    // The charge for the period they are in. Timestamps are compared as
+    // instants: PostgREST and the column do not always spell one alike.
+    const periodMs = Date.parse(m.current_period_start)
+    const dues =
+      ((m.membership_charges ?? []) as Due[]).find(
+        (c) => c.period_start === m.current_period_start || Date.parse(c.period_start) === periodMs
+      )?.status ?? null
     return {
       row: m,
       person: m.profiles as Person | null,
@@ -239,6 +259,7 @@ export default async function MembersPage({ searchParams }: Props) {
       current,
       visit,
       renewing,
+      dues,
       followUp: needsFollowUp(m, left, startsBy.get(m.client_id) ?? [], now),
     }
   }
@@ -275,13 +296,7 @@ export default async function MembersPage({ searchParams }: Props) {
   if (page > pageCount && shown.length > 0) redirect(hrefFor(pageCount))
   const pageRows = shown.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
-  const shortDate = (iso: string) =>
-    new Date(iso).toLocaleDateString('en-US', {
-      timeZone,
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    })
+  const shortDate = (iso: string) => formatDateInTimeZone(new Date(iso), timeZone)
 
   return (
     <div>
@@ -373,6 +388,7 @@ export default async function MembersPage({ searchParams }: Props) {
               <span>Member</span>
               <span>Plan</span>
               <span>Left this period</span>
+              <span>Dues</span>
               <span>Renewal</span>
               <span>Next visit</span>
               <span>Booking</span>
@@ -380,7 +396,7 @@ export default async function MembersPage({ searchParams }: Props) {
             </div>
 
             <ul className="divide-y divide-[var(--color-border)]">
-              {pageRows.map(({ row, person, plan, leftLabel, current, visit, renewing }) => {
+              {pageRows.map(({ row, person, plan, leftLabel, current, visit, renewing, dues }) => {
                 const name = `${person?.first_name ?? ''} ${person?.last_name ?? ''}`.trim()
                 const label = name || person?.email || 'Unnamed client'
                 const isEnded = row.status === 'cancelled' || row.status === 'expired'
@@ -449,6 +465,17 @@ export default async function MembersPage({ searchParams }: Props) {
                           {leftLabel}
                           <span className="lg:hidden"> this period</span>
                         </>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="text-[var(--color-muted)] lg:hidden">Dues</span>
+                      {dues ? (
+                        <Badge size="sm" tone={DUES_TONES[dues]}>
+                          {MEMBERSHIP_CHARGE_STATUS_LABELS[dues]}
+                        </Badge>
+                      ) : (
+                        <span className="text-[var(--color-muted)]">No charge</span>
                       )}
                     </div>
 

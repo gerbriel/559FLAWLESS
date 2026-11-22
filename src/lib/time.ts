@@ -161,6 +161,19 @@ export function addDaysToDateKey(dateKey: string, days: number): string {
   return `${pad(t.getUTCFullYear(), 4)}-${pad(t.getUTCMonth() + 1, 2)}-${pad(t.getUTCDate(), 2)}`
 }
 
+/**
+ * Calendar-month arithmetic on a date key. The day is clamped to the target
+ * month's length, so Mar 31 minus one month is Feb 28 (or 29), never Mar 3.
+ */
+export function addMonthsToDateKey(dateKey: string, months: number): string {
+  const [y, mo, d] = dateKey.split('-').map(Number)
+  const total = y * 12 + (mo - 1) + Math.trunc(months)
+  const ty = Math.floor(total / 12)
+  const tm = total - ty * 12
+  const lastDay = new Date(Date.UTC(ty, tm + 1, 0)).getUTCDate()
+  return `${pad(ty, 4)}-${pad(tm + 1, 2)}-${pad(Math.min(d, lastDay), 2)}`
+}
+
 /** 0 = Sunday … 6 = Saturday for a date key (already wall-clock, no zone needed). */
 export function dayOfWeekForDateKey(dateKey: string): number {
   const [y, mo, d] = dateKey.split('-').map(Number)

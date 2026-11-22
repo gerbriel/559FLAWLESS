@@ -17,6 +17,8 @@ import {
   Scissors,
   PenLine,
   Delete,
+  Smartphone,
+  Mail,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -42,6 +44,7 @@ import {
 } from '@/types/barcode'
 import { BarcodeScanHint, useBarcodeScanner } from './BarcodeScanner'
 import { BarcodeCameraScanner } from './BarcodeCameraScanner'
+import QRCode from 'qrcode'
 
 export interface SellableProduct {
   id: number
@@ -120,9 +123,17 @@ interface Receipt {
   custom?: boolean
   /** How much of a custom amount went on the client's visit balances. */
   applied_cents?: number
-  /** What a membership took off a services sale. */
+  /** What a membership took off: the visit's benefit plus any product perk. */
   membership_cents?: number
   membership_name?: string | null
+  /** The visit's lines, when services were in the sale. */
+  services?: { name: string; price_cents: number }[]
+  /** What went on the order: products off the shelf and the custom extra. */
+  products?: { name: string; qty: number; line_cents: number }[]
+  /** Deals and the manager's discount, apart from the membership. */
+  discount_cents?: number
+  /** Whether anything came off the shelf, so the receipt can say stock moved. */
+  shelf?: boolean
 }
 
 /**
@@ -194,8 +205,23 @@ export function PointOfSale({
   const [customerId, setCustomerId] = useState('')
   const [walkIn, setWalkIn] = useState('')
   const [method, setMethod] = useState<
-    'cash' | 'card' | 'apple_pay' | 'zelle' | 'paypal' | 'venmo' | 'cashapp' | 'other'
+    | 'phone_link'
+    | 'stripe_app'
+    | 'cash'
+    | 'card'
+    | 'apple_pay'
+    | 'zelle'
+    | 'paypal'
+    | 'venmo'
+    | 'cashapp'
+    | 'other'
   >('card')
+  // A sale rung up to be paid through Stripe (090), waiting for the webhook.
+  // The receipt it will become is built now, from the sale's response, and
+  // shown once the ticket reads paid.
+  const [awaiting, setAwaiting] = useState<{ ticket: TicketView; receipt: Receipt; canEmail: boolean } | null>(
+    null
+  )
   const [notes, setNotes] = useState('')
   const [busy, setBusy] = useState(false)
   const [receipt, setReceipt] = useState<Receipt | null>(null)
@@ -281,6 +307,9 @@ export function PointOfSale({
     unchecked: number[]
   } | null>(null)
   const [applyTo, setApplyTo] = useState<string[]>([])
+  // Bumped when a sale changes what the picked client owes without the client
+  // changing (a visit recorded but not paid), so the balances are read again.
+  const [balancesSeq, setBalancesSeq] = useState(0)
 
   useEffect(() => {
     let alive = true
@@ -388,15 +417,25 @@ export function PointOfSale({
         .order('starts_at', { ascending: true })
         .limit(50)
       const ids = (visits ?? []).map((v) => v.id)
-      const { data: paid } =
+      const [{ data: paid }, { data: waiting }] =
         ids.length === 0
-          ? { data: [] }
-          : await supabase
-              .from('payments')
-              .select('appointment_id, amount_cents')
-              .in('appointment_id', ids)
-              .eq('status', 'succeeded')
+          ? [{ data: [] }, { data: [] }]
+          : await Promise.all([
+              supabase
+                .from('payments')
+                .select('appointment_id, amount_cents')
+                .in('appointment_id', ids)
+                .eq('status', 'succeeded'),
+              // A visit a till sale is waiting on a card payment for (090)
+              // is not offered again here; Orders shows it as awaiting.
+              supabase
+                .from('till_tickets')
+                .select('appointment_id')
+                .in('appointment_id', ids)
+                .eq('status', 'awaiting'),
+            ])
       if (!alive) return
+      const awaitingCard = new Set((waiting ?? []).map((t) => t.appointment_id))
 
       const open = (visits ?? [])
         .map((v) => {
@@ -413,7 +452,7 @@ export function PointOfSale({
             owed_cents: Math.max(v.total_cents - taken, 0),
           }
         })
-        .filter((v) => v.owed_cents > 0)
+        .filter((v) => v.owed_cents > 0 && !awaitingCard.has(v.id))
 
       setBalances(open)
       // Today's visit and anything already past are what the desk is usually
@@ -424,14 +463,20 @@ export function PointOfSale({
     return () => {
       alive = false
     }
-  }, [customerId])
+  }, [customerId, balancesSeq])
 
   const owedTotal = balances.reduce((sum, b) => sum + b.owed_cents, 0)
+  // Services picked: one line per treatment. The same one twice is refused at
+  // the picker, because priceService prices a service id once.
+  const [serviceLines, setServiceLines] = useState<SellableService[]>([])
+  // The manager's discount, in dollars as typed. Parsed at use, capped server-side.
+  const [discount, setDiscount] = useState('')
+  const [packageId, setPackageId] = useState<number | null>(null)
 
   // The keypad answers the physical keyboard too — but never while someone is
   // typing in a field, where those keys belong to the field.
   useEffect(() => {
-    if (mode !== 'custom' || receipt) return
+    if (mode !== 'custom' || receipt || awaiting || packageId !== null) return
     function onKey(e: KeyboardEvent) {
       const t = e.target as HTMLElement | null
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) {
@@ -450,25 +495,24 @@ export function PointOfSale({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [mode, receipt])
-  // Services mode: each tap adds one line; two facials really are two lines.
-  const [serviceLines, setServiceLines] = useState<SellableService[]>([])
-  // The manager's discount, in dollars as typed. Parsed at use, capped server-side.
-  const [discount, setDiscount] = useState('')
-  const [packageId, setPackageId] = useState<number | null>(null)
+  }, [mode, receipt, awaiting, packageId])
   // A package sale is one package. Two courses for the same person are two
   // balances, and two balances are two sales — there is no quantity here.
   const chosenPackage = packageList.find((p) => p.id === packageId) ?? null
-  const sellingPackage = packageList.length > 0 && mode === 'prepaid'
   const serviceList = services ?? []
-  const sellingServices = serviceList.length > 0 && mode === 'services'
-  const sellingCustom = mode === 'custom'
   const customCents = Number(customAmount || '0')
+  // The tabs are pickers, not modes: products, services and a typed amount all
+  // ride in ONE running sale, rung up together with one payment. A package is
+  // the exception and stays its own sale (see the header): it is what is being
+  // sold once one is picked, or while its tab is open on an empty counter.
+  const hasLines = lines.length > 0 || serviceLines.length > 0 || customCents > 0
+  const sellingPackage =
+    packageList.length > 0 && (chosenPackage !== null || (mode === 'prepaid' && !hasLines))
   // Preview of the split. The server re-derives every balance; this only reads.
   const owedSelected = balances
     .filter((b) => applyTo.includes(b.id))
     .reduce((sum, b) => sum + b.owed_cents, 0)
-  const towardBalance = sellingCustom ? Math.min(owedSelected, customCents) : 0
+  const towardBalance = sellingPackage ? 0 : Math.min(owedSelected, customCents)
   const customExtra = customCents - towardBalance
 
   // One cue at a time, cleared a beat after the animation ends. Guarded by seq
@@ -503,7 +547,7 @@ export function PointOfSale({
   // The manager's discount, cents. Preview only — the routes re-verify the
   // role and cap it; a mistyped value can only make the preview read high.
   const manualDiscount =
-    canDiscount && !sellingPackage && !sellingCustom
+    canDiscount && !sellingPackage && servicesSubtotal + retailSubtotal > 0
       ? Math.max(0, Math.round((Number(discount.replace(/[$,\s]/g, '')) || 0) * 100))
       : 0
 
@@ -512,18 +556,14 @@ export function PointOfSale({
   // discounted figure, integer cents in and out.
   const subtotal = sellingPackage
     ? (chosenPackage?.price_cents ?? 0)
-    : sellingServices
-      ? servicesSubtotal
-      : sellingCustom
-        ? customExtra
-        : retailSubtotal
+    : servicesSubtotal + retailSubtotal + customExtra
   // The membership on a services sale, previewed the way applyMembershipBenefit
   // computes it: each line draws from its own allowance when the treatment has
   // one, otherwise from the shared pool (088); dearest-first within each
   // allowance, one per service; then member prices on the rest, then the plan
   // percentage.
   const memberCut = (() => {
-    if (!sellingServices || !membership) return 0
+    if (sellingPackage || !membership) return 0
     const allowanceFor = (serviceId: number): number | null | undefined => {
       if (membership.own.includes(serviceId)) return serviceId
       if (membership.scope.length === 0 || membership.scope.includes(serviceId)) return null
@@ -553,11 +593,11 @@ export function PointOfSale({
     return covered + priced + membershipDiscountCents(rest, membership.pct)
   })()
 
-  // A member's product perk on a retail sale (086), previewed with the same
-  // arithmetic the sale route uses. The route re-reads the membership and keeps
-  // the better of the perk and the multibuy deal; this line shows only the
-  // perk, so the rung-up figure can come out lower.
-  const sellingRetail = !sellingPackage && !sellingServices && !sellingCustom
+  // A member's product perk on the products in the sale (086), previewed with
+  // the same arithmetic the sale route uses. The route re-reads the membership
+  // and keeps the better of the perk and the multibuy deal; this line shows
+  // only the perk, so the rung-up figure can come out lower.
+  const sellingRetail = !sellingPackage && lines.length > 0
   const retailUnits: PerkUnit[] = sellingRetail
     ? lines.flatMap((l) =>
         Array.from({ length: l.qty }, () => ({
@@ -599,11 +639,31 @@ export function PointOfSale({
       ? bestProductPerk(membership.perks, retailUnits)?.perk ?? null
       : null
 
-  const afterDiscount = Math.max(subtotal - memberCut - perkCut - manualDiscount, 0)
-  // A custom amount is taxed only when the desk ticks that it is goods.
-  const untaxed = sellingPackage || sellingServices || (sellingCustom && !customTaxable)
-  const tax = untaxed ? 0 : Math.round(afterDiscount * taxRate)
-  const total = afterDiscount + tax + towardBalance
+  // The manager's discount comes off the services first, then the products,
+  // the same order the sale route applies it in. A custom amount is never
+  // discounted: it is already the desk's own figure.
+  const servicesDue = Math.max(servicesSubtotal - memberCut, 0)
+  const serviceDiscount = Math.min(manualDiscount, servicesDue)
+  const productsDue = Math.max(retailSubtotal - perkCut, 0)
+  const productDiscount = Math.min(manualDiscount - serviceDiscount, productsDue)
+  // Tax on the products as discounted, plus a custom amount only when the desk
+  // ticks that it is goods. Services and visit balances are never taxed.
+  const taxedCustom = customTaxable ? customExtra : 0
+  const untaxed = sellingPackage || (lines.length === 0 && taxedCustom === 0)
+  const tax = untaxed ? 0 : Math.round((productsDue - productDiscount + taxedCustom) * taxRate)
+  const total = sellingPackage
+    ? subtotal
+    : servicesDue - serviceDiscount + productsDue - productDiscount + customExtra + tax + towardBalance
+
+  /** Clear the running sale, for when a package is to be sold instead. */
+  function clearSale() {
+    setLines([])
+    setServiceLines([])
+    setCustomAmount('')
+    setCustomDesc('')
+    setCustomTaxable(false)
+    setDiscount('')
+  }
 
   /**
    * Add one of something, and say so on its tile.
@@ -702,7 +762,7 @@ export function PointOfSale({
           brand: known?.brand ?? null,
           category_id: known?.category_id ?? null,
         })
-        toast.success(`${p.name} — ${formatMoney(p.price_cents)}`)
+        toast.success(`${p.name}, ${formatMoney(p.price_cents)}`)
       }
     }
   }, [products, lines])
@@ -755,7 +815,8 @@ export function PointOfSale({
     // a new sale behind it. Neither should one while a package is on the
     // counter — a package has nothing to scan, and a stray keystroke burst
     // should not silently switch what is being sold.
-    enabled: !receipt && !camera && !sellingPackage && !sellingCustom,
+    // The keypad owns the digit keys on the Custom amount tab.
+    enabled: !receipt && !awaiting && !camera && !sellingPackage && mode !== 'custom',
     onScan: (scan) => {
       void handleScan(scan.code)
     },
@@ -780,6 +841,10 @@ export function PointOfSale({
   async function ringUpPackage() {
     if (!chosenPackage) {
       toast.error('Pick a package first.')
+      return
+    }
+    if (method === 'phone_link' || method === 'stripe_app') {
+      toast.error('A package is paid at the counter. Pick another way to pay.')
       return
     }
     if (!customerId) {
@@ -827,151 +892,34 @@ export function PointOfSale({
     }
   }
 
-  async function ringUpServices() {
-    if (serviceLines.length === 0) {
-      toast.error('Add a service to the sale first.')
-      return
-    }
-    if (!customerId && !walkIn.trim()) {
-      toast.error('Pick a client or type a name for the walk-in.')
-      return
-    }
-
-    setBusy(true)
-    try {
-      const res = await fetch('/api/pos/service-sale', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          clientId: customerId || null,
-          guestName: customerId ? null : walkIn.trim(),
-          serviceIds: serviceLines.map((l) => l.id),
-          paymentMethod: method,
-          notes: notes.trim() || null,
-          discountCents: manualDiscount,
-        }),
-      })
-      const data = await res.json()
-
-      if (!res.ok) {
-        toast.error(data.message ?? 'Could not complete that sale.')
-        return
-      }
-
-      setReceipt({
-        order_number: null,
-        subtotal_cents: data.subtotal_cents,
-        tax_cents: 0,
-        total_cents: data.total_cents,
-        membership_cents: data.membership_cents ?? 0,
-        membership_name: data.membership_name ?? null,
-        customer: customerId
-          ? (customers.find((c) => c.id === customerId)?.name ?? 'Client')
-          : walkIn.trim(),
-      })
-      setServiceLines([])
-      setDiscount('')
-      setCustomerId('')
-      setWalkIn('')
-      setNotes('')
-      router.refresh()
-    } catch {
-      toast.error('Could not reach the till. Please try again.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
   /**
-   * Ring up a typed-in amount. Same endpoint as the shelf, so the order, the
-   * ledger row and the client's history are written exactly the same way.
+   * Ring up the running sale: products, services and a typed extra, one
+   * request and one payment. The server prices every line, writes the
+   * services as a completed visit, the rest as an order, and settles the visit
+   * first; see /api/pos/sale.
    */
-  async function ringUpCustom() {
-    if (!customDesc.trim() && customExtra > 0) {
-      toast.error('Say what the extras are for — it goes on the receipt.')
-      return
-    }
-    if (customCents <= 0) {
-      toast.error('Enter an amount.')
-      return
-    }
-    if (!customerId && !walkIn.trim()) {
-      toast.error('Pick a client or type a name for the walk-in.')
-      return
-    }
-
-    setBusy(true)
-    try {
-      const res = await fetch('/api/pos/sale', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          clientId: customerId || null,
-          guestName: customerId ? null : walkIn.trim(),
-          items: [],
-          custom: {
-            description: customDesc.trim() || 'Visit balance',
-            amountCents: customCents,
-            taxable: customTaxable,
-          },
-          applyToAppointments: customerId ? applyTo : [],
-          paymentMethod: method,
-          notes: notes.trim() || null,
-        }),
-      })
-      const data = await res.json()
-
-      if (!res.ok) {
-        toast.error(data.message ?? 'Could not complete that sale.')
-        return
-      }
-
-      if (data.warning) toast.warning(data.warning)
-
-      setReceipt({
-        order_number: data.order?.order_number ?? null,
-        subtotal_cents: data.order?.subtotal_cents ?? 0,
-        tax_cents: data.order?.tax_cents ?? 0,
-        total_cents: data.total_cents,
-        customer: customerId
-          ? (customers.find((c) => c.id === customerId)?.name ?? 'Client')
-          : walkIn.trim(),
-        custom: (data.order?.subtotal_cents ?? 0) > 0,
-        applied_cents: data.applied_cents ?? 0,
-      })
-      setCustomDesc('')
-      setCustomAmount('')
-      setCustomTaxable(false)
-      setCustomerId('')
-      setWalkIn('')
-      setNotes('')
-      router.refresh()
-    } catch {
-      toast.error('Could not reach the server.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
   async function ringUp() {
-    if (sellingCustom) {
-      await ringUpCustom()
-      return
-    }
     if (sellingPackage) {
       await ringUpPackage()
       return
     }
-    if (sellingServices) {
-      await ringUpServices()
+    if (!hasLines) {
+      toast.error('Add something to the sale first.')
       return
     }
-    if (lines.length === 0) {
-      toast.error('Add something to the sale first.')
+    if (customCents > 0 && customExtra > 0 && !customDesc.trim()) {
+      toast.error('Say what the extra amount is for. It goes on the receipt.')
       return
     }
     if (!customerId && !walkIn.trim()) {
       toast.error('Pick a client or type a name for the walk-in.')
+      return
+    }
+    const throughStripe = method === 'phone_link' || method === 'stripe_app'
+    if (throughStripe && towardBalance > 0) {
+      toast.error('An old balance cannot ride on a card payment through Stripe.', {
+        description: 'Untick it under Pay off first, or pick another way to pay.',
+      })
       return
     }
 
@@ -984,6 +932,16 @@ export function PointOfSale({
           clientId: customerId || null,
           guestName: customerId ? null : walkIn.trim(),
           items: lines.map((l) => ({ productId: l.product.id, qty: l.qty })),
+          serviceIds: serviceLines.map((l) => l.id),
+          custom:
+            customCents > 0
+              ? {
+                  description: customDesc.trim() || 'Visit balance',
+                  amountCents: customCents,
+                  taxable: customTaxable,
+                }
+              : null,
+          applyToAppointments: customerId && customCents > 0 && !throughStripe ? applyTo : [],
           paymentMethod: method,
           notes: notes.trim() || null,
           discountCents: manualDiscount,
@@ -992,29 +950,94 @@ export function PointOfSale({
       const data = await res.json()
 
       if (!res.ok) {
+        if (data.error === 'visit_recorded_unpaid') {
+          // The visit stands on the client's record, owing. Its lines come off
+          // the counter so a second Take cannot record it twice; the products
+          // and the typed amount stay, since none of that was sold.
+          toast.error(data.message, { duration: 20000 })
+          setServiceLines([])
+          setDiscount('')
+          setBalancesSeq((n) => n + 1)
+          router.refresh()
+          return
+        }
         toast.error(data.message ?? 'Could not complete that sale.')
         return
       }
 
-      setReceipt({
-        ...data.order,
-        // What a member's product perk took off, when it beat the multibuy deal.
-        membership_cents: data.membership_cents ?? 0,
-        membership_name: data.membership_name ?? null,
+      if (data.warning) toast.warning(data.warning)
+
+      const visit = data.visit as {
+        lines: { name: string; price_cents: number }[]
+        subtotal_cents: number
+        discount_cents: number
+        membership_cents: number
+        membership_name: string | null
+      } | null
+      const orderLines = (data.order_lines ?? []) as { name: string; qty: number; line_cents: number }[]
+      const orderMembership = data.membership_cents ?? 0
+
+      const built: Receipt = {
+        order_number: data.order?.order_number ?? null,
+        subtotal_cents: (visit?.subtotal_cents ?? 0) + (data.order?.subtotal_cents ?? 0),
+        tax_cents: data.order?.tax_cents ?? 0,
+        total_cents: data.total_cents,
         customer: customerId
           ? (customers.find((c) => c.id === customerId)?.name ?? 'Client')
           : walkIn.trim(),
-      })
-      setLines([])
+        custom: customExtra > 0 && data.order !== null,
+        applied_cents: data.applied_cents ?? 0,
+        // The visit's benefit and a product perk are separate cuts on separate
+        // parts of the sale; together they are what the membership saved.
+        membership_cents: (visit?.membership_cents ?? 0) + orderMembership,
+        membership_name: visit?.membership_name ?? data.membership_name ?? null,
+        services: visit?.lines ?? [],
+        products: orderLines,
+        discount_cents: (visit?.discount_cents ?? 0) + (data.discount_cents ?? 0) - orderMembership,
+        shelf: lines.length > 0,
+      }
+      if (data.awaiting && data.ticket) {
+        // The sale is written; the money is not. Wait for Stripe.
+        setAwaiting({
+          ticket: data.ticket as TicketView,
+          receipt: built,
+          canEmail: !!customerId && !!customers.find((c) => c.id === customerId)?.email,
+        })
+      } else {
+        setReceipt(built)
+      }
+      clearSale()
       setCustomerId('')
       setWalkIn('')
       setNotes('')
       router.refresh()
     } catch {
-      toast.error('Could not reach the server.')
+      toast.error('Could not reach the till. Please try again.')
     } finally {
       setBusy(false)
     }
+  }
+
+  if (awaiting) {
+    return (
+      <AwaitingPayment
+        key={awaiting.ticket.id}
+        ticket={awaiting.ticket}
+        customer={awaiting.receipt.customer}
+        canEmail={awaiting.canEmail}
+        onPaid={() => {
+          setReceipt(awaiting.receipt)
+          setAwaiting(null)
+          router.refresh()
+        }}
+        onClose={() => {
+          setAwaiting(null)
+          // A visit left owing shows under Pay off first next time.
+          setBalancesSeq((n) => n + 1)
+          router.refresh()
+        }}
+      />
+    )
   }
 
   if (receipt) {
@@ -1030,10 +1053,38 @@ export function PointOfSale({
             <dt className="text-[var(--color-muted)]">Customer</dt>
             <dd>{receipt.customer}</dd>
           </div>
-          <div className="flex justify-between">
-            <dt className="text-[var(--color-muted)]">Order</dt>
-            <dd className="tabular-nums">{receipt.order_number ?? '—'}</dd>
-          </div>
+          {receipt.order_number && (
+            <div className="flex justify-between">
+              <dt className="text-[var(--color-muted)]">Order</dt>
+              <dd className="tabular-nums">{receipt.order_number}</dd>
+            </div>
+          )}
+          {/* Services and products as two groups, one total below. */}
+          {(receipt.services?.length ?? 0) > 0 && (
+            <div className="border-t border-[var(--color-border)] pt-2">
+              <dt className="label-caps text-[var(--color-muted)]">Services</dt>
+              {receipt.services!.map((l, i) => (
+                <dd key={`s-${i}`} className="mt-1 flex justify-between">
+                  <span>{l.name}</span>
+                  <span className="tabular-nums">{formatMoney(l.price_cents)}</span>
+                </dd>
+              ))}
+            </div>
+          )}
+          {(receipt.products?.length ?? 0) > 0 && (
+            <div className="border-t border-[var(--color-border)] pt-2">
+              <dt className="label-caps text-[var(--color-muted)]">Products</dt>
+              {receipt.products!.map((l, i) => (
+                <dd key={`p-${i}`} className="mt-1 flex justify-between gap-4">
+                  <span>
+                    {l.name}
+                    {l.qty > 1 && <span className="text-[var(--color-muted)]"> &times; {l.qty}</span>}
+                  </span>
+                  <span className="tabular-nums">{formatMoney(l.line_cents)}</span>
+                </dd>
+              ))}
+            </div>
+          )}
           {(receipt.applied_cents ?? 0) > 0 && (
             <div className="flex justify-between">
               <dt className="text-[var(--color-muted)]">Toward visit balance</dt>
@@ -1042,7 +1093,9 @@ export function PointOfSale({
           )}
           <div className="flex justify-between">
             <dt className="text-[var(--color-muted)]">
-              {(receipt.applied_cents ?? 0) > 0 ? 'Extras' : 'Subtotal'}
+              {(receipt.applied_cents ?? 0) > 0 && !receipt.services?.length && !receipt.shelf
+                ? 'Extras'
+                : 'Subtotal'}
             </dt>
             <dd className="tabular-nums">{formatMoney(receipt.subtotal_cents)}</dd>
           </div>
@@ -1050,6 +1103,12 @@ export function PointOfSale({
             <div className="flex justify-between">
               <dt className="text-[var(--color-muted)]">{receipt.membership_name ?? 'Membership'}</dt>
               <dd className="tabular-nums">&minus;{formatMoney(receipt.membership_cents ?? 0)}</dd>
+            </div>
+          )}
+          {(receipt.discount_cents ?? 0) > 0 && (
+            <div className="flex justify-between">
+              <dt className="text-[var(--color-muted)]">Discount</dt>
+              <dd className="tabular-nums">&minus;{formatMoney(receipt.discount_cents ?? 0)}</dd>
             </div>
           )}
           {/* A package carries no sales tax, so the line would read $0 and say
@@ -1082,18 +1141,27 @@ export function PointOfSale({
                 : ', with no expiry'}
               . Spend one at checkout and it comes off what that visit owes.
             </>
-          ) : !receipt.custom && (receipt.applied_cents ?? 0) > 0 ? (
+          ) : !receipt.custom &&
+            !receipt.shelf &&
+            !receipt.services?.length &&
+            (receipt.applied_cents ?? 0) > 0 ? (
             <>The whole amount went on {receipt.customer}&rsquo;s visit balance.</>
-          ) : receipt.custom ? (
+          ) : (
             <>
+              {(receipt.services?.length ?? 0) > 0 && 'The visit is on the book as completed. '}
+              {receipt.shelf && 'Stock has been updated. '}
               {(receipt.applied_cents ?? 0) > 0 &&
                 `${formatMoney(receipt.applied_cents ?? 0)} went on their visit balance. `}
-              This is on the customer&rsquo;s history. To record what it was for, open it
-              under Orders &rarr; Products and choose <em>Assign items</em> &mdash; the
-              total stays what was paid.
+              {receipt.custom ? (
+                <>
+                  This is on the customer&rsquo;s history. To record what the extra amount
+                  was for, open it under Orders &rarr; Products and choose{' '}
+                  <em>Assign items</em>. The total stays what was paid.
+                </>
+              ) : (
+                <>This is on the customer&rsquo;s history.</>
+              )}
             </>
-          ) : (
-            <>Stock has been updated and this is on the customer&rsquo;s history.</>
           )}
         </p>
 
@@ -1160,13 +1228,21 @@ export function PointOfSale({
             })}
           </div>
 
-        {sellingCustom ? (
+        {/* A package is sold on its own. While one is picked, the other tabs
+            say so instead of offering things that could not join it. */}
+        {chosenPackage && mode !== 'prepaid' ? (
+          <SoldOnItsOwn
+            text={`${chosenPackage.name} is a package, and a package is sold on its own.`}
+            action="Remove the package"
+            onAction={() => setPackageId(null)}
+          />
+        ) : mode === 'custom' ? (
           <div className="max-w-xl">
             <p className="max-w-prose text-sm text-[var(--color-muted)]">
-              Type in the whole amount being paid. If the client owes on a visit, that is
-              settled first; whatever is left over — add-ons, extra products — goes on the
-              sale, and what it covered can be assigned afterwards from Orders without
-              changing what was paid.
+              An extra amount for anything not on the lists, or what the client owes on a
+              visit. Any balance ticked below is settled first; what is left over goes on
+              this sale beside the products and services, and can be assigned afterwards
+              from Orders without changing what was paid.
             </p>
 
             <div className="mt-6 space-y-4 border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
@@ -1238,12 +1314,13 @@ export function PointOfSale({
               </label>
             </div>
           </div>
-        ) : sellingServices ? (
+        ) : mode === 'services' && serviceList.length > 0 ? (
           <>
             <p className="max-w-prose text-sm text-[var(--color-muted)]">
               A treatment rung up at the counter. It lands on the book as a completed
-              visit — stock, points, deals and reports all follow — and no sales tax
-              is charged, because what they are buying is treatment time.
+              visit, and stock, points, deals and reports all follow. No sales tax is
+              charged on it, because what they are buying is treatment time. Products
+              added to the same sale are paid with it, in one payment.
             </p>
 
             <ul className="mt-5 grid gap-px border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-2 xl:grid-cols-3">
@@ -1251,7 +1328,13 @@ export function PointOfSale({
                 <li key={svc.id}>
                   <button
                     type="button"
-                    onClick={() => setServiceLines((cur) => [...cur, svc])}
+                    onClick={() => {
+                      if (serviceLines.some((l) => l.id === svc.id)) {
+                        toast.error('Already on the sale')
+                        return
+                      }
+                      setServiceLines((cur) => [...cur, svc])
+                    }}
                     className="flex w-full flex-col gap-1 bg-[var(--color-background)] p-4 text-left transition-colors hover:bg-[var(--color-linen)] dark:hover:bg-[var(--color-surface)]"
                   >
                     <span className="label-caps text-[0.5625rem] text-[var(--color-muted)]">
@@ -1266,13 +1349,22 @@ export function PointOfSale({
               ))}
             </ul>
           </>
-        ) : sellingPackage ? (
+        ) : mode === 'prepaid' && packageList.length > 0 ? (
           <>
             <p className="max-w-prose text-sm text-[var(--color-muted)]">
               A course paid for once and drawn down a session at a time. It goes on the
-              client&rsquo;s account, so it needs a client — and no sales tax is charged,
+              client&rsquo;s account, so it needs a client, and no sales tax is charged,
               because what they are buying is treatment time.
             </p>
+
+            {hasLines && (
+              <SoldOnItsOwn
+                className="mt-4"
+                text="A package is sold on its own. Take this sale first, or clear it to sell a package."
+                action="Clear this sale"
+                onAction={clearSale}
+              />
+            )}
 
             <ul className="mt-5 grid gap-px border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-2 xl:grid-cols-3">
               {packageList.map((p) => {
@@ -1287,9 +1379,10 @@ export function PointOfSale({
                     <button
                       type="button"
                       aria-pressed={on}
+                      disabled={hasLines}
                       onClick={() => setPackageId(on ? null : p.id)}
                       className={cn(
-                        'flex h-full w-full flex-col items-start p-5 text-left transition-colors hover:bg-[var(--color-linen)] dark:hover:bg-[var(--color-background)]',
+                        'flex h-full w-full flex-col items-start p-5 text-left transition-colors hover:bg-[var(--color-linen)] disabled:opacity-40 disabled:hover:bg-transparent dark:hover:bg-[var(--color-background)]',
                         on && 'shadow-[inset_0_0_0_2px_var(--color-accent)]'
                       )}
                     >
@@ -1535,28 +1628,7 @@ export function PointOfSale({
         <div className="border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
           <h2 className="label-caps text-[var(--color-muted)]">This sale</h2>
 
-          {sellingCustom ? (
-            customCents === 0 ? (
-              <p className="mt-4 text-sm text-[var(--color-muted)]">Type a description and an amount.</p>
-            ) : (
-              <div className="mt-4 flex items-start gap-2.5 text-sm">
-                <span
-                  data-ui="tile"
-                  className="flex h-10 w-10 shrink-0 items-center justify-center bg-[var(--color-linen)] dark:bg-[var(--color-background)]"
-                >
-                  <PenLine className="h-4 w-4 text-[var(--color-muted)]" strokeWidth={1.25} aria-hidden />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <span className="block truncate">{customDesc.trim() || 'Visit balance'}</span>
-                  <span className="text-xs tabular-nums text-[var(--color-muted)]">
-                    {towardBalance > 0
-                      ? `${formatMoney(towardBalance)} on visit balance · ${formatMoney(customExtra)} extras`
-                      : `${formatMoney(customCents)} · custom amount`}
-                  </span>
-                </div>
-              </div>
-            )
-          ) : sellingPackage ? (
+          {sellingPackage ? (
             chosenPackage === null ? (
               <p className="mt-4 text-sm text-[var(--color-muted)]">No package picked yet.</p>
             ) : (
@@ -1584,97 +1656,135 @@ export function PointOfSale({
                 </button>
               </div>
             )
-          ) : sellingServices ? (
-            serviceLines.length === 0 ? (
-              <p className="mt-4 text-sm text-[var(--color-muted)]">Nothing added yet.</p>
-            ) : (
-              <ul className="mt-4 space-y-3">
-                {serviceLines.map((svc, i) => (
-                  <li key={`${svc.id}-${i}`} className="flex items-center gap-2.5 text-sm">
+          ) : !hasLines ? (
+            <p className="mt-4 text-sm text-[var(--color-muted)]">Nothing added yet.</p>
+          ) : (
+            // Every part of the running sale, whichever tab is open: each line
+            // can be taken off from here.
+            <div className="mt-4 space-y-5">
+              {serviceLines.length > 0 && (
+                <section>
+                  <h3 className="label-caps mb-2 text-[0.5625rem] text-[var(--color-muted)]">Services</h3>
+                  <ul className="space-y-3">
+                    {serviceLines.map((svc, i) => (
+                      <li key={`${svc.id}-${i}`} className="flex items-center gap-2.5 text-sm">
+                        <div className="min-w-0 flex-1">
+                          <span className="block truncate">{svc.name}</span>
+                          <span className="text-xs tabular-nums text-[var(--color-muted)]">
+                            {formatMoney(svc.price_cents)}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setServiceLines((cur) => cur.filter((_, idx) => idx !== i))
+                          }
+                          className="flex h-8 w-8 items-center justify-center text-[var(--color-muted)] hover:text-red-700"
+                          aria-label={`Remove ${svc.name}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+              {lines.length > 0 && (
+                <section>
+                  <h3 className="label-caps mb-2 text-[0.5625rem] text-[var(--color-muted)]">Products</h3>
+                  <ul className="space-y-3">
+                    {lines.map((l) => (
+                      <li key={l.product.id} className="flex items-start gap-2.5 text-sm">
+                        <div className="relative h-10 w-10 shrink-0 overflow-hidden bg-[var(--color-linen)] dark:bg-[var(--color-background)]">
+                          {l.product.image_url ? (
+                            <Image
+                              src={l.product.image_url}
+                              alt=""
+                              fill
+                              sizes="40px"
+                              className="object-contain p-1"
+                            />
+                          ) : (
+                            <Package
+                              className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 text-[var(--color-muted)]"
+                              strokeWidth={1}
+                              aria-hidden
+                            />
+                          )}
+                        </div>
+
+                        <div className="min-w-0 flex-1">
+                          <span className="block truncate">{l.product.name}</span>
+                          <span className="text-xs tabular-nums text-[var(--color-muted)]">
+                            {formatMoney(l.product.price_cents)} each
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => subtract(l.product)}
+                            className="flex h-8 w-8 items-center justify-center border border-[var(--color-border)]"
+                            aria-label={`One fewer ${l.product.name}`}
+                          >
+                            <Minus className="h-3 w-3" strokeWidth={2} />
+                          </button>
+                          <span className="w-7 text-center tabular-nums">{l.qty}</span>
+                          <button
+                            type="button"
+                            onClick={() => add(l.product)}
+                            className="flex h-8 w-8 items-center justify-center border border-[var(--color-border)]"
+                            aria-label={`One more ${l.product.name}`}
+                          >
+                            <Plus className="h-3 w-3" strokeWidth={2} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setQty(l.product.id, 0)
+                              flash(l.product.id, 'remove', `Removed ${l.product.name} from this sale.`)
+                            }}
+                            className="ml-1 flex h-8 w-8 items-center justify-center text-[var(--color-muted)] hover:text-red-700"
+                            aria-label={`Remove ${l.product.name}`}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+              {customCents > 0 && (
+                <section>
+                  <h3 className="label-caps mb-2 text-[0.5625rem] text-[var(--color-muted)]">Custom amount</h3>
+                  <div className="flex items-start gap-2.5 text-sm">
+                    <span
+                      data-ui="tile"
+                      className="flex h-10 w-10 shrink-0 items-center justify-center bg-[var(--color-linen)] dark:bg-[var(--color-background)]"
+                    >
+                      <PenLine className="h-4 w-4 text-[var(--color-muted)]" strokeWidth={1.25} aria-hidden />
+                    </span>
                     <div className="min-w-0 flex-1">
-                      <span className="block truncate">{svc.name}</span>
+                      <span className="block truncate">{customDesc.trim() || 'Visit balance'}</span>
                       <span className="text-xs tabular-nums text-[var(--color-muted)]">
-                        {formatMoney(svc.price_cents)}
+                        {towardBalance > 0
+                          ? `${formatMoney(towardBalance)} on visit balance · ${formatMoney(customExtra)} extras`
+                          : `${formatMoney(customCents)} · custom amount`}
                       </span>
                     </div>
                     <button
                       type="button"
-                      onClick={() =>
-                        setServiceLines((cur) => cur.filter((_, idx) => idx !== i))
-                      }
-                      className="flex h-8 w-8 items-center justify-center text-[var(--color-muted)] hover:text-red-700"
-                      aria-label={`Remove ${svc.name}`}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )
-          ) : lines.length === 0 ? (
-            <p className="mt-4 text-sm text-[var(--color-muted)]">Nothing added yet.</p>
-          ) : (
-            <ul className="mt-4 space-y-3">
-              {lines.map((l) => (
-                <li key={l.product.id} className="flex items-start gap-2.5 text-sm">
-                  <div className="relative h-10 w-10 shrink-0 overflow-hidden bg-[var(--color-linen)] dark:bg-[var(--color-background)]">
-                    {l.product.image_url ? (
-                      <Image
-                        src={l.product.image_url}
-                        alt=""
-                        fill
-                        sizes="40px"
-                        className="object-contain p-1"
-                      />
-                    ) : (
-                      <Package
-                        className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 text-[var(--color-muted)]"
-                        strokeWidth={1}
-                        aria-hidden
-                      />
-                    )}
-                  </div>
-
-                  <div className="min-w-0 flex-1">
-                    <span className="block truncate">{l.product.name}</span>
-                    <span className="text-xs tabular-nums text-[var(--color-muted)]">
-                      {formatMoney(l.product.price_cents)} each
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => subtract(l.product)}
-                      className="flex h-8 w-8 items-center justify-center border border-[var(--color-border)]"
-                      aria-label={`One fewer ${l.product.name}`}
-                    >
-                      <Minus className="h-3 w-3" strokeWidth={2} />
-                    </button>
-                    <span className="w-7 text-center tabular-nums">{l.qty}</span>
-                    <button
-                      type="button"
-                      onClick={() => add(l.product)}
-                      className="flex h-8 w-8 items-center justify-center border border-[var(--color-border)]"
-                      aria-label={`One more ${l.product.name}`}
-                    >
-                      <Plus className="h-3 w-3" strokeWidth={2} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setQty(l.product.id, 0)
-                        flash(l.product.id, 'remove', `Removed ${l.product.name} from this sale.`)
-                      }}
-                      className="ml-1 flex h-8 w-8 items-center justify-center text-[var(--color-muted)] hover:text-red-700"
-                      aria-label={`Remove ${l.product.name}`}
+                      onClick={() => setCustomAmount('')}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center text-[var(--color-muted)] hover:text-red-700"
+                      aria-label="Remove the custom amount"
                     >
                       <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
                     </button>
                   </div>
-                </li>
-              ))}
-            </ul>
+                </section>
+              )}
+            </div>
           )}
 
           <dl className="mt-5 space-y-1.5 border-t border-[var(--color-border)] pt-4 text-sm">
@@ -1685,7 +1795,9 @@ export function PointOfSale({
               </div>
             )}
             <div className="flex justify-between">
-              <dt className="text-[var(--color-muted)]">{towardBalance > 0 ? 'Extras' : 'Subtotal'}</dt>
+              <dt className="text-[var(--color-muted)]">
+                {towardBalance > 0 && servicesSubtotal + retailSubtotal === 0 ? 'Extras' : 'Subtotal'}
+              </dt>
               <dd className="tabular-nums">{formatMoney(subtotal)}</dd>
             </div>
             {memberCut > 0 && membership && (
@@ -1718,10 +1830,10 @@ export function PointOfSale({
                 </dd>
               </div>
             )}
-            {manualDiscount > 0 && (
+            {serviceDiscount + productDiscount > 0 && (
               <div className="flex justify-between">
                 <dt className="text-[var(--color-muted)]">Discount</dt>
-                <dd className="tabular-nums">&minus;{formatMoney(Math.min(manualDiscount, subtotal))}</dd>
+                <dd className="tabular-nums">&minus;{formatMoney(serviceDiscount + productDiscount)}</dd>
               </div>
             )}
             <div className="flex justify-between">
@@ -1746,8 +1858,13 @@ export function PointOfSale({
 
           {/* The manager's hand on the price — off before tax, re-verified
               and capped server-side. Absent for everyone else. */}
-          {canDiscount && !sellingPackage && !sellingCustom && (
-            <Field label="Discount ($)" htmlFor="pos_discount" className="mt-4">
+          {canDiscount && !sellingPackage && (
+            <Field
+              label="Discount ($)"
+              htmlFor="pos_discount"
+              className="mt-4"
+              hint="Comes off the services first, then the products. A custom amount is not discounted."
+            >
               <Input
                 id="pos_discount"
                 inputMode="decimal"
@@ -1765,7 +1882,7 @@ export function PointOfSale({
             htmlFor="pos_client"
             hint={
               sellingPackage
-                ? 'Required — the sessions live on their account.'
+                ? 'Required. The sessions live on their account.'
                 : 'Leave blank for a walk-in.'
             }
           >
@@ -1778,7 +1895,7 @@ export function PointOfSale({
               {customers.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
-                  {c.email ? ` — ${c.email}` : ''}
+                  {c.email ? ` (${c.email})` : ''}
                 </option>
               ))}
             </Select>
@@ -1794,11 +1911,11 @@ export function PointOfSale({
             </p>
           )}
 
-          {customerId && owedTotal > 0 && !sellingCustom && (
+          {customerId && owedTotal > 0 && !sellingPackage && customCents === 0 && (
             <p className="text-xs leading-relaxed text-amber-700 dark:text-amber-400">
               They owe {formatMoney(owedTotal)} on{' '}
               {balances.length === 1 ? 'a visit' : `${balances.length} visits`}. This sale does not
-              settle it — use <em>Custom amount</em> to take it together, or Take payment on the
+              settle it. Add a <em>Custom amount</em> to take it together, or Take payment on the
               visit.
             </p>
           )}
@@ -1815,12 +1932,24 @@ export function PointOfSale({
             </Field>
           )}
 
-          <Field label="Paid by" htmlFor="pos_method">
+          <Field
+            label="Paid by"
+            htmlFor="pos_method"
+            hint={
+              method === 'phone_link'
+                ? 'They pay on their own phone from a code on this screen. The sale is paid once Stripe confirms it.'
+                : method === 'stripe_app'
+                  ? 'Charge it with Tap to Pay in the Stripe app. It is matched to this sale by amount.'
+                  : undefined
+            }
+          >
             <Select
               id="pos_method"
               value={method}
               onChange={(e) => setMethod(e.target.value as typeof method)}
             >
+              <option value="phone_link">Pay by phone (card, Apple Pay, Google Pay)</option>
+              <option value="stripe_app">Card via Stripe app</option>
               <option value="card">Card</option>
               <option value="cash">Cash</option>
               <option value="apple_pay">Apple Pay</option>
@@ -1845,13 +1974,9 @@ export function PointOfSale({
             onClick={ringUp}
             disabled={
               busy ||
-              (sellingCustom
-                ? customCents === 0 || (customExtra > 0 && !customDesc.trim())
-                : sellingPackage
-                  ? chosenPackage === null
-                  : sellingServices
-                    ? serviceLines.length === 0
-                    : lines.length === 0)
+              (sellingPackage
+                ? chosenPackage === null
+                : !hasLines || (customCents > 0 && customExtra > 0 && !customDesc.trim()))
             }
             className="w-full"
           >
@@ -1866,6 +1991,327 @@ export function PointOfSale({
           )}
         </div>
       </aside>
+    </div>
+  )
+}
+
+/** A till ticket as the sale route and GET /api/pos/ticket/[id] return it. */
+interface TicketView {
+  id: number
+  method: 'phone_link' | 'stripe_app'
+  status?: 'awaiting' | 'paid' | 'cancelled' | 'expired'
+  amount_cents: number
+  expires_at: string
+  checkout_url?: string | null
+}
+
+/** A card payment the webhook parked, with the same amount as the ticket. */
+interface UnmatchedCandidate {
+  id: number
+  payment_intent_id: string
+  amount_cents: number
+  description: string | null
+  paid_at: string
+}
+
+/** How often the till asks whether the money has landed. */
+const POLL_MS = 3000
+
+/** "checkout.stripe.com/c/pay/cs_live…Ab12" so the link can be read aloud. */
+function shortUrl(url: string): string {
+  const bare = url.replace(/^https?:\/\//, '').split('#')[0]
+  return bare.length <= 40 ? bare : `${bare.slice(0, 30)}…${bare.slice(-6)}`
+}
+
+/** "12:05" from milliseconds left; never negative. */
+function clockOf(ms: number): string {
+  const total = Math.max(Math.floor(ms / 1000), 0)
+  const m = Math.floor(total / 60)
+  const sec = total % 60
+  return `${m}:${String(sec).padStart(2, '0')}`
+}
+
+/**
+ * The till while a sale waits for a card payment taken through Stripe (090).
+ *
+ * The sale is already on the record; what this waits for is the webhook,
+ * which is the only thing that marks the ticket paid. It asks every three
+ * seconds and stops once the ticket is paid, expired or cancelled, or when
+ * the card is closed. A phone landing on the thank-you page proves nothing,
+ * so nothing here listens for it.
+ */
+function AwaitingPayment({
+  ticket,
+  customer,
+  canEmail,
+  onPaid,
+  onClose,
+}: {
+  ticket: TicketView
+  customer: string
+  canEmail: boolean
+  onPaid: () => void
+  onClose: () => void
+}) {
+  const [status, setStatus] = useState<'awaiting' | 'paid' | 'cancelled' | 'expired' | 'lost'>('awaiting')
+  const [candidates, setCandidates] = useState<UnmatchedCandidate[]>([])
+  const [qr, setQr] = useState<string | null>(null)
+  const [now, setNow] = useState(0)
+  const [working, setWorking] = useState<string | null>(null)
+  const url = ticket.checkout_url ?? null
+  const isPhone = ticket.method === 'phone_link'
+
+  // The QR code, drawn in the browser from the Checkout URL.
+  useEffect(() => {
+    if (!url) return
+    let alive = true
+    QRCode.toString(url, { type: 'svg', margin: 1, width: 240, errorCorrectionLevel: 'M' })
+      .then((svg) => {
+        if (alive) setQr(`data:image/svg+xml;utf8,${encodeURIComponent(svg)}`)
+      })
+      .catch(() => {
+        if (alive) setQr(null)
+      })
+    return () => {
+      alive = false
+    }
+  }, [url])
+
+  // The countdown's clock.
+  useEffect(() => {
+    if (status !== 'awaiting') return
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [status])
+
+  // Ask until it is settled one way or the other.
+  useEffect(() => {
+    if (status !== 'awaiting') return
+    let alive = true
+    async function tick() {
+      try {
+        const res = await fetch(`/api/pos/ticket/${ticket.id}`, { cache: 'no-store' })
+        // Signed out, no longer allowed, or gone: asking again will not help.
+        if (res.status === 401 || res.status === 403 || res.status === 404) {
+          if (alive) setStatus('lost')
+          return
+        }
+        if (!res.ok) return
+        const data = (await res.json()) as { ticket: TicketView; candidates: UnmatchedCandidate[] }
+        if (!alive) return
+        setCandidates(data.candidates ?? [])
+        const next = data.ticket.status ?? 'awaiting'
+        if (next !== 'awaiting') setStatus(next)
+      } catch {
+        // A missed poll is retried on the next tick.
+      }
+    }
+    const timer = setInterval(() => void tick(), POLL_MS)
+    void tick()
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [status, ticket.id])
+
+  // Paid: the parent swaps this card for the receipt.
+  useEffect(() => {
+    if (status === 'paid') onPaid()
+  }, [status, onPaid])
+
+  async function act(path: 'cancel' | 'send' | 'match', body?: object) {
+    setWorking(path)
+    try {
+      const res = await fetch(`/api/pos/ticket/${ticket.id}/${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body ?? {}),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(data.message ?? 'That did not go through.')
+        return
+      }
+      if (path === 'cancel') {
+        setStatus('cancelled')
+        toast.success('Sale cancelled. Nothing was charged.')
+      } else if (path === 'send') {
+        toast.success(`Link sent to ${data.to ?? 'their email'}.`)
+      } else {
+        toast.success('Matched. Recording the payment.')
+      }
+    } catch {
+      toast.error('Could not reach the till. Please try again.')
+    } finally {
+      setWorking(null)
+    }
+  }
+
+  const left = now > 0 ? new Date(ticket.expires_at).getTime() - now : null
+
+  if (status === 'lost') {
+    return (
+      <div className="mt-10 max-w-md border border-[var(--color-border)] bg-[var(--color-surface)] p-8">
+        <h2 className="display text-2xl">Reload to check this sale</h2>
+        <p className="mt-4 text-sm leading-relaxed text-[var(--color-muted)]">
+          This screen can no longer ask whether the payment landed. Reload the page, then look
+          for the sale under Orders.
+        </p>
+        <div className="mt-6">
+          <Button onClick={onClose}>New sale</Button>
+        </div>
+      </div>
+    )
+  }
+
+  if (status === 'cancelled' || status === 'expired') {
+    return (
+      <div className="mt-10 max-w-md border border-[var(--color-border)] bg-[var(--color-surface)] p-8">
+        <h2 className="display text-2xl">{status === 'cancelled' ? 'Sale cancelled' : 'Payment not taken in time'}</h2>
+        <p className="mt-4 text-sm leading-relaxed text-[var(--color-muted)]">
+          {status === 'cancelled'
+            ? 'Nothing was charged and no stock moved.'
+            : isPhone
+              ? 'The payment link has closed. Nothing was charged and no stock moved.'
+              : 'Nothing has been charged yet and no stock moved. If the payment still comes through, it completes the sale.'}{' '}
+          Any treatment in the sale stays on {customer}&rsquo;s record as completed with its balance
+          owing, so it shows under Pay off first.
+        </p>
+        {status === 'cancelled' && !isPhone && (
+          <p className="mt-3 text-sm leading-relaxed text-[var(--color-muted)]">
+            If you already tapped the card, it will show under Orders, Card payments not matched to
+            a sale.
+          </p>
+        )}
+        <div className="mt-6">
+          <Button onClick={onClose}>New sale</Button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-10 max-w-md border border-[var(--color-border)] bg-[var(--color-surface)] p-8">
+      <p className="label-caps text-[var(--color-muted)]">Awaiting payment · {customer}</p>
+      <p className="display mt-3 text-5xl tabular-nums">{formatMoney(ticket.amount_cents)}</p>
+      {left !== null && (
+        <p className="mt-2 text-xs tabular-nums text-[var(--color-muted)]">
+          {left > 0 ? `Closes in ${clockOf(left)}` : 'Closing now'}
+        </p>
+      )}
+
+      {isPhone ? (
+        <div className="mt-6">
+          {url ? (
+            <>
+              <div className="flex justify-center bg-white p-4">
+                {qr ? (
+                  // A data URL drawn in the browser; next/image has nothing to optimise.
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={qr} alt="QR code for the payment link" width={240} height={240} />
+                ) : (
+                  <div className="h-[240px] w-[240px]" aria-hidden />
+                )}
+              </div>
+              <p className="mt-3 text-sm leading-relaxed">
+                Have them scan this with their phone camera. They can pay by card, Apple Pay or
+                Google Pay. This screen updates when the payment lands.
+              </p>
+              <p className="mt-2 break-all text-xs text-[var(--color-muted)]">{shortUrl(url)}</p>
+              <div className="mt-4 flex flex-wrap gap-3">
+                {canEmail && (
+                  <Button variant="subtle" onClick={() => void act('send')} disabled={working !== null}>
+                    <Mail className="h-4 w-4" strokeWidth={1.75} aria-hidden />
+                    {working === 'send' ? 'Sending…' : 'Email the link'}
+                  </Button>
+                )}
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="label-caps inline-flex items-center gap-1.5 self-center text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+                >
+                  Open on this device <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden />
+                </a>
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-[var(--color-muted)]">The payment link is not ready. Cancel and try again.</p>
+          )}
+        </div>
+      ) : (
+        <div className="mt-6">
+          <p className="flex items-start gap-2.5 text-sm leading-relaxed">
+            <Smartphone className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.75} aria-hidden />
+            <span>
+              Open the Stripe app, tap +, charge {formatMoney(ticket.amount_cents)} with Tap to Pay.
+              This screen updates when the payment lands.
+            </span>
+          </p>
+          {candidates.length > 0 && (
+            <div className="mt-5 border-t border-[var(--color-border)] pt-4">
+              <p className="label-caps text-[var(--color-muted)]">Card payments for this amount</p>
+              <p className="mt-1 text-xs text-[var(--color-muted)]">
+                Stripe could not tell which sale these were for. Pick the one you just took.
+              </p>
+              <ul className="mt-3 space-y-2">
+                {candidates.map((c) => (
+                  <li key={c.id} className="flex items-center justify-between gap-3 text-sm">
+                    <span className="min-w-0">
+                      <span className="tabular-nums">{formatMoney(c.amount_cents)}</span>
+                      <span className="block text-xs text-[var(--color-muted)]">
+                        {formatDateTimeInTimeZone(new Date(c.paid_at), STUDIO_TZ)}
+                        {c.description ? ` · ${c.description}` : ''}
+                      </span>
+                    </span>
+                    <Button
+                      variant="subtle"
+                      onClick={() => void act('match', { payment_intent_id: c.payment_intent_id })}
+                      disabled={working !== null}
+                    >
+                      This one
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="mt-8 border-t border-[var(--color-border)] pt-5">
+        <Button variant="subtle" onClick={() => void act('cancel')} disabled={working !== null}>
+          {working === 'cancel' ? 'Cancelling…' : 'Cancel this sale'}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/** The one line that says a package and the running sale cannot share a receipt. */
+function SoldOnItsOwn({
+  text,
+  action,
+  onAction,
+  className,
+}: {
+  text: string
+  action: string
+  onAction: () => void
+  className?: string
+}) {
+  return (
+    <div
+      data-ui="tile"
+      className={cn(
+        'flex flex-wrap items-center justify-between gap-3 border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 text-sm',
+        className
+      )}
+    >
+      <span>{text}</span>
+      <Button variant="subtle" onClick={onAction}>
+        {action}
+      </Button>
     </div>
   )
 }

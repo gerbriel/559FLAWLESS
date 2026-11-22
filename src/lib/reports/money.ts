@@ -439,13 +439,19 @@ export async function loadLedger(ctx: MoneyContext): Promise<Ledger> {
     // Where the money was taken, not where the work happens. An order states it
     // outright; an appointment payment is online exactly when Stripe handled it,
     // which is what distinguishes a booking deposit from cash at the desk.
+    // A Stripe payment a member of staff took at the till (090: a phone link
+    // or Tap to Pay, which carry processed_by) is in the studio, unless it is
+    // a deposit, which is only ever paid online.
+    const tookAtTill = p.processed_by !== null && p.kind !== 'deposit'
     const channel: Channel = order
       ? order.channel === 'in_store'
         ? 'in_studio'
         : 'online'
-      : p.stripe_payment_intent_id || p.stripe_charge_id
-        ? 'online'
-        : 'in_studio'
+      : tookAtTill
+        ? 'in_studio'
+        : p.stripe_payment_intent_id || p.stripe_charge_id
+          ? 'online'
+          : 'in_studio'
 
     const line: Line = order ? 'retail' : appointment ? 'service' : 'unattributed'
 

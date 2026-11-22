@@ -43,14 +43,18 @@ function esc(text: string): string {
  *  email clients ignore everything else. */
 function emailHtml(title: string, body: string | null, link: string | null): string {
   const origin = siteUrl()
-  const href = `${origin}${link && link.startsWith('/') ? link : '/account'}`
+  // A till payment link (090) is the one destination off the site: a Stripe
+  // Checkout page. Only that host is let through; anything else lands in the
+  // account as before.
+  const pay = !!link && link.startsWith('https://checkout.stripe.com/')
+  const href = pay ? link : `${origin}${link && link.startsWith('/') ? link : '/account'}`
   return `<!doctype html>
 <html><body style="margin:0;padding:0;background:#faf7f5;">
   <div style="max-width:560px;margin:0 auto;padding:40px 24px;font-family:Georgia,'Times New Roman',serif;color:#2b2320;">
     <p style="font-size:13px;letter-spacing:0.18em;text-transform:uppercase;color:#a08573;margin:0 0 28px;">559 Flawless</p>
     <h1 style="font-size:26px;font-weight:normal;margin:0 0 16px;">${esc(title)}</h1>
     ${body ? `<p style="font-size:16px;line-height:1.6;color:#5c5049;margin:0 0 28px;font-family:Helvetica,Arial,sans-serif;">${esc(body)}</p>` : ''}
-    <a href="${href}" style="display:inline-block;background:#2b2320;color:#faf7f5;text-decoration:none;padding:14px 28px;font-size:13px;letter-spacing:0.14em;text-transform:uppercase;font-family:Helvetica,Arial,sans-serif;">Open in your account</a>
+    <a href="${esc(href)}" style="display:inline-block;background:#2b2320;color:#faf7f5;text-decoration:none;padding:14px 28px;font-size:13px;letter-spacing:0.14em;text-transform:uppercase;font-family:Helvetica,Arial,sans-serif;">${pay ? 'Pay now' : 'Open in your account'}</a>
     <p style="font-size:12px;color:#a08573;margin:36px 0 0;font-family:Helvetica,Arial,sans-serif;">
       Sent by 559 Flawless because this account has notifications. You can read everything on the website too.
     </p>
@@ -78,7 +82,7 @@ export async function sendInvitationEmail(opts: {
 }): Promise<boolean> {
   if (!emailConfigured()) return false
 
-  const greeting = opts.firstName?.trim() ? `Hi ${opts.firstName.trim()} — ` : ''
+  const greeting = opts.firstName?.trim() ? `Hi ${opts.firstName.trim()}, ` : ''
   const expires = new Date(opts.expiresAt).toLocaleDateString('en-US', {
     month: 'long',
     day: 'numeric',
@@ -97,7 +101,7 @@ export async function sendInvitationEmail(opts: {
     <a href="${esc(opts.url)}" style="display:inline-block;background:#2b2320;color:#faf7f5;text-decoration:none;padding:14px 28px;font-size:13px;letter-spacing:0.14em;text-transform:uppercase;font-family:Helvetica,Arial,sans-serif;">Claim your account</a>
     <p style="font-size:12px;color:#a08573;margin:36px 0 0;font-family:Helvetica,Arial,sans-serif;">
       This link is yours alone and expires on ${esc(expires)}. If you were not expecting this,
-      you can ignore it — nothing happens without you.
+      you can ignore it. Nothing happens without you.
     </p>
   </div>
 </body></html>`

@@ -29,8 +29,10 @@ export function BalancePayButton({ appointmentId, balanceCents }: {
       if (!res.ok || !data.url) {
         toast.error(
           data.error === 'nothing_owed'
-            ? 'Nothing is owed on this visit — you are all settled.'
-            : 'Could not open payment. Please try again, or pay at the studio.'
+            ? 'Nothing is owed on this visit. You are all settled.'
+            : data.error === 'awaiting_card_payment'
+              ? 'A card payment for this visit is already in progress at the studio.'
+              : 'Could not open payment. Please try again, or pay at the studio.'
         )
         return
       }

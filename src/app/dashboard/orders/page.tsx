@@ -5,8 +5,14 @@ import { Badge } from '@/components/ui/badge'
 import { OrderStatusControl } from '@/components/shared/OrderStatusControl'
 import { ItemizeOrder, type ItemizeOption } from '@/components/shared/ItemizeOrder'
 import { formatMoney } from '@/lib/utils'
-import { formatDateTimeInTimeZone } from '@/lib/time'
-import type { OrderStatus, AppointmentStatus } from '@/types/database'
+import { addMinutes, formatDateTimeInTimeZone, requestNow } from '@/lib/time'
+import { CARD_MATCH_WINDOW_MINUTES } from '@/lib/till-ticket'
+import { isFrontDesk, isManager, type OrderStatus, type AppointmentStatus, type UserRole } from '@/types/database'
+import {
+  UnmatchedCardPayments,
+  type AwaitingTicketOption,
+  type UnmatchedRow,
+} from '@/components/shared/UnmatchedCardPayments'
 
 export const dynamic = 'force-dynamic'
 
@@ -54,6 +60,74 @@ export default async function DashboardOrdersPage({ searchParams }: Props) {
   const active = VIEWS.some((v) => v.key === view) ? view! : 'owed'
 
   const supabase = await createClient()
+
+  // Card payments from the Stripe app the webhook could not match (090).
+  // Front desk and up read them (RLS); a manager may dismiss one.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  const { data: me } = user
+    ? await supabase.from('profiles').select('role').eq('id', user.id).maybeSingle()
+    : { data: null }
+  const role = (me?.role ?? null) as UserRole | null
+  let unmatched: UnmatchedRow[] = []
+  let awaitingTickets: AwaitingTicketOption[] = []
+  // Visits and orders a till sale is waiting on a card payment for, so Owed
+  // can say so rather than chase them.
+  const awaitingCard = { appointments: new Set<string>(), orders: new Set<number>() }
+  if (role && isFrontDesk(role)) {
+    // Let go of Stripe app sales nobody charged (five minutes past their
+    // time); the function checks the role and fixes the grace itself.
+    await supabase.rpc('expire_overdue_till_tickets')
+    const { data: open } = await supabase
+      .from('till_tickets')
+      .select('appointment_id, order_id')
+      .eq('status', 'awaiting')
+      .limit(200)
+    for (const t of open ?? []) {
+      if (t.appointment_id) awaitingCard.appointments.add(t.appointment_id)
+      if (t.order_id) awaitingCard.orders.add(t.order_id)
+    }
+    const { data: parked } = await supabase
+      .from('stripe_unmatched_payments')
+      .select('id, stripe_payment_intent_id, kind, amount_cents, description, paid_at, reason')
+      .is('matched_ticket_id', null)
+      .is('dismissed_at', null)
+      .order('paid_at', { ascending: false })
+      .limit(50)
+    unmatched = (parked ?? []).map((u) => ({
+      id: u.id,
+      payment_intent_id: u.stripe_payment_intent_id,
+      amount_cents: u.amount_cents,
+      description: u.description,
+      paid_at: u.paid_at,
+      kind: u.kind,
+      reason: u.reason,
+    }))
+    if (unmatched.length > 0) {
+      const { data: waiting } = await supabase
+        .from('till_tickets')
+        .select('id, amount_cents, created_at, status, guest_name, profiles!till_tickets_client_id_fkey(first_name, last_name)')
+        // Awaiting, or let go in the last two hours: a payment that landed
+        // just after its sale lapsed can still be matched (and revives it).
+        .in('status', ['awaiting', 'expired'])
+        .eq('method', 'stripe_app')
+        .gte('created_at', addMinutes(new Date(requestNow()), -CARD_MATCH_WINDOW_MINUTES).toISOString())
+        .in('amount_cents', [...new Set(unmatched.filter((u) => u.kind === 'payment').map((u) => u.amount_cents))])
+        .order('created_at', { ascending: false })
+        .limit(50)
+      awaitingTickets = (waiting ?? []).map((t) => {
+        const p = t.profiles as { first_name: string | null; last_name: string | null } | null
+        const n = p ? `${p.first_name ?? ''} ${p.last_name ?? ''}`.trim() : ''
+        return {
+          id: t.id,
+          amount_cents: t.amount_cents,
+          created_at: t.created_at,
+          who: `${n || t.guest_name || 'Walk-in'}${t.status === 'expired' ? ' (lapsed)' : ''}`,
+        }
+      })
+    }
+  }
 
   const [{ data: orders }, { data: appointments }, { data: payments }] = await Promise.all([
     supabase
@@ -204,8 +278,16 @@ export default async function DashboardOrdersPage({ searchParams }: Props) {
     <div>
       <h1 className="display text-3xl">Orders</h1>
       <p className="mt-2 max-w-prose text-sm text-[var(--color-muted)]">
-        Everything sold — time and product — and what is still outstanding on it.
+        Everything sold, time and product, and what is still outstanding on it.
       </p>
+
+      {unmatched.length > 0 && (
+        <UnmatchedCardPayments
+          rows={unmatched}
+          tickets={awaitingTickets}
+          canDismiss={!!role && isManager(role)}
+        />
+      )}
 
       <dl className="mt-8 grid gap-px border border-[var(--color-border)] bg-[var(--color-border)] sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Taken · services" value={formatMoney(takenFromServices)} />
@@ -268,6 +350,7 @@ export default async function DashboardOrdersPage({ searchParams }: Props) {
                   <Badge tone={OUTCOME[a.status as AppointmentStatus].tone}>
                     {OUTCOME[a.status as AppointmentStatus].label}
                   </Badge>
+                  {awaitingCard.appointments.has(a.id) && <Badge tone="accent">Awaiting card payment</Badge>}
                   {a.taken > 0 && (
                     <span className="text-xs tabular-nums text-[var(--color-muted)]">
                       {formatMoney(a.taken)} of {formatMoney(a.total_cents)}
@@ -291,6 +374,7 @@ export default async function DashboardOrdersPage({ searchParams }: Props) {
                       {o.order_number} · {o.items.map((i) => `${i.name_snapshot} ×${i.qty}`).join(', ')}
                     </p>
                   </div>
+                  {awaitingCard.orders.has(o.id) && <Badge tone="accent">Awaiting card payment</Badge>}
                   <span className="w-24 text-right tabular-nums text-amber-700 dark:text-amber-400">
                     {formatMoney(o.balance)}
                   </span>

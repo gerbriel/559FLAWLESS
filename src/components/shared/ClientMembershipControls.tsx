@@ -5,8 +5,15 @@ import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
-import { Field, Select, Textarea } from '@/components/ui/field'
+import { Field, Input, Select, Textarea } from '@/components/ui/field'
 import { formatMoney } from '@/lib/utils'
+import {
+  addDaysToDateKey,
+  addMonthsToDateKey,
+  dateKeyInTimeZone,
+  formatDateInTimeZone,
+  zonedTimeToUtc,
+} from '@/lib/time'
 import {
   describeIncluded,
   includedAllowances,
@@ -14,7 +21,30 @@ import {
   type Membership,
   membershipErrorMessage,
   type MembershipChargeMethod,
+  type MembershipChargeStatus,
 } from '@/types/memberships'
+
+/**
+ * The database's rule for a start date (089): not after today, and one
+ * period from it must still be ahead of today. A start whose first period has
+ * already ended would enrol a membership that has run out.
+ */
+function startIsValid(startKey: string, periodMonths: number, todayKey: string): boolean {
+  return startKey <= todayKey && addMonthsToDateKey(startKey, periodMonths) > todayKey
+}
+
+/**
+ * The earliest day that passes startIsValid, for the picker's min. The
+ * subtraction lands on or just before it (month-end clamping), so a few
+ * steps forward settle it.
+ */
+function earliestValidStart(periodMonths: number, todayKey: string): string {
+  let day = addMonthsToDateKey(todayKey, -periodMonths)
+  for (let i = 0; i < 8 && !startIsValid(day, periodMonths, todayKey); i++) {
+    day = addDaysToDateKey(day, 1)
+  }
+  return day
+}
 
 /**
  * A plan offered in the enrol form, with its scope rows (088) so the line
@@ -61,26 +91,25 @@ function describeEnrolPlan(plan: EnrolPlan): string {
  * function, so a front-desk member of staff who reached this markup still gets
  * refused. The gate on the panel above decides whether to render it at all.
  *
- * Nothing in this component knows a price. Enrolling sends a plan id and a
- * note; the trigger in migration 050 reads the price off the plan and freezes
- * it. That is rule 2 of AGENTS.md — the request names WHICH plan, never what it
+ * Nothing in this component knows a price. Enrolling sends a plan id, a start
+ * date, a note and how the first period was paid (089's enrol_membership());
+ * the trigger in migration 050 reads the price off the plan and freezes it. That is rule 2 of AGENTS.md — the request names WHICH plan, never what it
  * costs — and it is the reason a manager cannot quietly enrol a friend at $0.
  */
 export function ClientMembershipControls({
   clientId,
   liveMembershipId,
   plans,
-  dueChargeIds,
   cancelAtPeriodEnd,
   stripeSubscriptionId = null,
   periodOver = false,
+  timeZone,
+  todayKey,
 }: {
   clientId: string
   /** Null when the client has nothing current — the enrol form is shown. */
   liveMembershipId: number | null
   plans: EnrolPlan[]
-  /** Charges still owed, oldest first. Usually none or one. */
-  dueChargeIds: number[]
   cancelAtPeriodEnd: boolean
   /**
    * Set when Stripe bills this membership (083). renew_membership() refuses
@@ -92,14 +121,24 @@ export function ClientMembershipControls({
    * holds 050's one-live index, so it is renewed or ended, not enrolled over.
    */
   periodOver?: boolean
+  /** The studio's zone, for turning a picked day into an instant. */
+  timeZone: string
+  /** Today, 'YYYY-MM-DD' in the studio's zone, from the server's clock reading. */
+  todayKey: string
 }) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
   const [planId, setPlanId] = useState<string>('')
   const [note, setNote] = useState('')
-  const [method, setMethod] = useState<MembershipChargeMethod>('card')
+  const [startedOn, setStartedOn] = useState(todayKey)
+  const [paidMethod, setPaidMethod] = useState<'' | Exclude<MembershipChargeMethod, 'stripe'>>('')
+  const [paidOn, setPaidOn] = useState('')
 
   const chosen = plans.find((p) => String(p.id) === planId)
+  // A convenience for the picker only; submit checks startIsValid itself.
+  const earliestStart = chosen
+    ? earliestValidStart(chosen.period_months, todayKey)
+    : addDaysToDateKey(todayKey, -365)
 
   async function enrol(e: React.FormEvent) {
     e.preventDefault()
@@ -107,18 +146,44 @@ export function ClientMembershipControls({
       toast.error('Pick a membership first.')
       return
     }
+    if (!startedOn) {
+      toast.error('Pick the day it started.')
+      return
+    }
+    if (!startIsValid(startedOn, chosen.period_months, todayKey)) {
+      toast.error(
+        startedOn > todayKey
+          ? 'The start date cannot be in the future.'
+          : `Pick a start within the last ${membershipPeriodLabel(chosen.period_months)}. A start earlier than that would already have run out.`
+      )
+      return
+    }
+    const paidKey = paidOn || startedOn
+    if (paidMethod && (paidKey < startedOn || paidKey > todayKey)) {
+      toast.error('Pick a paid date between the start and today.')
+      return
+    }
+
+    // A picked day is a wall-clock date in the studio's zone; the instant is
+    // its local midnight (src/lib/time.ts, never setHours).
+    const startedAt = zonedTimeToUtc(startedOn, '00:00', timeZone).toISOString()
+    const paidAt = paidMethod
+      ? zonedTimeToUtc(paidKey, '00:00', timeZone).toISOString()
+      : null
 
     setBusy(true)
-    const { error } = await createClient()
-      .from('client_memberships')
-      .insert({
-        client_id: clientId,
-        membership_id: chosen.id,
-        note: note.trim() || null,
-      })
-    setBusy(false)
+    const supabase = createClient()
+    const { data: newId, error } = await supabase.rpc('enrol_membership', {
+      p_client: clientId,
+      p_membership: chosen.id,
+      p_started_at: startedAt,
+      p_note: note.trim() || null,
+      p_paid_method: paidMethod || null,
+      p_paid_at: paidAt,
+    })
 
     if (error) {
+      setBusy(false)
       // 23505 is the partial unique index in 050: one live membership per
       // person, so "which discount applies" has one answer.
       toast.error(
@@ -129,25 +194,45 @@ export function ClientMembershipControls({
       return
     }
 
-    toast.success(`Enrolled in ${chosen.name}. The first period is showing as due.`)
-    setPlanId('')
-    setNote('')
-    router.refresh()
-  }
-
-  async function markPaid(chargeId: number) {
-    setBusy(true)
-    const { error } = await createClient().rpc('mark_membership_charge_paid', {
-      p_charge: chargeId,
-      p_method: method,
-    })
+    // Read back what the database wrote: the first period's dates (the 050
+    // trigger derives the end from the start) and whether its charge is paid
+    // or due. Nothing rolls forward; a past start stays in its first period.
+    let summary = `Enrolled in ${chosen.name}.`
+    if (typeof newId === 'number') {
+      const { data: held } = await supabase
+        .from('client_memberships')
+        .select('current_period_start, current_period_end')
+        .eq('id', newId)
+        .maybeSingle()
+      if (held) {
+        const { data: charge } = await supabase
+          .from('membership_charges')
+          .select('status')
+          .eq('client_membership_id', newId)
+          .eq('period_start', held.current_period_start)
+          .maybeSingle()
+        const status = (charge?.status ?? null) as MembershipChargeStatus | null
+        summary +=
+          ` They are in the period ${formatDateInTimeZone(new Date(held.current_period_start), timeZone)} to ` +
+          `${formatDateInTimeZone(new Date(held.current_period_end), timeZone)}.` +
+          (status === 'paid'
+            ? ' That period is recorded as paid.'
+            : status
+              ? ' That period shows as due until the money is recorded.'
+              : '') +
+          (dateKeyInTimeZone(new Date(held.current_period_end), timeZone) <= todayKey
+            ? ' That period has already run out, so renew it to bring them current.'
+            : '')
+      }
+    }
     setBusy(false)
 
-    if (error) {
-      toast.error(error.message || 'Could not record that payment.')
-      return
-    }
-    toast.success('Recorded.')
+    toast.success(summary)
+    setPlanId('')
+    setNote('')
+    setStartedOn(todayKey)
+    setPaidMethod('')
+    setPaidOn('')
     router.refresh()
   }
 
@@ -200,14 +285,17 @@ export function ClientMembershipControls({
         failure = 'Could not reach Stripe. Try again.'
       }
     } else {
-      const { error } = await createClient()
+      // RLS refuses by matching nothing, not by erroring, so ask for the row
+      // back and require exactly one.
+      const { data, error } = await createClient()
         .from('client_memberships')
         .update({
           cancel_at_period_end: value,
           cancelled_at: value ? new Date().toISOString() : null,
         })
         .eq('id', liveMembershipId)
-      if (error) failure = error.message || 'Could not change that.'
+        .select('id')
+      if (error || data?.length !== 1) failure = error?.message || 'Could not change that.'
     }
     setBusy(false)
 
@@ -218,7 +306,7 @@ export function ClientMembershipControls({
     toast.success(
       value
         ? 'It will end when this period runs out. Nothing changes before then.'
-        : 'Back on — it will roll into the next period.'
+        : 'Back on. It will roll into the next period.'
     )
     router.refresh()
   }
@@ -253,11 +341,14 @@ export function ClientMembershipControls({
       }
     } else {
       const stamp = new Date().toISOString()
-      const { error } = await createClient()
+      const { data, error } = await createClient()
         .from('client_memberships')
         .update({ status: 'cancelled', cancelled_at: stamp, ended_at: stamp })
         .eq('id', liveMembershipId)
-      if (error) failure = error.message || 'Could not end that membership.'
+        .select('id')
+      if (error || data?.length !== 1) {
+        failure = error?.message || 'Could not end that membership.'
+      }
     }
     setBusy(false)
 
@@ -287,7 +378,7 @@ export function ClientMembershipControls({
             <option value="">Choose one…</option>
             {sellable.map((p) => (
               <option key={p.id} value={p.id}>
-                {p.name} — {formatMoney(p.price_cents)} /{' '}
+                {p.name}: {formatMoney(p.price_cents)} /{' '}
                 {membershipPeriodLabel(p.period_months)}
               </option>
             ))}
@@ -298,12 +389,66 @@ export function ClientMembershipControls({
           <p className="text-xs text-[var(--color-muted)]">
             {[
               describeEnrolPlan(chosen),
-              'The first period starts today and shows as due until the money is recorded.',
+              paidMethod
+                ? 'The first period starts on the day below and is recorded as paid.'
+                : 'The first period starts on the day below and shows as due until the money is recorded.',
             ]
               .filter(Boolean)
               .join('. ')}
           </p>
         )}
+
+        <Field
+          label="Started on"
+          htmlFor="cm_started"
+          hint={
+            chosen
+              ? `Within the last ${membershipPeriodLabel(chosen.period_months)}. A start earlier than that would already have run out.`
+              : 'Pick a membership first. The start can go back up to one of its periods.'
+          }
+        >
+          <Input
+            id="cm_started"
+            type="date"
+            required
+            min={earliestStart}
+            max={todayKey}
+            value={startedOn}
+            onChange={(e) => setStartedOn(e.target.value)}
+          />
+        </Field>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Paid" htmlFor="cm_paid">
+            <Select
+              id="cm_paid"
+              value={paidMethod}
+              onChange={(e) => {
+                const next = e.target.value as typeof paidMethod
+                setPaidMethod(next)
+                if (next && !paidOn) setPaidOn(startedOn)
+              }}
+            >
+              <option value="">Not yet</option>
+              <option value="cash">Cash</option>
+              <option value="card">Card</option>
+              <option value="other">Other</option>
+            </Select>
+          </Field>
+          {paidMethod && (
+            <Field label="Paid on" htmlFor="cm_paid_on">
+              <Input
+                id="cm_paid_on"
+                type="date"
+                required
+                min={startedOn || undefined}
+                max={todayKey}
+                value={paidOn}
+                onChange={(e) => setPaidOn(e.target.value)}
+              />
+            </Field>
+          )}
+        </div>
 
         <Field label="Note" htmlFor="cm_note" hint="Optional. Why, or on whose say-so.">
           <Textarea
@@ -326,27 +471,6 @@ export function ClientMembershipControls({
     <div className="space-y-4">
       {periodOver && (
         <p className="text-xs text-amber-700 dark:text-amber-400">This period has run out.</p>
-      )}
-
-      {dueChargeIds.length > 0 && (
-        <div className="space-y-3">
-          <Field label="Paid by" htmlFor="cm_method">
-            <Select
-              id="cm_method"
-              value={method}
-              onChange={(e) => setMethod(e.target.value as MembershipChargeMethod)}
-            >
-              <option value="card">Card</option>
-              <option value="cash">Cash</option>
-              <option value="other">Other</option>
-            </Select>
-          </Field>
-          {dueChargeIds.map((id) => (
-            <Button key={id} size="sm" disabled={busy} onClick={() => markPaid(id)}>
-              {busy ? 'Recording…' : 'Record that period as paid'}
-            </Button>
-          ))}
-        </div>
       )}
 
       <div className="flex flex-wrap gap-2.5">

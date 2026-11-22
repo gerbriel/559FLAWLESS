@@ -5,6 +5,9 @@ import type Stripe from 'stripe'
 import { getStripe, stripeConfigured } from '@/lib/stripe'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { queueNotificationEmails } from '@/lib/notification-email'
+import { addMinutes } from '@/lib/time'
+import { CARD_MATCH_WINDOW_MINUTES, STRIPE_APP_GRACE_MINUTES } from '@/lib/till-ticket'
+import type { UnmatchedReason } from '@/types/database'
 
 export const dynamic = 'force-dynamic'
 
@@ -69,6 +72,20 @@ export async function POST(request: NextRequest) {
         const session = event.data.object
         const kind = session.metadata?.kind
 
+        // A till sale's phone link nobody paid (090). The function only
+        // closes an awaiting ticket, so a retry, or a ticket staff already
+        // cancelled, is a no-op. The visit keeps its balance owing.
+        if (kind === 'till_ticket') {
+          const ticketId = Number(session.metadata?.ticket_id)
+          if (Number.isInteger(ticketId) && ticketId > 0) {
+            must(
+              await admin.rpc('expire_till_ticket', { p_ticket: ticketId }),
+              `expire till ticket ${ticketId}`
+            )
+          }
+          break
+        }
+
         // A retail bag nobody paid for. This used to live in a second
         // `case` for the same event further down, which a switch never
         // reaches, so expired orders sat at pending_payment forever.
@@ -104,6 +121,85 @@ export async function POST(request: NextRequest) {
       case 'checkout.session.completed': {
         const session = event.data.object
         const kind = session.metadata?.kind
+
+        // A till sale paid on the client's phone (090). settle_till_ticket
+        // writes the ledger and completes the order under a row lock; a
+        // second call for a paid ticket returns false and writes nothing.
+        if (kind === 'till_ticket') {
+          const ticketId = Number(session.metadata?.ticket_id)
+          const intent = paymentIntentId(session)
+          if (!Number.isInteger(ticketId) || ticketId <= 0 || !intent) break
+          if (session.payment_status !== 'paid') break
+
+          // The session must be the one this ticket made, for its amount, in
+          // dollars. Anything else is not trusted to settle it; the log is
+          // loud because the money has moved.
+          const { data: ticket } = must(
+            await admin
+              .from('till_tickets')
+              .select('id, status, amount_cents, stripe_session_id, stripe_payment_intent_id')
+              .eq('id', ticketId)
+              .maybeSingle(),
+            `read till ticket ${ticketId}`
+          )
+          if (
+            !ticket ||
+            ticket.stripe_session_id !== session.id ||
+            session.amount_total !== ticket.amount_cents ||
+            session.currency !== 'usd'
+          ) {
+            void logError('stripe/webhook', 'phone payment does not match its till sale; not settled', {
+              ticket_id: ticketId,
+              session: session.id,
+              ticket_session: ticket?.stripe_session_id ?? null,
+              amount_cents: session.amount_total,
+              ticket_amount_cents: ticket?.amount_cents ?? null,
+              currency: session.currency,
+              payment_intent: intent,
+            })
+            break
+          }
+          // A retry of one already settled.
+          if (ticket.stripe_payment_intent_id === intent) break
+
+          const pi = await getStripe().paymentIntents.retrieve(intent, { expand: ['latest_charge'] })
+          const charge = pi.latest_charge && typeof pi.latest_charge !== 'string' ? pi.latest_charge : null
+          const paidAt = isoFromSeconds(charge?.created ?? event.created)
+
+          const { data: settled } = must(
+            await admin.rpc('settle_till_ticket', {
+              p_ticket: ticketId,
+              p_payment_intent: intent,
+              p_charge: charge?.id ?? null,
+              p_paid_at: paidAt,
+            }),
+            `settle till ticket ${ticketId}`
+          )
+          if (settled) break
+
+          // Not settled: the ticket was cancelled (or paid by something
+          // else) before this landed. Real money for nothing: park it where
+          // staff will see it, with the ticket's actual state as the reason.
+          const { data: current } = must(
+            await admin.from('till_tickets').select('status').eq('id', ticketId).maybeSingle(),
+            `re-read till ticket ${ticketId}`
+          )
+          void logError('stripe/webhook', 'phone payment for a till sale that was not awaiting it', {
+            ticket_id: ticketId,
+            ticket_status: current?.status ?? null,
+            payment_intent: intent,
+            amount_cents: session.amount_total,
+          })
+          await parkCardPayment(admin, must, {
+            intent,
+            charge: charge?.id ?? null,
+            amountCents: pi.amount_received,
+            description: `Paid by phone for sale #${ticketId} after it was ${current?.status ?? 'removed'}`,
+            paidAt,
+            reason: reasonFor(current?.status ?? null),
+          })
+          break
+        }
 
         if (kind === 'membership' && session.mode === 'subscription') {
           // Joining online with renewal (083). Stripe owns the card and the
@@ -527,6 +623,114 @@ export async function POST(request: NextRequest) {
         break
       }
 
+      // ── Tap to Pay in the Stripe app (090) ──────────────────
+      // The Stripe Dashboard app makes its own PaymentIntent from a typed
+      // amount and carries none of our ids. A card-present payment that is
+      // not one of ours is matched by amount to the one stripe_app till
+      // ticket awaiting it, or parked for a person to match. Everything we
+      // create ourselves is ignored here: those settle on the session events.
+      // Safe to retry: a settled intent is found on its ticket, a parked one
+      // is upserted on its intent id, and settle_till_ticket is idempotent.
+      case 'payment_intent.succeeded': {
+        const intent = event.data.object
+        if (intent.metadata?.kind && OUR_METADATA_KINDS.has(intent.metadata.kind)) break
+        // The till rings up dollars; nothing else can be one of its sales.
+        if (intent.currency !== 'usd') break
+
+        // Duplicate deliveries: settled already, or parked already.
+        const { data: done } = must(
+          await admin.from('till_tickets').select('id').eq('stripe_payment_intent_id', intent.id).limit(1),
+          `check till ticket for ${intent.id}`
+        )
+        if (done && done.length > 0) break
+        const { data: parked } = must(
+          await admin
+            .from('stripe_unmatched_payments')
+            .select('id')
+            .eq('stripe_payment_intent_id', intent.id)
+            .eq('kind', 'payment')
+            .limit(1),
+          `check parked payment for ${intent.id}`
+        )
+        if (parked && parked.length > 0) break
+
+        const stripe = getStripe()
+        const pi = await stripe.paymentIntents.retrieve(intent.id, { expand: ['latest_charge'] })
+        const charge = pi.latest_charge && typeof pi.latest_charge !== 'string' ? pi.latest_charge : null
+        if (charge?.payment_method_details?.type !== 'card_present') break
+
+        // A Checkout Session behind it means it is ours after all.
+        const sessions = await stripe.checkout.sessions.list({ payment_intent: pi.id, limit: 1 })
+        if (sessions.data.length > 0) break
+
+        // Abandoned Stripe app sales go first, so they cannot take this.
+        must(await admin.rpc('expire_overdue_till_tickets'), 'sweep overdue till tickets')
+
+        const paidAt = isoFromSeconds(charge.created)
+        const now = new Date()
+        const since = addMinutes(now, -CARD_MATCH_WINDOW_MINUTES).toISOString()
+        const { data: candidates } = must(
+          await admin
+            .from('till_tickets')
+            .select('id')
+            .eq('status', 'awaiting')
+            .eq('method', 'stripe_app')
+            .eq('amount_cents', pi.amount_received)
+            .gte('created_at', since)
+            // Still in its time, or in the grace after it: a tap at minute
+            // 29 whose event lands at minute 31 still finds its sale.
+            .gt('expires_at', addMinutes(now, -STRIPE_APP_GRACE_MINUTES).toISOString())
+            .limit(2),
+          `match till ticket for ${pi.id}`
+        )
+
+        let reason: UnmatchedReason = candidates && candidates.length > 1 ? 'several_tickets' : 'no_ticket'
+        if (candidates && candidates.length === 1) {
+          const { data: settled } = must(
+            await admin.rpc('settle_till_ticket', {
+              p_ticket: candidates[0].id,
+              p_payment_intent: pi.id,
+              p_charge: charge.id,
+              p_paid_at: paidAt,
+            }),
+            `settle till ticket ${candidates[0].id}`
+          )
+          if (settled) break
+          // Another payment of the same amount took it a moment ago.
+          const { data: lost } = must(
+            await admin.from('till_tickets').select('status').eq('id', candidates[0].id).maybeSingle(),
+            `re-read till ticket ${candidates[0].id}`
+          )
+          reason = reasonFor(lost?.status ?? null)
+        } else if (!candidates || candidates.length === 0) {
+          // Nothing awaiting: say what became of the latest sale this amount
+          // was likely for. A paid one means this is a second payment.
+          const { data: latest } = must(
+            await admin
+              .from('till_tickets')
+              .select('status')
+              .eq('method', 'stripe_app')
+              .eq('amount_cents', pi.amount_received)
+              .gte('created_at', since)
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .maybeSingle(),
+            `find recent till ticket for ${pi.id}`
+          )
+          reason = reasonFor(latest?.status ?? null)
+        }
+
+        await parkCardPayment(admin, must, {
+          intent: pi.id,
+          charge: charge.id,
+          amountCents: pi.amount_received,
+          description: pi.description ?? null,
+          paidAt,
+          reason,
+        })
+        break
+      }
+
       case 'charge.refunded': {
         const charge = event.data.object
         const intentId =
@@ -535,20 +739,6 @@ export async function POST(request: NextRequest) {
             : charge.payment_intent?.id
 
         if (intentId) {
-          // Idempotency: this was the one handler with none, so a retried
-          // event inserted the negative row twice and the refund ledger
-          // doubled. The charge id is the natural key.
-          const { data: already } = must(
-            await admin
-              .from('payments')
-              .select('id')
-              .eq('kind', 'refund')
-              .eq('stripe_charge_id', charge.id)
-              .limit(1),
-            `check refund idempotency for ${charge.id}`
-          )
-          if (already && already.length > 0) break
-
           must(
             await admin
               .from('appointments')
@@ -570,31 +760,93 @@ export async function POST(request: NextRequest) {
             `mark membership charge refunded for ${intentId}`
           )
 
-          // Who it goes back to. Without this the refund row carried neither
-          // a client nor an appointment, so it could never come off anybody's
-          // total — and since 081 that total is what the counter calls
-          // lifetime value. Read from the appointment the intent paid for;
-          // a refund against a retail order has no appointment and keeps the
-          // nulls, which is honest rather than guessed.
+          // Who it goes back to. The appointment the intent paid a deposit
+          // for, as before; failing that (a till sale, 090, or an online
+          // order) the payments that intent wrote, so the refund comes off
+          // the right visit or order and the right client's total.
           const { data: refunded } = await admin
             .from('appointments')
             .select('id, client_id')
             .eq('stripe_payment_intent_id', intentId)
             .maybeSingle()
+          const { data: paidRows } = refunded
+            ? { data: [] }
+            : must(
+                await admin
+                  .from('payments')
+                  .select('appointment_id, order_id, client_id, amount_cents, kind')
+                  .eq('stripe_payment_intent_id', intentId)
+                  .neq('kind', 'refund')
+                  .eq('status', 'succeeded'),
+                `find payments for ${intentId}`
+              )
+          const attribute = (cents: number) => {
+            if (refunded) return { appointment_id: refunded.id, order_id: null, client_id: refunded.client_id }
+            const rows = paidRows ?? []
+            if (rows.length === 0) return { appointment_id: null, order_id: null, client_id: null }
+            // One row: that one. A till sale paid a visit and an order with
+            // one intent: a refund the product part covers goes on the order
+            // (a bottle handed back), anything bigger on the visit.
+            const product = rows.find((r) => r.order_id !== null)
+            const service = rows.find((r) => r.appointment_id !== null)
+            const pick =
+              rows.length === 1
+                ? rows[0]
+                : product && (cents <= product.amount_cents || !service)
+                  ? product
+                  : (service ?? rows[0])
+            return { appointment_id: pick.appointment_id, order_id: pick.order_id, client_id: pick.client_id }
+          }
 
-          must(
-            await admin.from('payments').insert({
-              amount_cents: -(charge.amount_refunded ?? 0),
+          // Keyed on the refund, not the charge, so a second partial refund
+          // of one charge is recorded too. Rows written before 090 carry no
+          // refund id: for a charge that has one of those, only what is not
+          // yet on the ledger is written, as one row.
+          const listed =
+            charge.refunds?.data && charge.refunds.data.length > 0
+              ? charge.refunds.data
+              : (await getStripe().refunds.list({ charge: charge.id, limit: 100 })).data
+          const live = listed
+            .filter((r) => r.status !== 'failed' && r.status !== 'canceled')
+            .sort((x, y) => x.created - y.created)
+          const { data: existing } = must(
+            await admin
+              .from('payments')
+              .select('stripe_refund_id, amount_cents')
+              .eq('kind', 'refund')
+              .eq('stripe_charge_id', charge.id),
+            `check refund idempotency for ${charge.id}`
+          )
+          const seen = new Set((existing ?? []).map((r) => r.stripe_refund_id).filter(Boolean))
+          const legacy = (existing ?? []).some((r) => r.stripe_refund_id === null)
+
+          const toWrite: { refundId: string | null; cents: number }[] = []
+          if (legacy) {
+            const recorded = -(existing ?? []).reduce((n, r) => n + r.amount_cents, 0)
+            const missing = (charge.amount_refunded ?? 0) - recorded
+            const newest = [...live].reverse().find((r) => !seen.has(r.id))
+            if (missing > 0) toWrite.push({ refundId: newest?.id ?? null, cents: missing })
+          } else if (live.length > 0) {
+            for (const r of live) if (!seen.has(r.id)) toWrite.push({ refundId: r.id, cents: r.amount })
+          } else if ((existing ?? []).length === 0 && (charge.amount_refunded ?? 0) > 0) {
+            // Stripe listed no refund objects: the old behaviour, one row.
+            toWrite.push({ refundId: null, cents: charge.amount_refunded })
+          }
+
+          for (const w of toWrite) {
+            const res = await admin.from('payments').insert({
+              amount_cents: -w.cents,
               method: 'card',
               kind: 'refund',
-              appointment_id: refunded?.id ?? null,
-              client_id: refunded?.client_id ?? null,
+              ...attribute(w.cents),
               stripe_payment_intent_id: intentId,
               stripe_charge_id: charge.id,
+              stripe_refund_id: w.refundId,
               status: 'refunded',
-            }),
-            `record refund for ${charge.id}`
-          )
+            })
+            // 23505: a concurrent delivery wrote this refund a moment ago.
+            if (res.error && res.error.code !== '23505') must(res, `record refund for ${charge.id}`)
+          }
         }
         break
       }
@@ -673,6 +925,75 @@ async function refundUnenrolledMembership(session: Stripe.Checkout.Session): Pro
       mode: session.mode,
       amount_cents: session.amount_total,
     })
+  }
+}
+
+/**
+ * Every `metadata.kind` this codebase puts on a Stripe object. A
+ * payment_intent.succeeded carrying one of these is ours and is settled by
+ * its checkout event, never matched by amount.
+ */
+const OUR_METADATA_KINDS = new Set([
+  'till_ticket',
+  'product_order',
+  'appointment_deposit',
+  'appointment_balance',
+  'membership',
+])
+
+/**
+ * Park a card payment no till ticket could take (090), for staff to match on
+ * Orders or the till, or for a manager to dismiss. Upserted on the intent id
+ * and never overwritten, so a retried event leaves the row (and any match
+ * made since) as it is.
+ */
+async function parkCardPayment(
+  admin: ReturnType<typeof createAdminClient>,
+  must: <T extends { error: { message: string } | null }>(res: T, what: string) => T,
+  p: {
+    intent: string
+    charge: string | null
+    amountCents: number
+    description: string | null
+    paidAt: string
+    reason: UnmatchedReason
+  }
+): Promise<void> {
+  // A duplicate delivery may land after the first one settled a ticket with
+  // this intent; then there is nothing to park.
+  const { data: settled } = must(
+    await admin.from('till_tickets').select('id').eq('stripe_payment_intent_id', p.intent).limit(1),
+    `re-check till ticket for ${p.intent}`
+  )
+  if (settled && settled.length > 0) return
+  must(
+    await admin.from('stripe_unmatched_payments').upsert(
+      {
+        stripe_payment_intent_id: p.intent,
+        kind: 'payment',
+        stripe_charge_id: p.charge,
+        amount_cents: p.amountCents,
+        description: p.description,
+        paid_at: p.paidAt,
+        reason: p.reason,
+      },
+      { onConflict: 'stripe_payment_intent_id,kind', ignoreDuplicates: true }
+    ),
+    `park card payment ${p.intent}`
+  )
+}
+
+/** Why a payment was parked, from the state of the ticket it was likely for. */
+function reasonFor(status: string | null): UnmatchedReason {
+  switch (status) {
+    case 'cancelled':
+      return 'ticket_cancelled'
+    case 'expired':
+      return 'ticket_expired'
+    case 'paid':
+      return 'ticket_paid'
+    default:
+      return 'no_ticket'
   }
 }
 

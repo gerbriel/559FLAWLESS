@@ -1123,6 +1123,8 @@ export type Payment = {
   client_id: string | null
   stripe_payment_intent_id: string | null
   stripe_charge_id: string | null
+  /** The Stripe refund a refund row records (090). Unique when set. */
+  stripe_refund_id: string | null
   status: 'pending' | 'succeeded' | 'failed' | 'refunded'
   processed_by: string | null
   note: string | null
@@ -1560,6 +1562,65 @@ export type StaffCommissionPlan = {
 
 
       // ── Added in 034 ────────────────────────────────────────
+
+// ── Till card payments through Stripe (090) ──────────────────
+export type TillTicketMethod = 'phone_link' | 'stripe_app'
+export type TillTicketStatus = 'awaiting' | 'paid' | 'cancelled' | 'expired'
+
+/** A till sale waiting for a card payment taken through Stripe. Service role writes. */
+export type TillTicket = {
+  id: number
+  order_id: number | null
+  appointment_id: string | null
+  client_id: string | null
+  guest_name: string | null
+  amount_cents: number
+  method: TillTicketMethod
+  status: TillTicketStatus
+  stripe_session_id: string | null
+  stripe_checkout_url: string | null
+  stripe_payment_intent_id: string | null
+  stripe_charge_id: string | null
+  /** The multibuy deal the order won; written to promotion_redemptions when paid. */
+  multibuy_promotion_id: number | null
+  multibuy_promotion_name: string | null
+  multibuy_discount_cents: number
+  created_by: string | null
+  created_at: string
+  expires_at: string
+  paid_at: string | null
+  note: string | null
+}
+
+export type UnmatchedReason =
+  | 'no_ticket'
+  | 'several_tickets'
+  | 'ticket_cancelled'
+  | 'ticket_expired'
+  | 'ticket_paid'
+  | 'overpaid'
+
+/**
+ * Stripe money no till sale could take (090): a whole payment (kind
+ * 'payment') or the overpaid part of a settled sale (kind 'overpaid'). One of
+ * each per intent.
+ */
+export type StripeUnmatchedPayment = {
+  id: number
+  stripe_payment_intent_id: string
+  kind: 'payment' | 'overpaid'
+  stripe_charge_id: string | null
+  amount_cents: number
+  description: string | null
+  paid_at: string
+  reason: UnmatchedReason
+  matched_ticket_id: number | null
+  matched_at: string | null
+  dismissed_at: string | null
+  dismissed_by: string | null
+  dismissed_note: string | null
+  created_at: string
+}
 
 // ── Supabase client contract ──────────────────────────────────
 /**
@@ -2214,7 +2275,9 @@ export type Database = {
       >
       // One row per order a product perk won, added in 087. Uses are counted
       // from here through perk_uses_so_far(); claim_perk_use() writes them.
-      // perk_id goes null when the perk is deleted.
+      // perk_id goes null when the perk is deleted. 089: order_id is null for
+      // a use recorded by hand (record_membership_perk_use), and a manager may
+      // delete those rows (only those).
       membership_perk_redemptions: TableDef<
         MembershipPerkRedemption,
         [
@@ -2227,6 +2290,7 @@ export type Database = {
           >,
           ToProfile<'membership_perk_redemptions', 'client_id'>,
           Rel<'membership_perk_redemptions_order_id_fkey', ['order_id'], 'orders', ['id'], true>,
+          ToProfile<'membership_perk_redemptions', 'recorded_by'>,
         ]
       >
       client_memberships: TableDef<
@@ -2253,6 +2317,7 @@ export type Database = {
             ['id']
           >,
           Rel<'membership_redemptions_service_id_fkey', ['service_id'], 'services', ['id']>,
+          ToProfile<'membership_redemptions', 'recorded_by'>,
         ]
       >
       membership_charges: TableDef<
@@ -2273,6 +2338,25 @@ export type Database = {
       membership_booking_intents: TableDef<
         MembershipBookingIntent,
         [ToProfile<'membership_booking_intents', 'client_id'>]
+      >
+      // ── Added in 090 ────────────────────────────────────────
+      // A till sale awaiting a Stripe card payment, and card payments the
+      // webhook could not match. Front desk reads; service role writes.
+      till_tickets: TableDef<
+        TillTicket,
+        [
+          Rel<'till_tickets_order_id_fkey', ['order_id'], 'orders', ['id']>,
+          Rel<'till_tickets_appointment_id_fkey', ['appointment_id'], 'appointments', ['id']>,
+          ToProfile<'till_tickets', 'client_id'>,
+          ToProfile<'till_tickets', 'created_by'>,
+        ]
+      >
+      stripe_unmatched_payments: TableDef<
+        StripeUnmatchedPayment,
+        [
+          Rel<'stripe_unmatched_payments_matched_ticket_id_fkey', ['matched_ticket_id'], 'till_tickets', ['id']>,
+          ToProfile<'stripe_unmatched_payments', 'dismissed_by'>,
+        ]
       >
     }
     // Read-only projections. Insert/Update are deliberately absent — a view
@@ -2941,6 +3025,62 @@ export type Database = {
       release_unpaid_hold: { Args: { p_appointment: string }; Returns: boolean }
       /** The sweep behind release_unpaid_hold; returns how many it released. */
       release_unpaid_holds: { Args: Record<string, never>; Returns: number }
+      /**
+       * Record an included session that happened outside the system (089),
+       * on p_used_on (YYYY-MM-DD) inside the current period. Manager only.
+       * Raises 23514 'That membership is not current', 'That treatment is not
+       * included in this membership', 'That date is outside the current
+       * period', or the allowance trigger's own message when none is left.
+       * Returns the membership_redemptions id.
+       */
+      record_membership_session: {
+        Args: {
+          p_client_membership: number
+          p_service: number
+          p_used_on: string
+          p_note?: string | null
+        }
+        Returns: number
+      }
+      /**
+       * Enrol a client from a real start date (089). 23514 when the start is
+       * after now ('The start date cannot be in the future'), when its first
+       * period has already ended ('That start is more than one period ago,
+       * so the membership would already have run out'), or when p_paid_at is
+       * more than a day ahead ('The paid date cannot be in the future').
+       * With p_paid_method the first charge is marked paid at p_paid_at
+       * (default now). A second live membership raises 23505 unchanged.
+       * Manager only. Returns the client_memberships id.
+       */
+      enrol_membership: {
+        Args: {
+          p_client: string
+          p_membership: number
+          p_started_at: string
+          p_note?: string | null
+          p_paid_method?: 'card' | 'cash' | 'stripe' | 'other' | null
+          p_paid_at?: string | null
+        }
+        Returns: number
+      }
+      /**
+       * Record a product perk use that happened outside the system (089), on
+       * p_used_on (YYYY-MM-DD) inside the current period. Manager only.
+       * Raises 23514 'That perk is not on this membership', 'That date is
+       * outside the current period' or 'That perk has no uses left this
+       * period', or, for a 'month' perk, 'That date is before this month
+       * started'. Returns the membership_perk_redemptions id.
+       */
+      record_membership_perk_use: {
+        Args: {
+          p_perk: number
+          p_client_membership: number
+          p_used_on: string
+          p_discount_cents?: number
+          p_note?: string | null
+        }
+        Returns: number
+      }
       give_back_membership_session: {
         Args: { p_redemption: number }
         Returns: 'repriced' | 'returned'
@@ -3061,6 +3201,27 @@ export type Database = {
         Args: { p_session: string }
         Returns: undefined
       }
+      /**
+       * Settle a till ticket once Stripe says the money moved (090): writes
+       * the visit's still-owed and the order's total as card payments, moves
+       * the order pending_payment (or cancelled, for an expired ticket) to
+       * completed. False for a paid or cancelled ticket; writes nothing then.
+       * Service role only.
+       */
+      settle_till_ticket: {
+        Args: { p_ticket: number; p_payment_intent: string; p_charge: string | null; p_paid_at: string }
+        Returns: boolean
+      }
+      /** Awaiting → expired, its pending order cancelled (090). Service role only. */
+      expire_till_ticket: { Args: { p_ticket: number }; Returns: boolean }
+      /** Awaiting → cancelled, its pending order cancelled (090). Front desk. */
+      cancel_till_ticket: { Args: { p_ticket: number }; Returns: boolean }
+      /** Expire Stripe app tickets five minutes past their time (090). Front desk or service role. */
+      expire_overdue_till_tickets: { Args: Record<string, never>; Returns: number }
+      /** Settle a Stripe app ticket with a parked payment of the same amount (090). Service role only. */
+      match_unmatched_payment: { Args: { p_id: number; p_ticket: number }; Returns: boolean }
+      /** Mark a parked card payment dealt with (090). Manager only. */
+      dismiss_unmatched_payment: { Args: { p_id: number; p_note?: string | null }; Returns: boolean }
     }
     Enums: {
       user_role: UserRole

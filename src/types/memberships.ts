@@ -95,8 +95,9 @@ export type MembershipProductPerk = {
 /**
  * One order a product perk won (087). Uses are counted from these rows,
  * joined to orders that are not cancelled, so an abandoned checkout gives its
- * use back once the webhook cancels the order. Written only by
- * claim_perk_use().
+ * use back once the webhook cancels the order. Written by claim_perk_use()
+ * for orders and by record_membership_perk_use() for uses recorded by hand
+ * (089, order_id null).
  */
 export type MembershipPerkRedemption = {
   id: number
@@ -104,11 +105,17 @@ export type MembershipPerkRedemption = {
   perk_id: number | null
   client_membership_id: number
   client_id: string | null
-  order_id: number
+  /** Null for a use recorded by hand (089), which always counts. */
+  order_id: number | null
   /** The deal's own cut, integer cents. */
   discount_cents: number
   /** Units the perk discounted on this order. */
   units: number
+  /** The day a hand-recorded use happened (089). Null for order rows. */
+  used_on: string | null
+  note: string | null
+  /** The manager who recorded it by hand (089). Null for order rows. */
+  recorded_by: string | null
   created_at: string
 }
 
@@ -155,12 +162,18 @@ export type MembershipBookingIntent = {
 export type MembershipRedemption = {
   id: number
   client_membership_id: number
-  appointment_id: string
+  /** Null for a session recorded by hand (089): it happened, not as a booking here. */
+  appointment_id: string | null
   service_id: number | null
   redeemed_for_period_start: string
   sessions: number
   /** List value of what was covered, integer cents. */
   value_cents: number
+  /** The day a hand-recorded session happened (089). Null for booked visits. */
+  used_on: string | null
+  note: string | null
+  /** The manager who recorded it by hand (089). Null for booked visits. */
+  recorded_by: string | null
   created_at: string
 }
 

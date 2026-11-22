@@ -7,6 +7,11 @@ import { multibuyDiscountCents, multibuyPromo, type PromotionRule } from '@/lib/
 import { isFrontDesk, isManager, type UserRole } from '@/types/database'
 import { currentMembershipPerks } from '@/lib/memberships'
 import { bestProductPerk, type PerkUnit } from '@/lib/member-product-perks'
+import { pricePosServices, recordPosVisit, type PosPaymentMethod, type PosVisit } from '@/lib/pos-visit'
+import type Stripe from 'stripe'
+import { queueNotificationEmails } from '@/lib/notification-email'
+import { getStripe, siteUrl, stripeConfigured } from '@/lib/stripe'
+import { addMinutes } from '@/lib/time'
 
 export const dynamic = 'force-dynamic'
 
@@ -23,6 +28,12 @@ const SaleSchema = z
       )
       .max(50)
       .default([]),
+    /**
+     * Treatments rung up in the same sale. They become a completed visit
+     * (src/lib/pos-visit.ts), priced server-side like every booking; the one
+     * payment settles that visit first and the rest lands on the order.
+     */
+    serviceIds: z.array(z.number().int().positive()).max(6).default([]),
     /**
      * An amount typed in at the till — an add-on, a touch-up, a debt from
      * before the app, or the whole sale before anyone has listed what it was
@@ -42,7 +53,25 @@ const SaleSchema = z
         taxable: z.boolean().default(false),
       })
       .nullish(),
-    paymentMethod: z.enum(['cash', 'card', 'apple_pay', 'zelle', 'paypal', 'venmo', 'cashapp', 'other']),
+    /**
+     * How the money is taken. The first eight are taken at the counter and
+     * recorded now. `phone_link` (the client pays a Stripe Checkout link on
+     * their own phone) and `stripe_app` (staff charge it with Tap to Pay in
+     * the Stripe app) are taken through Stripe: the sale is written, the
+     * money is NOT recorded, and a till ticket waits for the webhook (090).
+     */
+    paymentMethod: z.enum([
+      'cash',
+      'card',
+      'apple_pay',
+      'zelle',
+      'paypal',
+      'venmo',
+      'cashapp',
+      'other',
+      'phone_link',
+      'stripe_app',
+    ]),
     appointmentId: z.string().uuid().nullish(),
     /** The client's own visits whose balance the custom amount settles first. */
     applyToAppointments: z.array(z.string().uuid()).max(10).default([]),
@@ -53,12 +82,29 @@ const SaleSchema = z
   .refine((v) => v.clientId || v.guestName, {
     message: 'Name the customer, even if only as a walk-in.',
   })
-  .refine((v) => v.items.length > 0 || v.custom, {
+  .refine((v) => v.items.length > 0 || v.custom || v.serviceIds.length > 0, {
     message: 'Add something to the sale first.',
   })
   .refine((v) => v.applyToAppointments.length === 0 || (v.custom && v.clientId), {
     message: 'Only a custom amount for a named client can go against their balance.',
   })
+  // A ticket settles one visit and one order. Old balances riding on a sale
+  // that may never be paid would have to be unwound on expiry, so they are
+  // taken on their own (or on the visit) instead.
+  .refine(
+    (v) =>
+      v.applyToAppointments.length === 0 ||
+      (v.paymentMethod !== 'phone_link' && v.paymentMethod !== 'stripe_app'),
+    {
+      message:
+        'An old balance cannot ride on a card payment through Stripe. Untick it under Pay off first, or take it on its own.',
+    }
+  )
+
+/** Minutes a till ticket waits before it lapses (090). */
+const TICKET_MINUTES = 30
+/** Stripe will not charge a card less than this, in cents. */
+const STRIPE_MINIMUM_CENTS = 50
 
 /** Fresno County's combined rate, unless the studio has set its own. */
 const DEFAULT_TAX_RATE = 0.0835
@@ -73,6 +119,32 @@ const DEFAULT_TAX_RATE = 0.0835
  * The order is written as a cart and then moved to `paid`, because the
  * status-change trigger is what decrements stock. Writing it as paid outright
  * would sell the product without ever taking it off the shelf.
+ *
+ * Services and products in one sale, one payment. Everything about the
+ * products is checked first (stock, price, sold to clients), then the visit is
+ * written unpaid, then the order. The money is recorded last: the visit's
+ * total on the visit, any old balances the custom amount settles, and the rest
+ * on the order. With services and nothing else, no order is written and the
+ * payment goes on the visit, as service-sale does.
+ *
+ * The manager's discount comes off the services first and whatever is left of
+ * it off the products. A custom amount is never discounted.
+ *
+ * If the order fails once the visit exists, the visit is NOT removed:
+ * completing it drew down back-bar stock, spent any included session and
+ * settled loyalty. The response is 409 `visit_recorded_unpaid` so the desk
+ * knows the visit is on the record owing and the products were not sold.
+ *
+ * Taken through Stripe (`phone_link`, `stripe_app`; 090): everything above is
+ * written the same, except no payments row and the order stops at
+ * `pending_payment`, so no stock moves yet. A till ticket for the whole
+ * amount waits 30 minutes, and for `phone_link` a Checkout Session is made
+ * for it. The response adds `awaiting: true` and
+ * `ticket: { id, method, amount_cents, expires_at, checkout_url? }`; the
+ * webhook settles the ticket when Stripe says the money moved. A failure
+ * opening the ticket or the session cancels the pending order and answers
+ * like an order failure (409 `visit_recorded_unpaid` when a visit stands).
+ * Old balances (`applyToAppointments`) are refused with these two methods.
  */
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
@@ -103,9 +175,30 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  const { clientId, guestName, items, custom, paymentMethod, appointmentId, applyToAppointments, notes } =
-    parsed.data
+  const {
+    clientId,
+    guestName,
+    items,
+    serviceIds,
+    custom,
+    paymentMethod,
+    appointmentId,
+    applyToAppointments,
+    notes,
+  } = parsed.data
   const admin = createAdminClient()
+
+  // Taken through Stripe (090): the sale is written exactly as below, but the
+  // money is not recorded and the order waits at pending_payment. What the
+  // ledger will say when it lands is 'card'.
+  const throughStripe = paymentMethod === 'phone_link' || paymentMethod === 'stripe_app'
+  const ledgerMethod: PosPaymentMethod = throughStripe ? 'card' : paymentMethod
+  if (paymentMethod === 'phone_link' && !stripeConfigured()) {
+    return NextResponse.json(
+      { error: 'stripe_not_configured', message: 'Stripe is not set up, so there is no payment link to show.' },
+      { status: 503 }
+    )
+  }
 
   // ── What the typed amount settles first ──────────────────────
   // Balances are re-derived here from `payments`, the same arithmetic as the
@@ -134,9 +227,19 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // A visit a till sale is waiting on a card payment for (090) is not paid
+    // off here as well: the card would land on a visit already settled.
+    const { data: waiting } = await admin
+      .from('till_tickets')
+      .select('appointment_id')
+      .in('appointment_id', applyToAppointments)
+      .eq('status', 'awaiting')
+    const awaitingCard = new Set((waiting ?? []).map((t) => t.appointment_id))
+
     let left = custom.amountCents
     for (const v of visits) {
       if (left <= 0) break
+      if (awaitingCard.has(v.id)) continue
       const taken = (paidRows ?? [])
         .filter((p) => p.appointment_id === v.id)
         .reduce((sum, p) => sum + p.amount_cents, 0)
@@ -159,13 +262,23 @@ export async function POST(request: NextRequest) {
   /**
    * Record the balance payments. Run as the signed-in staff member, not the
    * service role, so `processed_by` says who took the money.
+   *
+   * The visit this request wrote goes first, ahead of the old balances. It is
+   * not run through the client check above: the server created it a moment
+   * ago, and that check exists to stop a caller naming someone else's visit.
    */
   async function settleBalances(): Promise<string | null> {
-    for (const a of applied) {
+    const due = [
+      ...(visit && visit.totalCents > 0
+        ? [{ appointmentId: visit.appointmentId, cents: visit.totalCents, kind: 'service' as const }]
+        : []),
+      ...applied,
+    ]
+    for (const a of due) {
       const { error } = await supabase.rpc('record_payment', {
         p_amount_cents: a.cents,
         p_kind: a.kind,
-        p_method: paymentMethod,
+        p_method: ledgerMethod,
         p_appointment: a.appointmentId,
         p_note: notes ?? null,
       })
@@ -177,8 +290,11 @@ export async function POST(request: NextRequest) {
     return null
   }
 
+  // Written below, once the products have been checked.
+  let visit: PosVisit | null = null
+
   // The whole amount went on balances: nothing left to sell, so no order.
-  if (custom && extraCents <= 0 && items.length === 0) {
+  if (custom && extraCents <= 0 && items.length === 0 && serviceIds.length === 0) {
     const failed = await settleBalances()
     if (failed && failed === applied[0]?.appointmentId) {
       return NextResponse.json(
@@ -193,7 +309,7 @@ export async function POST(request: NextRequest) {
         applied,
         applied_cents: appliedCents,
         total_cents: appliedCents,
-        ...(failed ? { warning: 'Part of that payment did not record — check the visit under Orders.' } : {}),
+        ...(failed ? { warning: 'Part of that payment did not record. Check the visit under Orders.' } : {}),
       },
       { status: 201 }
     )
@@ -330,13 +446,283 @@ export async function POST(request: NextRequest) {
   const taxRate =
     Number.isFinite(parsedRate) && parsedRate >= 0 && parsedRate < 1 ? parsedRate : DEFAULT_TAX_RATE
 
+  const staffRole = staff.role as UserRole
+  const staffId = user.id
+  // The manager's typed discount, verified here: anyone else loses the field.
+  let typedDiscount = isManager(staffRole) ? parsed.data.discountCents : 0
+
+  // ── A card minimum, checked before anything is written ───────
+  // Stripe will not charge under 50 cents. The services are priced read-only
+  // here (the visit is not written yet), and the figure is an upper bound: a
+  // membership can only take more off. Under the floor and above zero is
+  // refused now; a sale a membership brings under it after the visit exists
+  // gets the same code in its 409 (see openTicket).
+  if (throughStripe) {
+    const servicesCents = serviceIds.length > 0 ? await pricePosServices(admin, serviceIds) : 0
+    if (servicesCents !== null) {
+      const productDeal = Math.max(multibuyCents, memberBest?.off ?? 0)
+      const productsAfterDeal = Math.max(productSubtotal - productDeal, 0)
+      const leftoverDiscount = Math.max(typedDiscount - servicesCents, 0)
+      const productsDue = Math.max(productsAfterDeal - leftoverDiscount, 0)
+      const taxEstimate = Math.round((productsDue + (custom?.taxable ? customCents : 0)) * taxRate)
+      const estimate =
+        Math.max(servicesCents - typedDiscount, 0) + productsDue + customCents + taxEstimate
+      if (estimate > 0 && estimate < STRIPE_MINIMUM_CENTS) {
+        return NextResponse.json(
+          {
+            error: 'below_card_minimum',
+            message: 'Stripe cannot charge a card under $0.50. Take this one as cash.',
+          },
+          { status: 409 }
+        )
+      }
+    }
+  }
+
+  // ── The visit, when services are in the sale ─────────────────
+  // Written unpaid: the money is recorded once, below, after the products
+  // are certain. The discount comes off the services first; what the visit
+  // could not use carries over to the products.
+  if (serviceIds.length > 0) {
+    const outcome = await recordPosVisit(admin, {
+      staffId: user.id,
+      clientId: clientId ?? null,
+      guestName: guestName ?? null,
+      serviceIds,
+      paymentMethod: ledgerMethod,
+      notes: notes ?? null,
+      discountCents: typedDiscount,
+      recordPayment: false,
+    })
+    if (!outcome.ok) {
+      // Nothing was written that stands, so nothing was sold.
+      return NextResponse.json({ error: outcome.error, message: outcome.message }, { status: outcome.status })
+    }
+    visit = outcome.visit
+    typedDiscount = Math.max(typedDiscount - visit.discountCents, 0)
+    queueNotificationEmails()
+  }
+
+  /** What the receipt shows of the visit. */
+  const visitPart = visit
+    ? {
+        appointment_id: visit.appointmentId,
+        lines: visit.lines.map((l) => ({ name: l.name, price_cents: l.priceCents })),
+        subtotal_cents: visit.subtotalCents,
+        discount_cents: visit.discountCents,
+        membership_cents: visit.membershipCents,
+        membership_name: visit.membershipName,
+        total_cents: visit.totalCents,
+      }
+    : null
+  const visitCents = visit?.totalCents ?? 0
+
+  /**
+   * A failure on the order side. Before a visit exists it is the plain error;
+   * after, the visit stands (completing it had side effects) and the desk is
+   * told it is on the record owing while the products were not sold.
+   */
+  function orderFailed(status: number, body: { error: string; message: string }) {
+    if (!visit) return NextResponse.json(body, { status })
+    // Too little for a card once the membership came off: say exactly that.
+    if (body.error === 'below_card_minimum') {
+      return NextResponse.json(
+        {
+          error: 'below_card_minimum',
+          message: `${body.message} The visit is on the client's record with that balance owing.`,
+          visit: visitPart,
+        },
+        { status: 409 }
+      )
+    }
+    return NextResponse.json(
+      {
+        error: 'visit_recorded_unpaid',
+        message:
+          'The visit is on the client\'s record with a balance owing, but the products were not sold and nothing was charged. Take payment on the visit, then ring up the products again.',
+        visit: visitPart,
+      },
+      { status: 409 }
+    )
+  }
+
+  /**
+   * Open a till ticket for a sale taken through Stripe (090), and for
+   * phone_link the Checkout Session behind its QR code. Everything the sale
+   * wrote stands. On a failure here the pending order is cancelled (nothing
+   * was sold, stock was never taken, its perk claim stops counting) and the
+   * visit, when there is one, stays on the record owing, the same 409 the
+   * order failure gives.
+   */
+  async function openTicket(
+    orderId: number | null,
+    cents: number,
+    deal: { promotionId: number; name: string; cents: number } | null = null
+  ): Promise<
+    | { ok: true; ticket: { id: number; method: string; amount_cents: number; expires_at: string; checkout_url?: string } }
+    | { ok: false; response: NextResponse }
+  > {
+    async function undo(status: number, body: { error: string; message: string }) {
+      if (orderId) {
+        await admin.from('orders').update({ status: 'cancelled' }).eq('id', orderId).eq('status', 'pending_payment')
+      }
+      return { ok: false as const, response: orderFailed(status, body) }
+    }
+
+    if (cents < STRIPE_MINIMUM_CENTS) {
+      return undo(409, {
+        error: 'below_card_minimum',
+        message: 'Stripe cannot charge a card under $0.50. Take this one as cash.',
+      })
+    }
+
+    const now = new Date()
+    const expiresAt = addMinutes(now, TICKET_MINUTES)
+    const { data: ticket, error: ticketError } = await admin
+      .from('till_tickets')
+      .insert({
+        order_id: orderId,
+        appointment_id: visit?.appointmentId ?? null,
+        client_id: clientId ?? null,
+        guest_name: clientId ? null : (guestName ?? 'Walk-in'),
+        amount_cents: cents,
+        method: paymentMethod as 'phone_link' | 'stripe_app',
+        created_by: staffId,
+        expires_at: expiresAt.toISOString(),
+        note: notes ?? null,
+        // Written to promotion_redemptions by settle_till_ticket, once paid.
+        multibuy_promotion_id: deal?.promotionId ?? null,
+        multibuy_promotion_name: deal?.name ?? null,
+        multibuy_discount_cents: deal?.cents ?? 0,
+      })
+      .select('id, method, amount_cents, expires_at')
+      .single()
+    if (ticketError || !ticket) {
+      void logError('pos/sale', ticketError?.message ?? 'ticket insert failed', { step: 'ticket_insert', order_id: orderId })
+      return undo(500, { error: 'sale_failed', message: 'Could not start the card payment. Nothing was charged.' })
+    }
+
+    if (paymentMethod !== 'phone_link') return { ok: true, ticket }
+
+    let email: string | null = null
+    if (clientId) {
+      const { data: who } = await admin.from('profiles').select('email').eq('id', clientId).maybeSingle()
+      email = who?.email?.trim() || null
+    }
+
+    let session: Stripe.Checkout.Session | null = null
+    try {
+      const metadata = { kind: 'till_ticket', ticket_id: String(ticket.id) }
+      session = await getStripe().checkout.sessions.create({
+        mode: 'payment',
+        // Stripe wants a session to live at least 30 minutes, measured from
+        // its own clock; a minute past the ticket keeps the request above
+        // that floor. The webhook's session.expired is what closes the ticket.
+        expires_at: Math.floor(addMinutes(expiresAt, 1).getTime() / 1000),
+        customer_email: email ?? undefined,
+        line_items: [
+          {
+            quantity: 1,
+            price_data: {
+              currency: 'usd',
+              unit_amount: cents,
+              product_data: { name: `559 Flawless, sale #${ticket.id}` },
+            },
+          },
+        ],
+        metadata,
+        payment_intent_data: { metadata },
+        success_url: `${siteUrl()}/pay/done`,
+        cancel_url: `${siteUrl()}/pay/cancelled`,
+      })
+      const { error: linkError } = await admin
+        .from('till_tickets')
+        .update({ stripe_session_id: session.id, stripe_checkout_url: session.url })
+        .eq('id', ticket.id)
+      if (linkError) throw new Error(linkError.message)
+      return { ok: true, ticket: { ...ticket, checkout_url: session.url ?? undefined } }
+    } catch (err) {
+      void logError('pos/sale', err, { step: 'checkout_session', ticket_id: ticket.id })
+      // A session made but not saved would be a live link nobody can see:
+      // close it at Stripe so it can never be paid.
+      if (session) {
+        try {
+          await getStripe().checkout.sessions.expire(session.id)
+        } catch (expireErr) {
+          void logError('pos/sale', expireErr, { step: 'checkout_session_expire', ticket_id: ticket.id })
+        }
+      }
+      const failure = {
+        error: 'stripe_failed',
+        message: 'Stripe did not make a payment link. Nothing was charged. Try again or take it another way.',
+      }
+      // The ticket goes with the order.
+      const { error: expireError } = await admin.rpc('expire_till_ticket', { p_ticket: ticket.id })
+      if (expireError) {
+        void logError('pos/sale', expireError.message, { step: 'ticket_expire', ticket_id: ticket.id })
+        await admin.from('till_tickets').update({ status: 'expired' }).eq('id', ticket.id).eq('status', 'awaiting')
+        return undo(502, failure)
+      }
+      return { ok: false, response: orderFailed(502, failure) }
+    }
+  }
+
+  // ── Services and nothing else: no order, the payment goes on the visit ──
+  if (visit && lines.length === 0 && customCents <= 0 && throughStripe && visitCents > 0) {
+    const opened = await openTicket(null, visitCents)
+    if (!opened.ok) return opened.response
+    return NextResponse.json(
+      {
+        ok: true,
+        awaiting: true,
+        order: null,
+        order_lines: [],
+        visit: visitPart,
+        visit_cents: visitCents,
+        discount_cents: 0,
+        membership_cents: 0,
+        membership_name: null,
+        applied: [],
+        applied_cents: 0,
+        total_cents: visitCents,
+        ticket: opened.ticket,
+      },
+      { status: 201 }
+    )
+  }
+  if (visit && lines.length === 0 && customCents <= 0) {
+    const failed = await settleBalances()
+    return NextResponse.json(
+      {
+        ok: true,
+        order: null,
+        order_lines: [],
+        visit: visitPart,
+        visit_cents: visitCents,
+        discount_cents: 0,
+        membership_cents: 0,
+        membership_name: null,
+        applied,
+        applied_cents: appliedCents,
+        total_cents: visitCents + appliedCents,
+        ...(failed
+          ? {
+              warning:
+                failed === visit.appointmentId
+                  ? 'The visit is recorded but its payment did not save. Take payment on the visit under Orders.'
+                  : 'The balance payment did not record. Take it on the visit instead.',
+            }
+          : {}),
+      },
+      { status: 201 }
+    )
+  }
+
   /**
    * The whole price of the sale for a given member perk cut. A function,
    * because a perk that loses its claim below (no use left) is priced out and
    * the sale is priced again without it.
    */
-  const staffRole = staff.role as UserRole
-  const typedDiscount = parsed.data.discountCents
   function priceSale(memberCents: number) {
     const source: 'membership' | 'multibuy' | null =
       memberCents > 0 && memberCents >= multibuyCents
@@ -348,13 +734,11 @@ export async function POST(request: NextRequest) {
       source === 'membership' ? memberCents : source === 'multibuy' ? multibuyCents : 0
 
     // The manager's hand-typed discount rides on top of the winning deal but
-    // is verified HERE: a front-desk request simply loses the field, and the
-    // sum can never exceed the products being sold. A custom amount is
-    // already the desk's own figure; discounting it as well would be the same
-    // thing twice.
-    const manual = isManager(staffRole)
-      ? Math.min(typedDiscount, Math.max(productSubtotal - promoDiscount, 0))
-      : 0
+    // is verified above: a front-desk request has already lost the field, and
+    // the sum can never exceed the products being sold. What is left here is
+    // what the services did not use. A custom amount is already the desk's
+    // own figure; discounting it as well would be the same thing twice.
+    const manual = Math.min(typedDiscount, Math.max(productSubtotal - promoDiscount, 0))
     const discount = promoDiscount + manual
 
     // Tax follows what the customer actually pays, not the pre-deal figure. A
@@ -375,11 +759,11 @@ export async function POST(request: NextRequest) {
       status: 'cart',
       channel: 'in_store',
       fulfillment: 'pickup',
-      payment_method: paymentMethod,
+      payment_method: ledgerMethod,
       sold_by: user.id,
       // A custom amount that settled a visit's balance belongs to that visit,
       // which is also what the attach-rate figure reads.
-      appointment_id: appointmentId ?? applied[0]?.appointmentId ?? null,
+      appointment_id: appointmentId ?? visit?.appointmentId ?? applied[0]?.appointmentId ?? null,
       staff_notes: notes ?? null,
       tax_cents: tax,
       discount_cents: discount,
@@ -394,11 +778,8 @@ export async function POST(request: NextRequest) {
     .single()
 
   if (orderError || !order) {
-    void logError('pos/sale', orderError.message, { step: 'order_insert' })
-    return NextResponse.json(
-      { error: 'sale_failed', message: 'Could not start that sale.' },
-      { status: 500 }
-    )
+    void logError('pos/sale', orderError?.message ?? 'order insert failed', { step: 'order_insert' })
+    return orderFailed(500, { error: 'sale_failed', message: 'Could not start that sale.' })
   }
 
   // A membership perk that won is claimed now, before the lines go in (the
@@ -455,10 +836,7 @@ export async function POST(request: NextRequest) {
         // Still a cart: nothing paid, nothing off the shelf, so removing it is clean.
         await admin.from('orders').delete().eq('id', order.id)
         void logError('pos/sale', repriceError.message, { step: 'perk_reprice', order_id: order.id })
-        return NextResponse.json(
-          { error: 'sale_failed', message: 'Could not price that sale.' },
-          { status: 500 }
-        )
+        return orderFailed(500, { error: 'sale_failed', message: 'Could not price that sale.' })
       }
     }
   }
@@ -481,7 +859,9 @@ export async function POST(request: NextRequest) {
             product_id: null,
             name_snapshot: custom.description,
             sku_snapshot: null,
-            unit_price_cents: custom.amountCents,
+            // What is left after the balances: the balances are paid on
+            // their visits, not again on this order.
+            unit_price_cents: customCents,
             qty: 1,
           },
         ]
@@ -492,10 +872,7 @@ export async function POST(request: NextRequest) {
     // Nothing has been paid or decremented yet, so removing the shell is clean.
     await admin.from('orders').delete().eq('id', order.id)
     void logError('pos/sale', itemsError.message, { step: 'items_insert' })
-    return NextResponse.json(
-      { error: 'sale_failed', message: 'Could not add those items.' },
-      { status: 500 }
-    )
+    return orderFailed(500, { error: 'sale_failed', message: 'Could not add those items.' })
   }
 
   // The item trigger has recomputed subtotal and total from the lines; it reads
@@ -505,35 +882,46 @@ export async function POST(request: NextRequest) {
   // `completed`, not `paid`: the customer is holding the bottle. `paid` is what
   // the Orders page treats as "still to fulfil", which is right for an online
   // order waiting to be packed and wrong for a sale handed over at the counter.
+  //
+  // Taken through Stripe, it moves to `pending_payment` instead: numbered,
+  // nothing off the shelf (only paid and completed take stock, 021), and
+  // settle_till_ticket() completes it when the money lands (090).
   const { data: paid, error: payError } = await admin
     .from('orders')
-    .update({ status: 'completed', paid_at: new Date().toISOString() })
+    .update(
+      throughStripe
+        ? { status: 'pending_payment' }
+        : { status: 'completed', paid_at: new Date().toISOString() }
+    )
     .eq('id', order.id)
     .select('id, order_number, subtotal_cents, tax_cents, total_cents')
     .single()
 
   if (payError || !paid) {
-    void logError('pos/sale', payError.message, { step: 'mark_paid' })
+    void logError('pos/sale', payError?.message ?? 'mark paid failed', { step: 'mark_paid' })
     // Nothing was sold, so a perk use claimed for it goes back now rather
     // than waiting out claim_perk_use's in-flight window on a dead cart.
     await admin.from('membership_perk_redemptions').delete().eq('order_id', order.id)
-    return NextResponse.json(
-      { error: 'sale_failed', message: 'The sale was not completed. Nothing was charged.' },
-      { status: 500 }
-    )
+    return orderFailed(500, {
+      error: 'sale_failed',
+      message: 'The sale was not completed. Nothing was charged.',
+    })
   }
 
   // Record the money as well as the sale. Without this the order shows as
   // fully outstanding on the ledger, because `payments` is what a balance is
   // computed from — the Stripe webhook writes one for every online order and
   // the counter has to do the same.
-  const { error: paymentError } = await admin.rpc('record_payment', {
-    p_amount_cents: paid.total_cents,
-    p_kind: 'product',
-    p_method: paymentMethod,
-    p_order: paid.id,
-    p_note: notes ?? null,
-  })
+  // Through Stripe, the webhook writes it instead (settle_till_ticket).
+  const { error: paymentError } = throughStripe
+    ? { error: null }
+    : await admin.rpc('record_payment', {
+        p_amount_cents: paid.total_cents,
+        p_kind: 'product',
+        p_method: ledgerMethod,
+        p_order: paid.id,
+        p_note: notes ?? null,
+      })
 
   if (paymentError) {
     // The sale itself stands — the customer has paid and has the product. A
@@ -546,7 +934,9 @@ export async function POST(request: NextRequest) {
   // perk win was written by claim_perk_use above, before the sale went
   // through; a multibuy win lands in promotion_redemptions. Best effort: the
   // sale stands either way.
-  if (multibuy && source === 'multibuy' && promoDiscount > 0) {
+  // Through Stripe the deal is not used until the sale is paid: the ticket
+  // carries it and settle_till_ticket writes the row (090).
+  if (!throughStripe && multibuy && source === 'multibuy' && promoDiscount > 0) {
     const { error: redemptionError } = await admin.from('promotion_redemptions').insert({
       promotion_id: multibuy.id,
       promotion_name: multibuy.name,
@@ -561,20 +951,68 @@ export async function POST(request: NextRequest) {
 
   // The balances last, once the sale is certain: a failed order must not
   // leave money recorded against a visit for a sale that never happened.
-  const failed = applied.length > 0 ? await settleBalances() : null
+  // The visit this request wrote is among them, first.
+  // Through Stripe nothing is recorded yet: the ticket waits for the webhook
+  // with the whole of it (no old balances ride on such a sale, see above).
+  let ticket: Extract<Awaited<ReturnType<typeof openTicket>>, { ok: true }>['ticket'] | null = null
+  if (throughStripe) {
+    const cents = paid.total_cents + visitCents
+    if (cents > 0) {
+      const opened = await openTicket(
+        paid.id,
+        cents,
+        multibuy && source === 'multibuy' && promoDiscount > 0
+          ? { promotionId: multibuy.id, name: multibuy.name, cents: promoDiscount }
+          : null
+      )
+      if (!opened.ok) return opened.response
+      ticket = opened.ticket
+    } else {
+      // Nothing to charge (a deal took it all): handed over now, like cash.
+      await admin
+        .from('orders')
+        .update({ status: 'completed', paid_at: new Date().toISOString() })
+        .eq('id', paid.id)
+        .eq('status', 'pending_payment')
+    }
+  }
+
+  const failed =
+    !throughStripe && (applied.length > 0 || visitCents > 0) ? await settleBalances() : null
 
   return NextResponse.json(
     {
       ok: true,
+      ...(ticket ? { awaiting: true, ticket } : {}),
       order: paid,
+      // What was sold on the order, for the receipt.
+      order_lines: [
+        ...lines.map((l) => ({
+          name: l.name_snapshot,
+          qty: l.qty,
+          line_cents: l.unit_price_cents * l.qty,
+        })),
+        ...(custom && customCents > 0
+          ? [{ name: custom.description, qty: 1, line_cents: customCents }]
+          : []),
+      ],
+      visit: visitPart,
+      visit_cents: visitCents,
       discount_cents: discount,
       // What a membership perk took off, the way service-sale reports it.
       membership_cents: source === 'membership' ? promoDiscount : 0,
       membership_name: source === 'membership' ? memberPerks!.planName : null,
       applied,
       applied_cents: appliedCents,
-      total_cents: paid.total_cents + appliedCents,
-      ...(failed ? { warning: 'The balance payment did not record — take it on the visit instead.' } : {}),
+      total_cents: paid.total_cents + appliedCents + visitCents,
+      ...(failed
+        ? {
+            warning:
+              visit && failed === visit.appointmentId
+                ? 'The visit is recorded but its payment did not save. Take payment on the visit under Orders.'
+                : 'The balance payment did not record. Take it on the visit instead.',
+          }
+        : {}),
     },
     { status: 201 }
   )

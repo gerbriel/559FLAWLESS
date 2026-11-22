@@ -67,6 +67,18 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'not_billed' }, { status: 409 })
   }
 
+  // A till sale is waiting on a card payment for this visit (090): a second
+  // way to pay it now would take the money twice.
+  const { data: waiting } = await supabase
+    .from('till_tickets')
+    .select('id')
+    .eq('appointment_id', appointment.id)
+    .eq('status', 'awaiting')
+    .limit(1)
+  if (waiting && waiting.length > 0) {
+    return NextResponse.json({ error: 'awaiting_card_payment' }, { status: 409 })
+  }
+
   const { data: payments } = await supabase
     .from('payments')
     .select('amount_cents')
@@ -99,7 +111,7 @@ export async function POST(request: NextRequest) {
           currency: 'usd',
           unit_amount: balance,
           product_data: {
-            name: `Balance — ${description}`,
+            name: `Balance: ${description}`,
             description: 'The remaining amount on your appointment.',
           },
         },
