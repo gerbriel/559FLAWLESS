@@ -22,7 +22,7 @@ export default async function ServicesPage() {
   const { data: categories } = await supabase
     .from('service_categories')
     .select(
-      'id, name, slug, description, is_intimate, services(id, name, slug, description, price_cents, price_is_starting, duration_minutes, is_active, sort_order, is_intimate, requires_consultation)'
+      'id, name, slug, description, is_intimate, services(id, name, slug, description, price_cents, price_is_starting, duration_minutes, is_active, sort_order, is_intimate, requires_consultation, is_featured)'
     )
     .eq('is_active', true)
     .order('sort_order')
@@ -55,6 +55,7 @@ export default async function ServicesPage() {
               sort_order: number
               is_intimate: boolean
               requires_consultation: boolean
+              is_featured: boolean
             }[])
               .filter((s) => s.is_active)
               .sort((a, b) => a.sort_order - b.sort_order)
@@ -95,6 +96,7 @@ export default async function ServicesPage() {
                             {/* Edited here or on the service's own page — one
                                 row either way, so the two cannot disagree. */}
                             <span data-edit-field="name">{s.name}</span>
+                            {s.is_featured && <Badge tone="accent">Best seller</Badge>}
                             {/* Per-service, not just per-category: a Brazilian
                                 sits inside the general Waxing menu but still
                                 needs its own 18+ mark. */}

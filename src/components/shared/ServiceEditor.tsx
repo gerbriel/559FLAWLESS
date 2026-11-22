@@ -815,7 +815,7 @@ export function ServiceEditor({
               onChange={(e) => set('is_featured', e.target.checked)}
               className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
             />
-            <span>Featured on the home page</span>
+            <span>Best seller: badge on the menu, first on the home page</span>
           </label>
 
           <label className="flex cursor-pointer items-start gap-3 text-sm">

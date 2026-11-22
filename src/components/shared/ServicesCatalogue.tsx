@@ -275,7 +275,7 @@ export function ServicesCatalogue({
                               {s.name}
                             </span>
                             {!s.is_active && <Badge tone="neutral">Not listed</Badge>}
-                            {s.is_featured && <Badge tone="accent">Featured</Badge>}
+                            {s.is_featured && <Badge tone="accent">Best seller</Badge>}
                             {s.requires_age_verification && (
                               <Badge tone="warning">
                                 <ShieldCheck className="h-3 w-3" strokeWidth={2} />

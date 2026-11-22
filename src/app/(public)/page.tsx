@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { Badge } from '@/components/ui/badge'
 import Image from 'next/image'
 import { ArrowRight, Star } from 'lucide-react'
 import { createPublicClient } from '@/lib/supabase/public'
@@ -34,9 +35,12 @@ export default async function HomePage() {
         .from('services')
         // !inner so the category filter below actually drops the row — a
         // service in a retired category is off the menu everywhere public.
-        .select('id, name, slug, description, price_cents, duration_minutes, price_is_starting, service_categories!inner(slug)')
+        .select('id, name, slug, description, price_cents, duration_minutes, price_is_starting, is_featured, service_categories!inner(slug)')
         .eq('is_active', true)
         .eq('service_categories.is_active', true)
+        // Best sellers lead, in menu order; the rest of the six follow in
+        // menu order. The badge is what the owner ticks in the editor.
+        .order('is_featured', { ascending: false })
         .order('sort_order')
         .limit(6),
       supabase
@@ -232,8 +236,11 @@ export default async function HomePage() {
                     className="group flex flex-wrap items-baseline justify-between gap-x-8 gap-y-2 py-6 transition-colors hover:text-[var(--color-accent)]"
                   >
                     <div className="min-w-0 flex-1">
-                      <h3 data-edit-field="name" className="display text-xl sm:text-2xl">
-                        {s.name}
+                      <h3 className="flex flex-wrap items-center gap-3">
+                        <span data-edit-field="name" className="display text-xl sm:text-2xl">
+                          {s.name}
+                        </span>
+                        {s.is_featured && <Badge tone="accent">Best seller</Badge>}
                       </h3>
                       <p
                         data-edit-field="description"

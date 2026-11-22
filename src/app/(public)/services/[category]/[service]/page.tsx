@@ -54,7 +54,7 @@ export default async function ServiceDetailPage({ params }: Props) {
   const { data: service } = await supabase
     .from('services')
     .select(
-      'id, name, slug, description, details, aftercare, price_cents, price_is_starting, duration_minutes, deposit_cents, cancellation_window_hours, is_intimate, requires_age_verification, requires_consultation, patch_test_hours, min_age, service_categories(name, slug, is_intimate)'
+      'id, name, slug, description, details, aftercare, price_cents, price_is_starting, duration_minutes, deposit_cents, cancellation_window_hours, is_intimate, requires_age_verification, requires_consultation, patch_test_hours, min_age, is_featured, service_categories(name, slug, is_intimate)'
     )
     .eq('slug', serviceSlug)
     .eq('is_active', true)
@@ -135,6 +135,7 @@ export default async function ServiceDetailPage({ params }: Props) {
           </Link>
 
           <div className="mt-8 flex flex-wrap items-center gap-3">
+            {service.is_featured && <Badge tone="accent">Best seller</Badge>}
             {service.is_intimate && <Badge tone="accent">18+</Badge>}
             {service.requires_consultation && <Badge tone="neutral">Consultation first</Badge>}
             {service.patch_test_hours > 0 && (

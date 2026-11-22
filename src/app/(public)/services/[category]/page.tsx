@@ -52,7 +52,7 @@ export default async function CategoryPage({ params }: Props) {
   const { data: cat } = await supabase
     .from('service_categories')
     .select(
-      'id, name, slug, description, is_intimate, image_url, services(id, name, slug, description, price_cents, price_is_starting, duration_minutes, is_active, sort_order, is_intimate, requires_consultation, patch_test_hours)'
+      'id, name, slug, description, is_intimate, image_url, services(id, name, slug, description, price_cents, price_is_starting, duration_minutes, is_active, sort_order, is_intimate, requires_consultation, patch_test_hours, is_featured)'
     )
     .eq('slug', category)
     .eq('is_active', true)
@@ -73,6 +73,7 @@ export default async function CategoryPage({ params }: Props) {
     is_intimate: boolean
     requires_consultation: boolean
     patch_test_hours: number
+    is_featured: boolean
   }[])
     .filter((s) => s.is_active)
     .sort((a, b) => a.sort_order - b.sort_order)
@@ -126,7 +127,11 @@ export default async function CategoryPage({ params }: Props) {
 
         <ul className="mt-14 divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
           {services.map((s) => (
-            <li key={s.id} data-edit-key={`services:${s.id}`}>
+            <li
+              key={s.id}
+              data-edit-key={`services:${s.id}`}
+              className={s.is_featured ? 'border-l-2 border-l-[var(--color-accent)] pl-5 sm:pl-6' : undefined}
+            >
               <Link
                 href={`/services/${cat.slug}/${s.slug}`}
                 className="group flex flex-wrap items-baseline justify-between gap-x-8 gap-y-2 py-5 transition-colors sm:py-7 hover:text-[var(--color-accent)]"
@@ -134,6 +139,7 @@ export default async function CategoryPage({ params }: Props) {
                 <div className="min-w-0 flex-1">
                   <h3 className="flex flex-wrap items-center gap-3 text-lg">
                     <span data-edit-field="name">{s.name}</span>
+                    {s.is_featured && <Badge tone="accent">Best seller</Badge>}
                     {/* Redundant inside an intimate category, so only shown
                         when the service is the exception in its menu. */}
                     {s.is_intimate && !cat.is_intimate && <Badge tone="accent">18+</Badge>}

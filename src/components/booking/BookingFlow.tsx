@@ -46,6 +46,7 @@ export interface BookableService {
   requires_age_verification: boolean
   min_age: number
   patch_test_hours: number
+  is_featured: boolean
   category: { name: string; slug: string; is_intimate: boolean }
   addons: { id: number; name: string; price_cents: number; duration_minutes: number }[]
 }
@@ -929,7 +930,10 @@ export function BookingFlow({
                           )}
                         >
                           <span className="flex flex-col gap-2">
-                            <span className="text-base">{s.name}</span>
+                            <span className="flex flex-wrap items-center gap-2 text-base">
+                              {s.name}
+                              {s.is_featured && <Badge tone="accent" size="sm">Best seller</Badge>}
+                            </span>
                             <span className="text-xs text-[var(--color-muted)]">
                               {formatDuration(s.duration_minutes)} ·{' '}
                               {cut ? (
