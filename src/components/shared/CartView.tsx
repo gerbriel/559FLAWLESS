@@ -10,7 +10,7 @@ import { useCart } from '@/store/cart'
 import { Button } from '@/components/ui/button'
 import { Field, Input, Select } from '@/components/ui/field'
 import { formatMoney } from '@/lib/utils'
-import { normalizeCouponCode } from '@/lib/checkout-url'
+import { normalizeCouponCode } from '@/lib/coupon-code'
 import { trackCartEvent } from './ClientAnalytics'
 import { trackMetaEvent } from './MetaPixelEvent'
 
@@ -370,8 +370,7 @@ export function CartView() {
           {form.fulfillment === 'pickup' ? (
             <>
               {/* The code is only named here; Stripe says what it is worth
-                  when the order is placed, and the receipt shows it. A code
-                  from a Meta Shops link arrives already filled in. */}
+                  when the order is placed, and the receipt shows it. */}
               <div className="mt-6 border-t border-[var(--color-border)] pt-6">
                 {coupon ? (
                   <div className="flex items-center justify-between gap-3 text-sm">

@@ -28,8 +28,7 @@ const Body = z.object({
   email: z.string().email().max(254),
   name: z.string().trim().min(1).max(120),
   phone: z.string().trim().max(40).nullish(),
-  // A promo code, typed in the bag or carried in on a marketplace checkout
-  // URL (Meta Shops). Looked up in Stripe below; the client never says what
+  // A promo code, typed in the bag. Looked up in Stripe below; the client never says what
   // it is worth, only which one.
   coupon: z.string().trim().max(40).nullish(),
 })
@@ -153,7 +152,7 @@ export async function POST(request: NextRequest) {
       fulfillment,
       discount_cents: discount,
       // Recorded whether or not it won: the shopper used it, and the
-      // marketplace promotion it came from wants to be counted.
+      // studio wants to know which codes get typed.
       promo_code: coupon?.code ?? null,
     })
     .select('id')

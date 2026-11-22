@@ -11,9 +11,9 @@ export interface CartLine {
 interface CartState {
   lines: CartLine[]
   /**
-   * A promo code waiting to be checked. Typed in the bag or carried in on a
-   * marketplace checkout URL; validated by the checkout route against Stripe,
-   * never here. The bag shows it, the server decides what it is worth.
+   * A promo code waiting to be checked. Typed in the bag; validated by the
+   * checkout route against Stripe, never here. The bag shows it, the server
+   * decides what it is worth.
    */
   coupon: string | null
   add: (productId: number, qty?: number) => void
@@ -48,8 +48,7 @@ export const useCart = create<CartState>()(
           return { lines: [...state.lines, { productId, qty: Math.min(qty, 99) }] }
         }),
 
-      // Sets the line to exactly `qty`, adding it if absent. Idempotent, which
-      // is what a checkout URL needs: landing on it twice is one bag, not two.
+      // Sets the line to exactly `qty`, adding it if absent.
       setQty: (productId, qty) =>
         set((state) => {
           if (qty <= 0) return { lines: state.lines.filter((l) => l.productId !== productId) }

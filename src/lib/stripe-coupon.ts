@@ -1,18 +1,16 @@
 import 'server-only'
 import type Stripe from 'stripe'
-import { couponCutCents, normalizeCouponCode } from '@/lib/checkout-url'
+import { couponCutCents, normalizeCouponCode } from '@/lib/coupon-code'
 
 /**
  * Promo codes for retail checkout live in Stripe, not in `promotions`.
  *
  * The deal board (068) knows five kinds of deal and none of them is "type a
- * code". Meta Shops sends a `coupon` on its checkout URL, and a shopper can
- * type one in the bag; both need a place where the studio defines what a code
- * is worth. Stripe's promotion codes are that place — the dashboard already
- * exists, codes carry their own expiry, redemption cap, minimum and
- * first-purchase rules (Stripe enforces them because the session is handed
- * the promotion code itself), and the studio enters the same code in Meta's
- * promotion and in Stripe.
+ * code". A shopper types one in the bag, and that needs a place where the
+ * studio defines what a code is worth. Stripe's promotion codes are that
+ * place — the dashboard already exists, and codes carry their own expiry,
+ * redemption cap, minimum and first-purchase rules, which Stripe enforces
+ * because the session is handed the promotion code itself.
  *
  * Codes that need a Stripe customer on the session (customer-locked,
  * first-purchase only) or a Stripe product (applies_to) are refused; see
@@ -100,7 +98,7 @@ export async function lookupCoupon(stripe: Stripe, raw: string): Promise<CouponL
 
 /**
  * What the code takes off this basket, or why it cannot apply to it. Pure
- * apart from the input; the arithmetic lives in checkout-url.ts with its test.
+ * apart from the input; the arithmetic lives in coupon-code.ts with its test.
  */
 export function couponDiscountFor(
   coupon: RedeemableCoupon,
