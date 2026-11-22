@@ -151,6 +151,13 @@ const TREE: NavEntry[] = [
     // of the Clients tab bar — see the rule above the group.
     children: [
       {
+        // Who holds a membership, what is left on it, and whether they have
+        // anything booked to spend it on.
+        href: '/dashboard/clients/members',
+        label: 'Members',
+        visible: (r) => isFrontDesk(r),
+      },
+      {
         href: '/dashboard/clients/newsletter',
         label: 'Newsletter',
         visible: (r) => isFrontDesk(r),

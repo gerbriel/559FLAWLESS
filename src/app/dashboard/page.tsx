@@ -1,12 +1,13 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { AlertTriangle, TrendingUp, Users, DollarSign } from 'lucide-react'
+import { AlertTriangle, BadgeCheck, TrendingUp, Users, DollarSign } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
 import { PendingQueue } from '@/components/shared/PendingQueue'
 import { formatMoney } from '@/lib/utils'
 import { dateKeyInTimeZone, formatTimeInTimeZone, zonedTimeToUtc, addDaysToDateKey , requestNow } from '@/lib/time'
 import { isFrontDesk, isManager, type UserRole } from '@/types/database'
+import { chunked, needsFollowUp, sessionsLeftThisPeriod } from '@/lib/member-follow-up'
 
 export const dynamic = 'force-dynamic'
 
@@ -85,6 +86,10 @@ export default async function DashboardHome() {
 
   const revenue = (weekRevenue ?? []).reduce((n, a) => n + a.total_cents, 0)
 
+  // Members with treatments left and nothing booked. Same rule as the Members
+  // list (src/lib/member-follow-up.ts), so the number here is the number there.
+  const followUpCount = isFrontDesk(role) ? await countMembersToFollowUp(supabase) : 0
+
   return (
     <div>
       <h1 className="display text-3xl">
@@ -146,6 +151,22 @@ export default async function DashboardHome() {
             })}
           </ul>
         </div>
+      )}
+
+      {/* ── Members to follow up ───────────────────────── */}
+      {followUpCount > 0 && (
+        <Link
+          href="/dashboard/clients/members?filter=needs_follow_up"
+          className="mt-10 flex items-center gap-2.5 border border-[var(--color-border)] bg-[var(--color-surface)] p-5 text-sm transition-colors hover:border-[var(--color-accent)]"
+        >
+          <BadgeCheck className="h-4 w-4 text-[var(--color-accent)]" strokeWidth={1.75} aria-hidden />
+          <span>
+            {followUpCount} {followUpCount === 1 ? 'member' : 'members'} to follow up
+          </span>
+          <span className="ml-auto text-xs text-[var(--color-muted)]">
+            Treatments left, nothing booked
+          </span>
+        </Link>
       )}
 
       {/* ── Waiting on you ────────────────────────────── */}
@@ -249,6 +270,53 @@ function Stat({
       <p className="display mt-3 text-3xl tabular-nums">{value}</p>
     </div>
   )
+}
+
+async function countMembersToFollowUp(
+  supabase: Awaited<ReturnType<typeof createClient>>
+): Promise<number> {
+  const now = requestNow()
+  const { data } = await supabase
+    .from('client_memberships')
+    .select(
+      'client_id, status, current_period_start, current_period_end, memberships!client_memberships_membership_id_fkey(included_sessions_per_period), membership_redemptions(sessions, redeemed_for_period_start)'
+    )
+    .eq('status', 'active')
+    .gt('current_period_end', new Date(now).toISOString())
+
+  const rows = (data ?? []).map((m) => {
+    const plan = m.memberships as unknown as { included_sessions_per_period: number } | null
+    const spent = (m.membership_redemptions ?? []) as unknown as {
+      sessions: number
+      redeemed_for_period_start: string
+    }[]
+    return {
+      m,
+      left: sessionsLeftThisPeriod(plan?.included_sessions_per_period ?? 0, m.current_period_start, spent),
+    }
+  })
+  const candidates = rows.filter((r) => r.left > 0)
+  if (candidates.length === 0) return 0
+
+  // Chunked for the same reason as the Members list: the ids ride in the URL.
+  const parts = await Promise.all(
+    chunked(candidates.map((r) => r.m.client_id)).map((part) =>
+      supabase
+        .from('appointments')
+        .select('client_id, starts_at')
+        .in('client_id', part)
+        .gt('starts_at', new Date(now).toISOString())
+        .in('status', ['pending', 'confirmed'])
+    )
+  )
+  const startsBy = new Map<string, string[]>()
+  for (const a of parts.flatMap((r) => r.data ?? [])) {
+    if (!a.client_id) continue
+    startsBy.set(a.client_id, [...(startsBy.get(a.client_id) ?? []), a.starts_at])
+  }
+
+  return candidates.filter((r) => needsFollowUp(r.m, r.left, startsBy.get(r.m.client_id) ?? [], now))
+    .length
 }
 
 function greeting(): string {

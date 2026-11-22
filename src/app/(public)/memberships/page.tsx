@@ -1,39 +1,46 @@
 import type { Metadata } from 'next'
-import { Check } from 'lucide-react'
+import { AlertCircle, Check } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { Container, Section, SectionHeading } from '@/components/ui/section'
 import { ButtonLink } from '@/components/ui/button'
 import { MembershipJoinButton } from '@/components/shared/MembershipJoinButton'
+import { MembershipSelfService } from '@/components/shared/MembershipSelfService'
 import { formatMoney } from '@/lib/utils'
 import { requestNow } from '@/lib/time'
+import { membershipIsCurrent } from '@/types/memberships'
 
 // Who is looking changes the page (join, or your membership), so it is never cached.
 export const dynamic = 'force-dynamic'
 
 export const metadata: Metadata = {
   title: 'Membership',
-  description: 'A season of corrective facials at 559 Flawless, paid up front.',
+  description: 'A season of corrective facials at 559 Flawless, paid once or renewing.',
 }
 
 const STUDIO_TZ = 'America/Los_Angeles'
 
+/** Said wherever the page talks about visits: "paid" can read as "booked". */
+const VISITS_CONFIRMED =
+  'Visits are booked separately, and each one is confirmed by the studio before it is on the calendar.'
+
 interface Props {
-  searchParams: Promise<{ joined?: string }>
+  searchParams: Promise<{ joined?: string; later?: string }>
 }
 
 /**
- * The public membership page (078).
+ * The public membership page (078, renewing option 083).
  *
  * Lists the plans marked "sell online". A signed-in client pays through
- * Stripe; someone already holding a membership sees it instead — what is left
- * this period and when it ends. Visits are booked through the normal booking
- * flow and confirmed by the studio; the page says so, because "paid" can read
- * as "booked".
+ * Stripe, either once for one period or on a renewing subscription when the
+ * plan offers it. Someone already holding a membership sees it instead: what
+ * is left this period, whether and when it renews, and (for a subscription)
+ * the controls to stop renewing or update the card. Visits are booked through
+ * the normal booking flow and confirmed by the studio; the page says so.
  */
 export default async function MembershipsPage({ searchParams }: Props) {
-  const { joined } = await searchParams
+  const { joined, later } = await searchParams
   const supabase = await createClient()
-  const nowIso = new Date(requestNow()).toISOString()
+  const now = requestNow()
 
   const [
     {
@@ -45,7 +52,7 @@ export default async function MembershipsPage({ searchParams }: Props) {
     supabase
       .from('memberships')
       .select(
-        'id, name, description, price_cents, period_months, included_sessions_per_period, membership_services(services(name)), membership_member_prices(price_cents, services(name, price_cents))'
+        'id, name, description, price_cents, period_months, included_sessions_per_period, auto_renew_offered, membership_services(services(name)), membership_member_prices(price_cents, services(name, price_cents))'
       )
       .eq('is_active', true)
       .eq('sell_online', true)
@@ -53,17 +60,25 @@ export default async function MembershipsPage({ searchParams }: Props) {
       .order('id'),
   ])
 
-  const { data: mine } = user
+  // Active or past due: a failed renewal still belongs on this page, with a
+  // way to fix the card, rather than vanishing as if they never joined. The
+  // latest period wins; an active row whose period has ended is not shown.
+  const { data: latest } = user
     ? await supabase
         .from('client_memberships')
         .select(
-          'id, current_period_start, current_period_end, memberships!client_memberships_membership_id_fkey(name, included_sessions_per_period), membership_redemptions(sessions, redeemed_for_period_start)'
+          'id, status, current_period_start, current_period_end, auto_renew, cancel_at_period_end, stripe_subscription_id, memberships!client_memberships_membership_id_fkey(name, included_sessions_per_period), membership_redemptions(sessions, redeemed_for_period_start)'
         )
         .eq('client_id', user.id)
-        .eq('status', 'active')
-        .gt('current_period_end', nowIso)
+        .in('status', ['active', 'past_due'])
+        .order('current_period_end', { ascending: false })
+        .limit(1)
         .maybeSingle()
     : { data: null }
+
+  const mine =
+    latest && (latest.status === 'past_due' || membershipIsCurrent(latest, now)) ? latest : null
+  const pastDue = mine?.status === 'past_due'
 
   const minePlan = mine?.memberships as unknown as
     | { name: string; included_sessions_per_period: number }
@@ -84,19 +99,37 @@ export default async function MembershipsPage({ searchParams }: Props) {
       year: 'numeric',
     })
 
+  const subscribed = Boolean(mine?.stripe_subscription_id)
+  const renewing = subscribed && Boolean(mine?.auto_renew) && !mine?.cancel_at_period_end
+  const endLabel = mine ? dateLabel(mine.current_period_end) : ''
+  const renewalLine = !mine
+    ? ''
+    : renewing
+      ? `Renews automatically on ${endLabel}`
+      : subscribed
+        ? `Ends on ${endLabel}`
+        : `Paid once, runs until ${endLabel}`
+
   return (
     <Section>
       <Container>
         <SectionHeading
           eyebrow="Membership"
           title="A season of good skin."
-          lede="Corrective facials across three months, paid once up front. You book each visit when it suits you, and the studio confirms it."
+          lede={`Corrective facials across a season, paid once or renewing. ${VISITS_CONFIRMED}`}
         />
 
         {joined && !mine && (
           <p className="mt-10 border-l-2 border-[var(--color-accent)] bg-[var(--color-clay-soft)] p-5 text-sm dark:bg-transparent">
-            Thank you — your payment went through. Your membership appears here as soon as
+            Thank you, your payment went through. Your membership appears here as soon as
             the payment is confirmed, usually within a minute. Refresh if it has not yet.
+          </p>
+        )}
+
+        {later && (
+          <p className="mt-10 border-l-2 border-[var(--color-accent)] bg-[var(--color-clay-soft)] p-5 text-sm dark:bg-transparent">
+            Noted. Book whenever you are ready: come back here or go straight to booking.{' '}
+            {VISITS_CONFIRMED}
           </p>
         )}
 
@@ -107,18 +140,34 @@ export default async function MembershipsPage({ searchParams }: Props) {
               Your membership
             </p>
             <p className="display mt-3 text-3xl">{minePlan.name}</p>
+
+            {pastDue && (
+              <p className="mt-5 flex gap-2.5 border-l-2 border-[var(--color-accent)] bg-[var(--color-clay-soft)] p-4 text-sm dark:bg-transparent">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-accent)]" strokeWidth={2} />
+                Your last payment did not go through. Update your card to keep your
+                membership.
+              </p>
+            )}
+
             <p className="mt-3 text-sm">
               <strong className="tabular-nums">{left}</strong> of{' '}
-              {minePlan.included_sessions_per_period} facials left · runs until{' '}
-              {dateLabel(mine.current_period_end)}
+              {minePlan.included_sessions_per_period} facials left · {renewalLine}
             </p>
             <p className="mt-2 max-w-prose text-sm text-[var(--color-muted)]">
               Book a corrective facial as usual and it is covered automatically once the
-              studio confirms it. Add a Brazilian to any visit at the member price.
+              studio confirms it. Add a Brazilian to any visit at the member price.{' '}
+              {VISITS_CONFIRMED}
             </p>
-            <ButtonLink href="/book" className="mt-6">
-              Book a visit
-            </ButtonLink>
+
+            {!pastDue && (
+              <ButtonLink href={left > 0 ? '/book?membership=1' : '/book'} className="mt-6">
+                {left > 0 ? 'Book a covered visit' : 'Book a visit'}
+              </ButtonLink>
+            )}
+
+            {subscribed && (
+              <MembershipSelfService renewing={renewing} periodEndLabel={endLabel} />
+            )}
           </div>
         )}
 
@@ -141,6 +190,7 @@ export default async function MembershipsPage({ searchParams }: Props) {
                 services: { name: string; price_cents: number } | null
               }[]
               const months = p.period_months === 1 ? 'month' : `${p.period_months} months`
+              const forMonths = p.period_months === 1 ? '1 month' : `${p.period_months} months`
 
               return (
                 <li
@@ -153,7 +203,9 @@ export default async function MembershipsPage({ searchParams }: Props) {
                       {formatMoney(p.price_cents)}
                     </span>
                     <span className="ml-2 text-sm text-[var(--color-muted)]">
-                      for {months}, paid up front
+                      {p.auto_renew_offered
+                        ? `every ${months}, or once`
+                        : `for ${months}, paid up front`}
                     </span>
                   </p>
                   {p.description && (
@@ -187,17 +239,36 @@ export default async function MembershipsPage({ searchParams }: Props) {
                     ))}
                     <li className="flex gap-2.5">
                       <Check className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-accent)]" strokeWidth={2} />
-                      <span>Book each visit when it suits you; the studio confirms it</span>
+                      <span>{VISITS_CONFIRMED}</span>
                     </li>
                   </ul>
 
-                  <div className="mt-auto">
+                  <div className="mt-auto pt-8">
                     {mine ? null : user ? (
-                      <MembershipJoinButton membershipId={p.id} label={`Join — ${formatMoney(p.price_cents)}`} />
+                      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+                        <MembershipJoinButton
+                          membershipId={p.id}
+                          autoRenew={false}
+                          variant={p.auto_renew_offered ? 'outline' : 'primary'}
+                          label={`Pay once for ${forMonths}`}
+                        />
+                        {p.auto_renew_offered && (
+                          <MembershipJoinButton
+                            membershipId={p.id}
+                            autoRenew
+                            label={`Renew every ${months}, cancel anytime`}
+                          />
+                        )}
+                      </div>
                     ) : (
-                      <ButtonLink href="/login?next=/memberships" className="mt-8">
-                        Sign in to join
-                      </ButtonLink>
+                      <ButtonLink href="/login?next=/memberships">Sign in to join</ButtonLink>
+                    )}
+                    {!mine && p.auto_renew_offered && (
+                      <p className="mt-4 text-xs text-[var(--color-muted)]">
+                        Renewing charges {formatMoney(p.price_cents)} every {months} until
+                        you stop it. Stop from this page at any time and it runs to the end of
+                        the period you paid for. Paying once ends after {forMonths}.
+                      </p>
                     )}
                   </div>
                   <p className="mt-4 text-xs text-[var(--color-muted)]">

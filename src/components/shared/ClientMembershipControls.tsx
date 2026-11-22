@@ -11,6 +11,7 @@ import {
   describeMembershipBenefit,
   membershipPeriodLabel,
   type Membership,
+  membershipErrorMessage,
   type MembershipChargeMethod,
 } from '@/types/memberships'
 
@@ -32,6 +33,8 @@ export function ClientMembershipControls({
   plans,
   dueChargeIds,
   cancelAtPeriodEnd,
+  stripeSubscriptionId = null,
+  periodOver = false,
 }: {
   clientId: string
   /** Null when the client has nothing current — the enrol form is shown. */
@@ -40,6 +43,16 @@ export function ClientMembershipControls({
   /** Charges still owed, oldest first. Usually none or one. */
   dueChargeIds: number[]
   cancelAtPeriodEnd: boolean
+  /**
+   * Set when Stripe bills this membership (083). renew_membership() refuses
+   * such a row, so the Renew button is not offered at all.
+   */
+  stripeSubscriptionId?: string | null
+  /**
+   * Still 'active' but past current_period_end, not yet swept to expired. It
+   * holds 050's one-live index, so it is renewed or ended, not enrolled over.
+   */
+  periodOver?: boolean
 }) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
@@ -122,17 +135,45 @@ export function ClientMembershipControls({
   async function setCancelAtPeriodEnd(value: boolean) {
     if (!liveMembershipId) return
     setBusy(true)
-    const { error } = await createClient()
-      .from('client_memberships')
-      .update({
-        cancel_at_period_end: value,
-        cancelled_at: value ? new Date().toISOString() : null,
-      })
-      .eq('id', liveMembershipId)
+
+    // A subscribed membership is stopped in Stripe, or Stripe keeps billing
+    // it whatever this row says. The manage route changes both; the webhook
+    // confirms. A pay-once membership has nothing in Stripe to tell.
+    let failure: string | null = null
+    if (stripeSubscriptionId) {
+      try {
+        const res = await fetch('/api/stripe/membership/manage', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: value ? 'stop_renewing' : 'resume_renewing',
+            client_membership_id: liveMembershipId,
+          }),
+        })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          failure =
+            data.error === 'subscription_ended'
+              ? 'That subscription has already ended in Stripe.'
+              : 'Stripe did not accept the change. Try again.'
+        }
+      } catch {
+        failure = 'Could not reach Stripe. Try again.'
+      }
+    } else {
+      const { error } = await createClient()
+        .from('client_memberships')
+        .update({
+          cancel_at_period_end: value,
+          cancelled_at: value ? new Date().toISOString() : null,
+        })
+        .eq('id', liveMembershipId)
+      if (error) failure = error.message || 'Could not change that.'
+    }
     setBusy(false)
 
-    if (error) {
-      toast.error(error.message || 'Could not change that.')
+    if (failure) {
+      toast.error(failure)
       return
     }
     toast.success(
@@ -153,16 +194,36 @@ export function ClientMembershipControls({
       return
     }
 
-    const stamp = new Date().toISOString()
+    // A subscribed membership is cancelled in Stripe too, or Stripe keeps
+    // billing a membership this row calls over. The manage route does both.
+    let failure: string | null = null
     setBusy(true)
-    const { error } = await createClient()
-      .from('client_memberships')
-      .update({ status: 'cancelled', cancelled_at: stamp, ended_at: stamp })
-      .eq('id', liveMembershipId)
+    if (stripeSubscriptionId) {
+      try {
+        const res = await fetch('/api/stripe/membership/manage', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'end_now', client_membership_id: liveMembershipId }),
+        })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          failure = membershipErrorMessage(data.error, 'Could not end that membership.')
+        }
+      } catch {
+        failure = 'Could not reach Stripe. Try again.'
+      }
+    } else {
+      const stamp = new Date().toISOString()
+      const { error } = await createClient()
+        .from('client_memberships')
+        .update({ status: 'cancelled', cancelled_at: stamp, ended_at: stamp })
+        .eq('id', liveMembershipId)
+      if (error) failure = error.message || 'Could not end that membership.'
+    }
     setBusy(false)
 
-    if (error) {
-      toast.error(error.message || 'Could not end that membership.')
+    if (failure) {
+      toast.error(failure)
       return
     }
     toast.success('Ended.')
@@ -220,6 +281,10 @@ export function ClientMembershipControls({
 
   return (
     <div className="space-y-4">
+      {periodOver && (
+        <p className="text-xs text-amber-700 dark:text-amber-400">This period has run out.</p>
+      )}
+
       {dueChargeIds.length > 0 && (
         <div className="space-y-3">
           <Field label="Paid by" htmlFor="cm_method">
@@ -242,17 +307,23 @@ export function ClientMembershipControls({
       )}
 
       <div className="flex flex-wrap gap-2.5">
-        <Button variant="subtle" size="sm" disabled={busy} onClick={renew}>
-          {cancelAtPeriodEnd ? 'End it now that the period is up' : 'Renew for another period'}
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={busy}
-          onClick={() => setCancelAtPeriodEnd(!cancelAtPeriodEnd)}
-        >
-          {cancelAtPeriodEnd ? 'Keep it going' : 'Stop at the end of this period'}
-        </Button>
+        {stripeSubscriptionId ? (
+          <p className="self-center text-xs text-[var(--color-muted)]">Stripe renews this one.</p>
+        ) : (
+          <Button variant="subtle" size="sm" disabled={busy} onClick={renew}>
+            {cancelAtPeriodEnd ? 'End it now that the period is up' : 'Renew for another period'}
+          </Button>
+        )}
+        {!periodOver && (
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={() => setCancelAtPeriodEnd(!cancelAtPeriodEnd)}
+          >
+            {cancelAtPeriodEnd ? 'Keep it going' : 'Stop at the end of this period'}
+          </Button>
+        )}
       </div>
 
       <button

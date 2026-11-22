@@ -3,10 +3,21 @@ import { z } from 'zod'
 import { getStripe, stripeConfigured, siteUrl } from '@/lib/stripe'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
+import { membershipPeriodLabel } from '@/types/memberships'
 
 export const dynamic = 'force-dynamic'
 
-const Body = z.object({ membership_id: z.number().int().positive() })
+const Body = z.object({
+  membership_id: z.number().int().positive(),
+  auto_renew: z.boolean().optional().default(false),
+})
+
+/**
+ * Stripe bills a month interval at most twelve times over. A plan with a
+ * longer period than that (050 allows up to 24 months) cannot be a
+ * subscription and is sold pay-once instead.
+ */
+const STRIPE_MAX_MONTHS = 12
 
 /**
  * Stripe Checkout for joining a membership online (078).
@@ -19,6 +30,14 @@ const Body = z.object({ membership_id: z.number().int().positive() })
  *
  * Signed-in only: a membership belongs to an account, because its sessions are
  * spent from that account's bookings.
+ *
+ * Two modes (083). Pay-once is the 078 path: one payment for one period, and
+ * the studio records later periods by hand. Renewing (`auto_renew: true`, and
+ * only when the plan has `auto_renew_offered`) opens Checkout in subscription
+ * mode, so Stripe holds the card and charges it every period; the webhook
+ * enrols on checkout.session.completed and settles each invoice after that.
+ * Asking to renew on a plan that does not offer it falls back to pay-once
+ * rather than failing: the member still gets what the page sold them.
  */
 export async function POST(request: NextRequest) {
   if (!stripeConfigured()) {
@@ -39,22 +58,45 @@ export async function POST(request: NextRequest) {
 
   const admin = createAdminClient()
 
+  // A suspended account buys nothing. Read with the role, from profiles on
+  // the server, never from the request.
+  const { data: profile } = await admin
+    .from('profiles')
+    .select('role, suspended_at')
+    .eq('id', user.id)
+    .maybeSingle()
+  if (profile?.suspended_at) {
+    return NextResponse.json({ error: 'suspended' }, { status: 403 })
+  }
+
   const [{ data: plan }, { data: live }] = await Promise.all([
     admin
       .from('memberships')
-      .select('id, name, description, price_cents, period_months, is_active, sell_online')
+      .select('id, name, description, price_cents, period_months, is_active, sell_online, auto_renew_offered')
       .eq('id', parsed.data.membership_id)
       .maybeSingle(),
     // One live membership per person (050's partial unique index). Refused here
-    // so nobody pays for a second one the webhook could not enrol.
+    // so nobody pays for a second one the webhook could not enrol. Same
+    // predicate as the index, and no date filter: an active row past its end
+    // date, or a past_due one, still blocks the insert.
     admin
       .from('client_memberships')
       .select('id')
       .eq('client_id', user.id)
-      .eq('status', 'active')
-      .gt('current_period_end', new Date().toISOString())
+      .in('status', ['active', 'past_due'])
       .limit(1),
   ])
+
+  // A Stripe customer this person already has, from an earlier membership, so
+  // a second plan does not mint a second customer (050 gap 1).
+  const { data: prior } = await admin
+    .from('client_memberships')
+    .select('stripe_customer_id')
+    .eq('client_id', user.id)
+    .not('stripe_customer_id', 'is', null)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
 
   if (!plan || !plan.is_active || !plan.sell_online || plan.price_cents <= 0) {
     return NextResponse.json({ error: 'not_for_sale' }, { status: 404 })
@@ -67,33 +109,67 @@ export async function POST(request: NextRequest) {
   }
 
   const months = plan.period_months === 1 ? '1 month' : `${plan.period_months} months`
+  const renewing =
+    parsed.data.auto_renew &&
+    plan.auto_renew_offered &&
+    plan.period_months <= STRIPE_MAX_MONTHS
 
-  const session = await getStripe().checkout.sessions.create({
-    mode: 'payment',
-    customer_email: user.email ?? undefined,
-    line_items: [
-      {
-        quantity: 1,
-        price_data: {
-          currency: 'usd',
-          unit_amount: plan.price_cents,
-          product_data: {
-            name: `${plan.name} — ${months}`,
-            description:
-              'Paid up front. Each visit is booked separately and confirmed by the studio.',
+  const metadata = {
+    kind: 'membership',
+    membership_id: String(plan.id),
+    client_id: user.id,
+  }
+  const customer = prior?.stripe_customer_id ?? undefined
+  // The webhook is what enrols; these are only where the browser lands.
+  const success_url = `${siteUrl()}/memberships/welcome?joined=1`
+  const cancel_url = `${siteUrl()}/memberships`
+
+  const session = renewing
+    ? await getStripe().checkout.sessions.create({
+        mode: 'subscription',
+        ...(customer ? { customer } : { customer_email: user.email ?? undefined }),
+        line_items: [
+          {
+            quantity: 1,
+            price_data: {
+              currency: 'usd',
+              unit_amount: plan.price_cents,
+              recurring: { interval: 'month', interval_count: plan.period_months },
+              product_data: {
+                name: plan.name,
+                description: `Renews every ${membershipPeriodLabel(plan.period_months)} until you stop it. Each visit is booked separately and confirmed by the studio.`,
+              },
+            },
           },
-        },
-      },
-    ],
-    // The webhook is what enrols; these are only where the browser lands.
-    success_url: `${siteUrl()}/memberships?joined=1`,
-    cancel_url: `${siteUrl()}/memberships`,
-    metadata: {
-      kind: 'membership',
-      membership_id: String(plan.id),
-      client_id: user.id,
-    },
-  })
+        ],
+        // On the subscription too, so every invoice and subscription event can
+        // be recognised as a membership without a lookup.
+        subscription_data: { metadata },
+        success_url,
+        cancel_url,
+        metadata: { ...metadata, auto_renew: '1' },
+      })
+    : await getStripe().checkout.sessions.create({
+        mode: 'payment',
+        ...(customer ? { customer } : { customer_email: user.email ?? undefined }),
+        line_items: [
+          {
+            quantity: 1,
+            price_data: {
+              currency: 'usd',
+              unit_amount: plan.price_cents,
+              product_data: {
+                name: `${plan.name}, ${months}`,
+                description:
+                  'Paid up front. Each visit is booked separately and confirmed by the studio.',
+              },
+            },
+          },
+        ],
+        success_url,
+        cancel_url,
+        metadata,
+      })
 
   return NextResponse.json({ url: session.url })
 }

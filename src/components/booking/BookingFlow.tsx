@@ -58,6 +58,20 @@ export interface BookableProvider {
   service_ids: number[]
 }
 
+/**
+ * A live membership with covered visits left, resolved by the book page for
+ * `?membership=1`. Presentation only: the flow shows a banner and a link back,
+ * and the redemption at confirmation decides what is actually covered.
+ */
+export interface BookingMembership {
+  planName: string
+  /** Covered visits left this period, before this booking. */
+  left: number
+  total: number
+  /** The plan's scope, already narrowed to what is bookable here. */
+  coveredServiceSlugs: string[]
+}
+
 interface DayResult {
   date: string
   slots: string[]
@@ -82,6 +96,7 @@ export function BookingFlow({
   isNewClient = false,
   initialServiceSlug,
   initialAddSlugs = [],
+  membership,
   signedInUserId,
   signedInEmail,
   signedInName,
@@ -98,6 +113,8 @@ export function BookingFlow({
   initialServiceSlug?: string
   /** Extra services to pre-tick — the pair-deal row on a service page. */
   initialAddSlugs?: string[]
+  /** The signed-in member's covered visits, for `?membership=1`. */
+  membership?: BookingMembership
   /** Present when the profile can be written back to — see `submit`. */
   signedInUserId?: string | null
   signedInEmail?: string | null
@@ -611,6 +628,20 @@ export function BookingFlow({
      * /account/appointments, and only one of them can be true.
      */
     const heldForReview = confirmation.status === 'pending'
+    // Covered visits still left after this one, for the "book your next" link.
+    // `left` was counted before this booking, and redemptions are claimed the
+    // moment a booking is made (pending or confirmed), so it already accounts
+    // for every visit booked earlier. This visit spends one only if it holds a
+    // covered service; an empty scope means any treatment (050). No covered
+    // service, no link: this booking said nothing about the membership.
+    const bookedCovered =
+      !!membership &&
+      selected.some(
+        (s) =>
+          membership.coveredServiceSlugs.length === 0 ||
+          membership.coveredServiceSlugs.includes(s.slug)
+      )
+    const coveredLeftAfter = membership && bookedCovered ? membership.left - 1 : 0
 
     return (
       <div className="mx-auto max-w-lg py-16 text-center">
@@ -763,10 +794,16 @@ export function BookingFlow({
           </div>
         )}
 
-        <div className="mt-10 flex justify-center gap-4">
+        <div className="mt-10 flex flex-wrap justify-center gap-x-8 gap-y-4">
           <Link href="/account/appointments" className="label-caps border-b border-[var(--color-foreground)] pb-1">
             View my appointments
           </Link>
+          {/* See coveredLeftAfter above. */}
+          {coveredLeftAfter > 0 && (
+            <a href="/book?membership=1" className="label-caps border-b border-[var(--color-foreground)] pb-1">
+              Book your next covered visit
+            </a>
+          )}
         </div>
       </div>
     )
@@ -820,6 +857,12 @@ export function BookingFlow({
         {/* ── Step 1: service ──────────────────────────── */}
         {step === 'service' && (
           <div>
+            {membership && (
+              <p className="mb-8 border-l-2 border-[var(--color-accent)] bg-[var(--color-clay-soft)] p-4 text-sm dark:bg-[var(--color-surface)]">
+                {membership.planName}: {membership.left} of {membership.total} covered visits
+                left this period. Pick your date and the studio will confirm it.
+              </p>
+            )}
             <h2 className="display text-3xl">Choose your services</h2>
             <p className="mt-3 text-sm text-[var(--color-muted)]">
               Pick as many as you would like in one visit — we will book them back to

@@ -34,6 +34,7 @@ export default async function AccountPage() {
     { data: record },
     { count: unreadMessages },
     { count: rewardsReady },
+    { data: membership },
   ] = await Promise.all([
       supabase.from('profiles').select('first_name').eq('id', user.id).maybeSingle(),
       supabase
@@ -64,7 +65,21 @@ export default async function AccountPage() {
         .select('id', { count: 'exact', head: true })
         .eq('referrer_id', user.id)
         .eq('reward_status', 'earned'),
+      // A live membership (078), for the link card. Same test as /memberships:
+      // active and inside its period. Any error is simply no card.
+      supabase
+        .from('client_memberships')
+        .select('id, memberships!client_memberships_membership_id_fkey(name)')
+        .eq('client_id', user.id)
+        .eq('status', 'active')
+        .gt('current_period_end', now)
+        .order('current_period_end', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
     ])
+
+  const membershipName =
+    (membership?.memberships as unknown as { name: string } | null)?.name ?? null
 
   const next = upcoming?.[0]
 
@@ -185,6 +200,21 @@ export default async function AccountPage() {
           </div>
           <ButtonLink href={`/book?service=${resume.slug}`} variant="subtle" size="sm">
             Book it
+          </ButtonLink>
+        </div>
+      )}
+
+      {membershipName && (
+        <div className="mt-8 flex flex-wrap items-center justify-between gap-6 border border-[var(--color-border)] bg-[var(--color-surface)] p-8">
+          <div>
+            <p className="label-caps mb-4 text-[var(--color-accent)]">Membership</p>
+            <p className="display text-2xl">{membershipName}</p>
+            <p className="mt-2 text-sm text-[var(--color-muted)]">
+              Covered visits left, renewal and card details.
+            </p>
+          </div>
+          <ButtonLink href="/memberships" variant="subtle" size="sm">
+            View membership
           </ButtonLink>
         </div>
       )}

@@ -41,6 +41,7 @@ const BLANK: Draft = {
   service_discount_pct: 10,
   included_sessions_per_period: 0,
   sell_online: false,
+  auto_renew_offered: false,
   is_active: true,
   sort_order: 0,
 }
@@ -152,6 +153,7 @@ export function MembershipEditor({
       service_discount_pct: form.service_discount_pct,
       included_sessions_per_period: form.included_sessions_per_period,
       sell_online: form.sell_online,
+      auto_renew_offered: form.auto_renew_offered,
       is_active: form.is_active,
       sort_order: form.sort_order,
     }
@@ -295,7 +297,8 @@ export function MembershipEditor({
         <p className="max-w-prose text-sm text-[var(--color-muted)]">
           A standing arrangement, paid once per period. Sold online, the first period
           is paid through Stripe on the website; at the counter, the studio records
-          each period as it is paid. Nothing renews by itself.
+          each period as it is paid. Online plans can also offer auto-renew, where
+          Stripe charges the member every period until they stop.
         </p>
 
         <div className="mt-7 grid gap-5 sm:grid-cols-2">
@@ -504,6 +507,22 @@ export function MembershipEditor({
               <span className="block text-xs text-[var(--color-muted)]">
                 Shows on the website&rsquo;s Membership page, where a signed-in client
                 pays the first {period} through Stripe and is enrolled straight away.
+              </span>
+            </span>
+          </label>
+
+          <label className="flex items-start gap-3 text-sm sm:col-span-2">
+            <input
+              type="checkbox"
+              checked={form.auto_renew_offered}
+              onChange={(e) => set('auto_renew_offered', e.target.checked)}
+              className="mt-1 h-4 w-4 accent-[var(--color-accent)]"
+            />
+            <span>
+              Offer auto-renew online
+              <span className="block text-xs text-[var(--color-muted)]">
+                Members who choose it are charged by Stripe every period until they
+                stop. Pay once stays available.
               </span>
             </span>
           </label>

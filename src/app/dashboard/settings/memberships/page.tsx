@@ -29,11 +29,13 @@ export const dynamic = 'force-dynamic'
  * mirrors it. The RLS policy is what refuses the write; this decides whether
  * somebody is shown a screen full of controls that would refuse them.
  *
- * The page is deliberately blunt about what the studio has NOT got: nothing
- * here charges a card a second time. Every period is recorded by hand from the
- * client's record. A manager who does not know that will assume renewals are
- * happening, and a membership that silently fails to charge is worse than one
- * that plainly has to be asked for.
+ * The page is deliberately blunt about which memberships charge themselves and
+ * which do not. Since 083 a member who chose to renew is billed by Stripe every
+ * period and the webhook records it; everybody else (pay-once online, enrolled
+ * at the counter) is still recorded by hand from the client's record. A
+ * manager who does not know which is which will assume renewals are happening
+ * for everyone, and a membership that silently fails to charge is worse than
+ * one that plainly has to be asked for.
  */
 export default async function MembershipsSettingsPage() {
   const supabase = await createClient()
@@ -59,7 +61,7 @@ export default async function MembershipsSettingsPage() {
         // collapses the result type to SelectQueryError.
         .from('memberships')
         .select(
-          'id, name, slug, description, price_cents, period_months, service_discount_pct, included_sessions_per_period, stripe_price_id, sell_online, is_active, sort_order, created_at, updated_at'
+          'id, name, slug, description, price_cents, period_months, service_discount_pct, included_sessions_per_period, stripe_price_id, sell_online, auto_renew_offered, is_active, sort_order, created_at, updated_at'
         )
         .order('sort_order')
         .order('id'),
@@ -124,14 +126,19 @@ export default async function MembershipsSettingsPage() {
       <Panel className="mt-8 border-l-2 border-l-[var(--color-accent)] p-5">
         <p className="label-caps mb-2 flex items-center gap-2 text-[var(--color-accent)]">
           <CreditCard className="h-3.5 w-3.5" strokeWidth={2} />
-          Nothing here charges a card
+          Who is charged automatically
         </p>
         <p className="max-w-prose text-sm text-[var(--color-muted)]">
-          The studio is not billing these automatically. Each period is raised as a
-          charge on the member&rsquo;s record and marked paid when the money arrives —
-          at the counter, by transfer, however it happened. A membership whose period
-          has run out stops granting its benefit that day, on its own, whether or not
-          anybody noticed. That is the safe way round while renewals are manual.
+          Members who chose to renew are charged by Stripe each period and appear here
+          as paid automatically. If a card is declined, the membership is marked as a
+          failed payment, its benefit pauses, and you and the member are both told.
+        </p>
+        <p className="mt-3 max-w-prose text-sm text-[var(--color-muted)]">
+          Pay-once members and counter enrolments are still recorded by hand. Each of
+          their periods is raised as a charge on the member&rsquo;s record and marked
+          paid when the money arrives: at the counter, by transfer, however it happened.
+          A membership whose period has run out stops granting its benefit that day, on
+          its own, whether or not anybody noticed.
         </p>
       </Panel>
 
@@ -235,9 +242,10 @@ export default async function MembershipsSettingsPage() {
             total the client sees is the discounted one.
           </li>
           <li>
-            <span className="text-[var(--color-foreground)]">The period ends</span> &mdash;
-            and the benefit stops that day. Renewing raises the next charge on their
-            record; it does not take any money.
+            <span className="text-[var(--color-foreground)]">The period ends</span>.
+            A renewing member is charged by Stripe and carries straight on. Anyone else
+            stops getting the benefit that day; renewing them by hand raises the next
+            charge on their record, and does not take any money.
           </li>
         </ol>
 

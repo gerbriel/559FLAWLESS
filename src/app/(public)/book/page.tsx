@@ -4,8 +4,14 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { requestNow } from '@/lib/time'
 import { interestedServiceId } from '@/lib/interest'
+import { membershipIsCurrent } from '@/types/memberships'
 import { Container, Section } from '@/components/ui/section'
-import { BookingFlow, type BookableService, type BookableProvider } from '@/components/booking/BookingFlow'
+import {
+  BookingFlow,
+  type BookableService,
+  type BookableProvider,
+  type BookingMembership,
+} from '@/components/booking/BookingFlow'
 import {
   LocationBookingBar,
   LocationBookingStep,
@@ -21,11 +27,16 @@ export const metadata: Metadata = {
 }
 
 interface Props {
-  searchParams: Promise<{ service?: string; location?: string; add?: string }>
+  searchParams: Promise<{ service?: string; location?: string; add?: string; membership?: string }>
 }
 
 export default async function BookPage({ searchParams }: Props) {
-  const { service: serviceSlug, location: locationSlug, add } = await searchParams
+  const {
+    service: serviceSlug,
+    location: locationSlug,
+    add,
+    membership: membershipParam,
+  } = await searchParams
   // The pair-deal row on a service page pre-ticks its service alongside the
   // deep link — comma-separated, unknown slugs simply don't match anything.
   const addSlugs = (add ?? '').split(',').filter(Boolean)
@@ -185,6 +196,57 @@ export default async function BookPage({ searchParams }: Props) {
   const scopedServices = offeredHere ? services.filter((s) => offeredHere.has(s.id)) : services
   const scopedProviders = worksHere ? providers.filter((p) => worksHere.has(p.id)) : providers
 
+  // ── Booking a covered visit (?membership=1) ──────────────
+  // From the membership page or the welcome page after joining. Only a live
+  // membership (active, period not ended) with sessions left this period
+  // counts; anything else and the flow is exactly the ordinary one. This is
+  // presentation: whether a visit is actually covered is decided when the
+  // studio confirms it, by the redemption, not by this banner.
+  let membership: BookingMembership | undefined
+  if (membershipParam === '1' && user) {
+    const { data: held } = await supabase
+      .from('client_memberships')
+      .select(
+        'id, status, current_period_start, current_period_end, memberships!client_memberships_membership_id_fkey(name, included_sessions_per_period, membership_services(services(slug))), membership_redemptions(sessions, redeemed_for_period_start)'
+      )
+      .eq('client_id', user.id)
+      .eq('status', 'active')
+      .order('current_period_end', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (held && membershipIsCurrent(held, requestNow())) {
+      const plan = held.memberships as unknown as {
+        name: string
+        included_sessions_per_period: number
+        membership_services: { services: { slug: string } | null }[] | null
+      } | null
+      const used = ((held.membership_redemptions ?? []) as {
+        sessions: number
+        redeemed_for_period_start: string
+      }[])
+        .filter((r) => r.redeemed_for_period_start === held.current_period_start)
+        .reduce((n, r) => n + r.sessions, 0)
+      const total = plan?.included_sessions_per_period ?? 0
+      const left = Math.max(total - used, 0)
+      if (plan && left > 0) {
+        // Only what this studio's menu actually offers, so the pre-tick lands.
+        const bookable = new Set(scopedServices.map((s) => s.slug))
+        membership = {
+          planName: plan.name,
+          left,
+          total,
+          coveredServiceSlugs: (plan.membership_services ?? [])
+            .map((m) => m.services?.slug)
+            .filter((slug): slug is string => !!slug && bookable.has(slug)),
+        }
+      }
+    }
+  }
+  // A deep-linked service wins; otherwise the plan's first covered service is
+  // pre-ticked through the same initial-selection path. No scope rows (any
+  // treatment) means nothing is pre-ticked.
+  const initialSlug = serviceSlug ?? membership?.coveredServiceSlugs[0]
+
   const profile = profileRes?.data as
     | {
         role: string
@@ -206,6 +268,7 @@ export default async function BookPage({ searchParams }: Props) {
   if (locationSlug) bookingParams.set('location', locationSlug)
   if (serviceSlug) bookingParams.set('service', serviceSlug)
   if (addSlugs.length > 0) bookingParams.set('add', addSlugs.join(','))
+  if (membershipParam === '1') bookingParams.set('membership', '1')
   const bookingUrl = `/book${bookingParams.size ? `?${bookingParams}` : ''}`
 
   // Signed in but missing the details a booking needs. Same reasoning as the
@@ -237,7 +300,7 @@ export default async function BookPage({ searchParams }: Props) {
   // skipped; and every failure — policy not applied yet, no events, a service
   // not on this studio's menu — leaves the order exactly as it was.
   let orderedServices = scopedServices
-  if (!serviceSlug && user) {
+  if (!initialSlug && user) {
     const interestId = await interestedServiceId(supabase, user.id, requestNow())
     const interestCategoryId =
       interestId !== null
@@ -319,7 +382,8 @@ export default async function BookPage({ searchParams }: Props) {
               service_ids: p.service_ids ?? [],
             }))}
             isNewClient={isNewClient}
-            initialServiceSlug={serviceSlug}
+            initialServiceSlug={initialSlug}
+            membership={membership}
             initialAddSlugs={addSlugs}
             // Everything the profile already holds, so the details step can ask
             // for what is missing and nothing else — and write back whatever

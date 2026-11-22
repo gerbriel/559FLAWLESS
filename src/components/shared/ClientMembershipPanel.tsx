@@ -4,6 +4,7 @@ import { BadgeCheck } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
 import { ClientMembershipControls } from '@/components/shared/ClientMembershipControls'
+import { MemberRenewalToggle } from '@/components/shared/MemberRenewalToggle'
 import { formatMoney } from '@/lib/utils'
 import { formatDateInTimeZone } from '@/lib/time'
 import {
@@ -55,7 +56,7 @@ export async function ClientMembershipPanel({
       // and `'a' + 'b'` widens to `string`, collapsing the result type.
       .from('client_memberships')
       .select(
-        'id, client_id, membership_id, status, price_cents_snapshot, started_at, current_period_start, current_period_end, cancel_at_period_end, cancelled_at, ended_at, note, memberships!client_memberships_membership_id_fkey(id, name, slug, description, price_cents, period_months, service_discount_pct, included_sessions_per_period, is_active, sort_order)'
+        'id, client_id, membership_id, status, price_cents_snapshot, started_at, current_period_start, current_period_end, cancel_at_period_end, cancelled_at, ended_at, note, auto_renew, stripe_subscription_id, memberships!client_memberships_membership_id_fkey(id, name, slug, description, price_cents, period_months, service_discount_pct, included_sessions_per_period, is_active, sort_order)'
       )
       .eq('client_id', clientId)
       .order('started_at', { ascending: false })
@@ -86,6 +87,8 @@ export async function ClientMembershipPanel({
     | 'cancelled_at'
     | 'ended_at'
     | 'note'
+    | 'auto_renew'
+    | 'stripe_subscription_id'
   > & { memberships: unknown })[]
 
   // At most one is live — a partial unique index in 050 makes sure of it.
@@ -126,6 +129,15 @@ export async function ClientMembershipPanel({
   const plan = live ? (live.memberships as unknown as Membership | null) : null
   const sessionsSpent = (spent ?? []).reduce((n, r) => n + r.sessions, 0)
   const lapsed = held.find((h) => !membershipIsCurrent(h, now)) ?? null
+  // A card Stripe could not charge. Not current (the benefit is paused), but
+  // not over either: Stripe retries, and the member can fix the card.
+  const failing = live ? null : (held.find((h) => h.status === 'past_due') ?? null)
+  const failingPlan = failing ? (failing.memberships as unknown as Membership | null) : null
+  // Still 'active' but its period has passed and the sweep has not reached it.
+  // It holds the one-live index too, so it gets the controls, not the enrol form.
+  const stale =
+    live || failing ? null : (held.find((h) => h.status === 'active') ?? null)
+  const controlled = live ?? failing ?? stale
 
   return (
     <section className="border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
@@ -203,10 +215,32 @@ export async function ClientMembershipPanel({
           )}
 
           <p className="text-xs text-[var(--color-muted)]">
-            {live.cancel_at_period_end ? 'Ends' : 'Renews'}{' '}
-            {formatDateInTimeZone(new Date(live.current_period_end), timeZone)}. The
-            benefit stops that day whether or not anyone renews it.
+            {live.auto_renew && !live.cancel_at_period_end ? (
+              <>
+                Renews automatically on{' '}
+                {formatDateInTimeZone(new Date(live.current_period_end), timeZone)}. Stripe
+                charges the card on file.
+              </>
+            ) : live.cancel_at_period_end ? (
+              <>
+                Stops at period end, on{' '}
+                {formatDateInTimeZone(new Date(live.current_period_end), timeZone)}.
+              </>
+            ) : (
+              <>
+                Paid once. Ends{' '}
+                {formatDateInTimeZone(new Date(live.current_period_end), timeZone)}. The
+                benefit stops that day unless it is renewed.
+              </>
+            )}
           </p>
+
+          {canManage && live.stripe_subscription_id && (
+            <MemberRenewalToggle
+              clientMembershipId={live.id}
+              renewing={live.auto_renew && !live.cancel_at_period_end}
+            />
+          )}
 
           {chargeRows.length > 0 && (
             <ul className="space-y-1.5 border-t border-[var(--color-border)] pt-3 text-xs">
@@ -238,8 +272,23 @@ export async function ClientMembershipPanel({
         </div>
       ) : (
         <div className="space-y-2 text-sm text-[var(--color-muted)]">
-          <p>No membership.</p>
-          {lapsed && (
+          {failing ? (
+            <>
+              <p className="flex flex-wrap items-center gap-2.5 text-[var(--color-foreground)]">
+                <span>{failingPlan?.name ?? 'Membership'}</span>
+                <Badge tone="danger">{MEMBERSHIP_STATUS_LABELS.past_due}</Badge>
+              </p>
+              <p className="text-xs">
+                Stripe could not take the renewal. The benefit is paused until the card
+                is updated and the payment goes through.
+              </p>
+              {/* Stop, resume and end-now for this row come from the
+                  controls below, which are handed the past_due id. */}
+            </>
+          ) : (
+            <p>No membership.</p>
+          )}
+          {lapsed && !failing && (
             <p className="text-xs">
               Last one {MEMBERSHIP_STATUS_LABELS[lapsed.status].toLowerCase()}, period
               ended {formatDateInTimeZone(new Date(lapsed.current_period_end), timeZone)}.
@@ -252,10 +301,15 @@ export async function ClientMembershipPanel({
         <div className="mt-5 border-t border-[var(--color-border)] pt-5">
           <ClientMembershipControls
             clientId={clientId}
-            liveMembershipId={live?.id ?? null}
+            // A past_due row, or an active one whose period has run out, still
+            // holds 050's one-live index, so the enrol form would only meet a
+            // raw unique-violation error. The controls get that row instead.
+            liveMembershipId={controlled?.id ?? null}
             plans={(plans ?? []) as Membership[]}
             dueChargeIds={dueChargeIds}
-            cancelAtPeriodEnd={live?.cancel_at_period_end ?? false}
+            cancelAtPeriodEnd={controlled?.cancel_at_period_end ?? false}
+            stripeSubscriptionId={controlled?.stripe_subscription_id ?? null}
+            periodOver={!!stale}
           />
         </div>
       )}

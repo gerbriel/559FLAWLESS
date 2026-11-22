@@ -102,6 +102,7 @@ export default async function NewsletterPage({ searchParams }: Props) {
         root="/dashboard/clients"
         tabs={[
           { href: '/dashboard/clients', label: 'Clients' },
+          { href: '/dashboard/clients/members', label: 'Members' },
           { href: '/dashboard/clients/stubs', label: 'Not signed up' },
           { href: '/dashboard/clients/newsletter', label: 'Newsletter' },
         ]}

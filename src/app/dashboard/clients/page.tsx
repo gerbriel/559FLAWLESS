@@ -343,6 +343,11 @@ export default async function ClientsPage({ searchParams }: Props) {
         tabs={[
           { href: '/dashboard/clients', label: 'Clients' },
           {
+            href: '/dashboard/clients/members',
+            label: 'Members',
+            visible: booksForOthers,
+          },
+          {
             href: '/dashboard/clients/stubs',
             label: 'Not signed up',
             visible: booksForOthers,

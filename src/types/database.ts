@@ -63,6 +63,7 @@ import type {
   MembershipCharge,
   MembershipRedemption,
   ClientMembership,
+  MembershipBookingIntent,
 } from '@/types/memberships'
 
 export type Json =
@@ -2223,6 +2224,13 @@ export type Database = {
           ToProfile<'membership_charges', 'recorded_by'>,
         ]
       >
+      // ── Added in 084 ────────────────────────────────────────
+      // Whether a new member wants to book their first visit now or later.
+      // client_id is the primary key: one answer per person.
+      membership_booking_intents: TableDef<
+        MembershipBookingIntent,
+        [ToProfile<'membership_booking_intents', 'client_id'>]
+      >
     }
     // Read-only projections. Insert/Update are deliberately absent — a view
     // that accepted writes would bypass the RLS on the tables beneath it.
@@ -2861,6 +2869,52 @@ export type Database = {
       renew_membership: {
         Args: { p_client_membership: number }
         Returns: string
+      }
+
+      // ── Added in 083: the membership subscription webhook ───
+      // Service role only. Each is idempotent because Stripe retries.
+      /**
+       * invoice.paid. Adopts Stripe's period, clears past_due, records the
+       * period paid. Null when no membership carries this subscription yet
+       * (the invoice beat checkout.session.completed).
+       */
+      settle_membership_invoice: {
+        Args: {
+          p_subscription: string
+          p_invoice: string
+          p_period_start: string
+          p_period_end: string
+          p_amount_cents: number
+          p_payment_intent: string | null
+        }
+        Returns: number | null
+      }
+      /** invoice.payment_failed. past_due, a failed charge, one notice per invoice. */
+      fail_membership_invoice: {
+        Args: {
+          p_subscription: string
+          p_invoice: string
+          p_period_start: string | null
+          p_period_end: string | null
+          p_amount_cents: number
+        }
+        Returns: undefined
+      }
+      /** customer.subscription.updated. */
+      sync_membership_subscription: {
+        Args: {
+          p_subscription: string
+          p_cancel_at_period_end: boolean
+          p_period_start: string | null
+          p_period_end: string | null
+          p_status: string
+        }
+        Returns: undefined
+      }
+      /** customer.subscription.deleted. */
+      end_membership_subscription: {
+        Args: { p_subscription: string; p_ended_at: string | null }
+        Returns: undefined
       }
 
       // ── Added in 056 ────────────────────────────────────────

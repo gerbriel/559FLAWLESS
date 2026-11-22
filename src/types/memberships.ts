@@ -32,6 +32,8 @@ export type Membership = {
   stripe_price_id: string | null
   /** On the public /memberships page, paid through Stripe (078). */
   sell_online: boolean
+  /** Whether the public page offers the renewing option (a Stripe subscription) for this plan (083). */
+  auto_renew_offered: boolean
   is_active: boolean
   sort_order: number
   created_at: string
@@ -70,6 +72,12 @@ export type ClientMembership = {
   /** The authority on whether the benefit applies. Not the status column. */
   current_period_end: string
   cancel_at_period_end: boolean
+  /**
+   * True while a Stripe subscription is set to renew this (083). Always false
+   * for pay-once and counter enrolments. cancel_at_period_end is still the
+   * "asked to stop" flag.
+   */
+  auto_renew: boolean
   cancelled_at: string | null
   ended_at: string | null
   stripe_subscription_id: string | null
@@ -78,6 +86,16 @@ export type ClientMembership = {
   created_by: string | null
   created_at: string
   updated_at: string
+}
+
+/**
+ * Whether a new member wants to book their first visit now or later, asked
+ * once after joining (084). One row per client.
+ */
+export type MembershipBookingIntent = {
+  client_id: string
+  intent: 'now' | 'later'
+  decided_at: string
 }
 
 /** One included session, actually spent, inside a named period. */
@@ -115,6 +133,28 @@ export const MEMBERSHIP_STATUS_LABELS: Record<MembershipStatus, string> = {
   past_due: 'Payment failed',
   cancelled: 'Cancelled',
   expired: 'Lapsed',
+}
+
+/**
+ * The sentence for an error code from /api/stripe/membership and its manage
+ * route. The codes are for code; a person should never be shown one. Anything
+ * unknown gets the caller's fallback.
+ */
+const MEMBERSHIP_ERROR_MESSAGES: Record<string, string> = {
+  not_a_subscription: 'This membership does not renew through Stripe, so there is nothing to change there.',
+  membership_ended: 'This membership has already ended.',
+  subscription_ended: 'That subscription has already ended in Stripe.',
+  unauthenticated: 'Please sign in and try again.',
+  stripe_failed: 'Stripe did not accept that. Please try again in a moment.',
+  stripe_not_configured: 'Online payments are not set up yet. Please ask the studio.',
+  already_member: 'You already have a membership running.',
+  not_for_sale: 'That membership is not available online.',
+  suspended: 'This account is suspended. Please contact the studio.',
+  not_found: 'We could not find that membership.',
+}
+
+export function membershipErrorMessage(code: unknown, fallback: string): string {
+  return (typeof code === 'string' && MEMBERSHIP_ERROR_MESSAGES[code]) || fallback
 }
 
 export const MEMBERSHIP_CHARGE_STATUS_LABELS: Record<MembershipChargeStatus, string> = {
