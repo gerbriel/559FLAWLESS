@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Minus, Plus, X, Loader2 } from 'lucide-react'
+import { Minus, Plus, X, Loader2, Tag } from 'lucide-react'
 import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
 import { SignedInAs, useSignedInContact, backfillProfile } from '@/components/shared/SignedInIdentity'
@@ -10,6 +10,7 @@ import { useCart } from '@/store/cart'
 import { Button } from '@/components/ui/button'
 import { Field, Input, Select } from '@/components/ui/field'
 import { formatMoney } from '@/lib/utils'
+import { normalizeCouponCode } from '@/lib/checkout-url'
 import { trackCartEvent } from './ClientAnalytics'
 import { trackMetaEvent } from './MetaPixelEvent'
 
@@ -25,7 +26,10 @@ interface CartProduct {
 }
 
 export function CartView() {
-  const { lines, setQty, remove } = useCart()
+  const { lines, setQty, remove, coupon, setCoupon } = useCart()
+  // The field's draft, separate from the applied code so typing does not
+  // send half a word to the server on every keystroke.
+  const [couponDraft, setCouponDraft] = useState('')
   // Resolved in the browser: /cart is statically rendered, and a server-side
   // session read would make the whole subtree dynamic for the sake of three
   // prefilled fields.
@@ -157,6 +161,7 @@ export function CartView() {
           email: contact.email,
           name: contact.name,
           phone: contact.phone || null,
+          coupon: coupon ?? null,
         }),
       })
 
@@ -166,9 +171,15 @@ export function CartView() {
         toast.error(
           data.error === 'insufficient_stock'
             ? `We are short on ${data.product}. Please reduce the quantity.`
-            : data.error === 'stripe_not_configured'
-              ? 'Online payment is not set up yet. Please call to order.'
-              : 'Checkout failed. Please try again.'
+            : data.error === 'invalid_coupon'
+              ? `Code ${data.code} is not valid or has expired. Remove it to continue.`
+              : data.error === 'coupon_minimum'
+                ? `Code ${data.code} needs a bag of at least ${formatMoney(data.minimum_cents)}.`
+                : data.error === 'rate_limited'
+                  ? 'Too many attempts. Please wait a few minutes and try again.'
+                  : data.error === 'stripe_not_configured'
+                    ? 'Online payment is not set up yet. Please call to order.'
+                    : 'Checkout failed. Please try again.'
         )
         return
       }
@@ -358,11 +369,75 @@ export function CartView() {
 
           {form.fulfillment === 'pickup' ? (
             <>
+              {/* The code is only named here; Stripe says what it is worth
+                  when the order is placed, and the receipt shows it. A code
+                  from a Meta Shops link arrives already filled in. */}
+              <div className="mt-6 border-t border-[var(--color-border)] pt-6">
+                {coupon ? (
+                  <div className="flex items-center justify-between gap-3 text-sm">
+                    <span className="inline-flex items-center gap-2">
+                      <Tag className="h-3.5 w-3.5 text-[var(--color-accent)]" strokeWidth={1.5} />
+                      <span>
+                        Code <span className="font-medium tracking-wide">{coupon}</span>
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setCoupon(null)}
+                      className="label-caps text-[var(--color-muted)] hover:text-[var(--color-foreground)]"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <Field label="Promo code" htmlFor="cart_coupon" hint="Checked at checkout. The best single discount applies.">
+                    <div className="flex gap-2">
+                      <Input
+                        id="cart_coupon"
+                        maxLength={40}
+                        autoCapitalize="characters"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        value={couponDraft}
+                        onChange={(e) => setCouponDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key !== 'Enter') return
+                          e.preventDefault()
+                          const code = normalizeCouponCode(couponDraft)
+                          if (code) setCoupon(code)
+                          else if (couponDraft.trim()) toast.error('That does not look like a code.')
+                          setCouponDraft('')
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        variant="subtle"
+                        disabled={!couponDraft.trim()}
+                        onClick={() => {
+                          const code = normalizeCouponCode(couponDraft)
+                          if (code) setCoupon(code)
+                          else toast.error('That does not look like a code.')
+                          setCouponDraft('')
+                        }}
+                      >
+                        Apply
+                      </Button>
+                    </div>
+                  </Field>
+                )}
+              </div>
+
               <dl className="mt-6 space-y-2 border-t border-[var(--color-border)] pt-6 text-sm">
                 <div className="flex justify-between">
                   <dt className="text-[var(--color-muted)]">Subtotal</dt>
                   <dd className="tabular-nums">{formatMoney(subtotal)}</dd>
                 </div>
+                {coupon && (
+                  <div className="flex justify-between text-[var(--color-muted)]">
+                    <dt>Code {coupon}</dt>
+                    <dd>Checked at checkout</dd>
+                  </div>
+                )}
                 <div className="flex justify-between text-[var(--color-muted)]">
                   <dt>Tax and shipping</dt>
                   <dd>Calculated at checkout</dd>

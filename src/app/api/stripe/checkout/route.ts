@@ -4,6 +4,8 @@ import { getStripe, stripeConfigured, siteUrl } from '@/lib/stripe'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { multibuyDiscountCents, multibuyPromo, type PromotionRule } from '@/lib/promotions'
+import { couponDiscountFor, lookupCoupon, type RedeemableCoupon } from '@/lib/stripe-coupon'
+import { checkRateLimit, rateLimitedResponse } from '@/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
 
@@ -26,6 +28,10 @@ const Body = z.object({
   email: z.string().email().max(254),
   name: z.string().trim().min(1).max(120),
   phone: z.string().trim().max(40).nullish(),
+  // A promo code, typed in the bag or carried in on a marketplace checkout
+  // URL (Meta Shops). Looked up in Stripe below; the client never says what
+  // it is worth, only which one.
+  coupon: z.string().trim().max(40).nullish(),
 })
 
 /**
@@ -40,12 +46,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'stripe_not_configured' }, { status: 503 })
   }
 
+  // A stranger's route that now answers "is this code real": the budget is
+  // what stops guessing from being free. Fails open like every limiter here.
+  const { allowed } = await checkRateLimit(request, 'checkout')
+  if (!allowed) return rateLimitedResponse('checkout')
+
   const parsed = Body.safeParse(await request.json().catch(() => null))
   if (!parsed.success) {
     return NextResponse.json({ error: 'invalid_request' }, { status: 400 })
   }
 
-  const { lines, fulfillment, email, name, phone } = parsed.data
+  const { lines, fulfillment, email, name, phone, coupon: couponCode } = parsed.data
   const admin = createAdminClient()
 
   const productIds = lines.map((l) => l.productId)
@@ -81,6 +92,11 @@ export async function POST(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
+  const subtotal = lines.reduce(
+    (sum, line) => sum + byId.get(line.productId)!.price_cents * line.qty,
+    0
+  )
+
   // The multibuy deal (068), same arithmetic as the till: whole basket,
   // cheapest units first. The order carries it so the totals trigger agrees,
   // and Stripe gets it as a one-off coupon so the charge agrees too.
@@ -92,12 +108,39 @@ export async function POST(request: NextRequest) {
     .eq('is_active', true)
     .eq('kind', 'product_multibuy')
   const multibuy = multibuyPromo((promoRows ?? []) as PromotionRule[], Date.now())
-  const discount = multibuy
+  const multibuyCents = multibuy
     ? multibuyDiscountCents(
         multibuy,
         lines.flatMap((l) => Array<number>(l.qty).fill(byId.get(l.productId)!.price_cents))
       )
     : 0
+
+  // The promo code, checked before any order row exists so a bad code leaves
+  // nothing behind. Refused loudly rather than silently charged full price:
+  // a shopper who typed a code wants to know it did not take.
+  let coupon: RedeemableCoupon | null = null
+  let couponCents = 0
+  if (couponCode) {
+    const found = await lookupCoupon(getStripe(), couponCode)
+    if (!found.ok) {
+      return NextResponse.json({ error: found.reason, code: couponCode }, { status: 409 })
+    }
+    const cut = couponDiscountFor(found.coupon, subtotal)
+    if (!cut.ok) {
+      return NextResponse.json(
+        { error: cut.reason, code: found.coupon.code, minimum_cents: found.coupon.minimum_amount_cents },
+        { status: 409 }
+      )
+    }
+    coupon = found.coupon
+    couponCents = cut.cents
+  }
+
+  // Discounts never stack (068): the best single cut wins. Stripe allows one
+  // discount per Checkout Session anyway, so this is also the only honest
+  // reading of a code plus a running deal.
+  const couponWins = coupon !== null && couponCents > 0 && couponCents >= multibuyCents
+  const discount = couponWins ? couponCents : multibuyCents
 
   const { data: order, error: orderError } = await admin
     .from('orders')
@@ -109,6 +152,9 @@ export async function POST(request: NextRequest) {
       status: 'pending_payment',
       fulfillment,
       discount_cents: discount,
+      // Recorded whether or not it won: the shopper used it, and the
+      // marketplace promotion it came from wants to be counted.
+      promo_code: coupon?.code ?? null,
     })
     .select('id')
     .single()
@@ -140,18 +186,25 @@ export async function POST(request: NextRequest) {
 
   const stripe = getStripe()
 
-  // The discount reaches Stripe as a single-use coupon: line items stay at
-  // list price (the receipt shows the deal rather than quietly cheaper
-  // bottles), and the webhook's recorded payment matches the order total.
-  let discounts: { coupon: string }[] | undefined
-  if (multibuy && discount > 0) {
-    const coupon = await stripe.coupons.create({
+  // A winning promo code reaches Stripe as the promotion code itself, so
+  // Stripe enforces its own rules (redemption cap, expiry, minimum) and its
+  // redemption counter ticks. couponCutCents is only our estimate for picking
+  // the best single cut; after the session exists, Stripe's figure replaces
+  // it on the order. The multibuy deal is ours, not Stripe's, so it still
+  // goes as a single-use coupon: line items stay at list price (the receipt
+  // shows the deal rather than quietly cheaper bottles), and the webhook's
+  // recorded payment matches the order total.
+  let discounts: ({ coupon: string } | { promotion_code: string })[] | undefined
+  if (couponWins) {
+    discounts = [{ promotion_code: coupon!.promotionCodeId }]
+  } else if (discount > 0) {
+    const stripeCoupon = await stripe.coupons.create({
       amount_off: discount,
       currency: 'usd',
       duration: 'once',
-      name: multibuy.name.slice(0, 40),
+      name: multibuy!.name.slice(0, 40),
     })
-    discounts = [{ coupon: coupon.id }]
+    discounts = [{ coupon: stripeCoupon.id }]
   }
 
   const session = await stripe.checkout.sessions.create({
@@ -175,25 +228,35 @@ export async function POST(request: NextRequest) {
     // would leak every order's value to anyone counting upward. This is
     // marketing telemetry only — the webhook remains the record of payment,
     // and a client editing their own URL edits nothing but their own ad
-    // attribution.
+    // attribution. It is fixed before Stripe has priced the session, so for
+    // a promotion code it carries our estimate (couponCutCents), which can be
+    // a cent off Stripe's rounding; the order row carries Stripe's figure.
     success_url: `${siteUrl()}/shop/confirmation?order=${order.id}&amount=${Math.max(
-      lines.reduce((sum, line) => sum + byId.get(line.productId)!.price_cents * line.qty, 0) -
-        discount,
+      subtotal - discount,
       0
     )}`,
     cancel_url: `${siteUrl()}/cart?cancelled=1`,
     metadata: { kind: 'product_order', order_id: String(order.id) },
   })
 
+  // What Stripe will actually take off, to the cent. For a promotion code
+  // that is Stripe's own rounding of the percent, which the order must match
+  // or the totals trigger and the charge disagree.
+  const stripeDiscount = session.total_details?.amount_discount
+  const chargedDiscount = typeof stripeDiscount === 'number' ? stripeDiscount : discount
+
   await admin
     .from('orders')
-    .update({ stripe_session_id: session.id })
+    .update({
+      stripe_session_id: session.id,
+      ...(chargedDiscount !== discount ? { discount_cents: chargedDiscount } : {}),
+    })
     .eq('id', order.id)
 
   // The deal's paper trail. Written now rather than in the webhook — an
   // abandoned checkout leaves an unpaid order AND its redemption row behind,
   // and both read as what they are: an order that never happened.
-  if (multibuy && discount > 0) {
+  if (multibuy && !couponWins && discount > 0) {
     await admin.from('promotion_redemptions').insert({
       promotion_id: multibuy.id,
       promotion_name: multibuy.name,

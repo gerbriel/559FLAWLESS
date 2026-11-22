@@ -30,12 +30,16 @@ import { createAdminClient } from '@/lib/supabase/admin'
  *                 being free.
  *   availability  read-only but priced per call — it fans out per provider.
  *                 Generous: a person browsing dates taps it constantly.
+ *   checkout      answers "is this promo code real", so guessing must cost
+ *                 something. A person retrying a declined card or a typo'd
+ *                 code is nowhere near this.
  */
 export const RATE_BUDGETS = {
   book: { limit: 10, windowSeconds: 600 },
   newsletter: { limit: 5, windowSeconds: 3600 },
   inviteAccept: { limit: 10, windowSeconds: 3600 },
   availability: { limit: 120, windowSeconds: 60 },
+  checkout: { limit: 20, windowSeconds: 600 },
 } as const
 
 /**

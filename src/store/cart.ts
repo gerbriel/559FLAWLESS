@@ -10,9 +10,16 @@ export interface CartLine {
 
 interface CartState {
   lines: CartLine[]
+  /**
+   * A promo code waiting to be checked. Typed in the bag or carried in on a
+   * marketplace checkout URL; validated by the checkout route against Stripe,
+   * never here. The bag shows it, the server decides what it is worth.
+   */
+  coupon: string | null
   add: (productId: number, qty?: number) => void
   setQty: (productId: number, qty: number) => void
   remove: (productId: number) => void
+  setCoupon: (code: string | null) => void
   clear: () => void
   count: () => number
 }
@@ -26,6 +33,7 @@ export const useCart = create<CartState>()(
   persist(
     (set, get) => ({
       lines: [],
+      coupon: null,
 
       add: (productId, qty = 1) =>
         set((state) => {
@@ -40,20 +48,23 @@ export const useCart = create<CartState>()(
           return { lines: [...state.lines, { productId, qty: Math.min(qty, 99) }] }
         }),
 
+      // Sets the line to exactly `qty`, adding it if absent. Idempotent, which
+      // is what a checkout URL needs: landing on it twice is one bag, not two.
       setQty: (productId, qty) =>
-        set((state) => ({
-          lines:
-            qty <= 0
-              ? state.lines.filter((l) => l.productId !== productId)
-              : state.lines.map((l) =>
-                  l.productId === productId ? { ...l, qty: Math.min(qty, 99) } : l
-                ),
-        })),
+        set((state) => {
+          if (qty <= 0) return { lines: state.lines.filter((l) => l.productId !== productId) }
+          const bounded = Math.min(qty, 99)
+          return state.lines.some((l) => l.productId === productId)
+            ? { lines: state.lines.map((l) => (l.productId === productId ? { ...l, qty: bounded } : l)) }
+            : { lines: [...state.lines, { productId, qty: bounded }] }
+        }),
 
       remove: (productId) =>
         set((state) => ({ lines: state.lines.filter((l) => l.productId !== productId) })),
 
-      clear: () => set({ lines: [] }),
+      setCoupon: (code) => set({ coupon: code ? code.trim().toUpperCase() || null : null }),
+
+      clear: () => set({ lines: [], coupon: null }),
 
       count: () => get().lines.reduce((n, l) => n + l.qty, 0),
     }),
