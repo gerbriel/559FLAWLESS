@@ -5,6 +5,8 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { multibuyDiscountCents, multibuyPromo, type PromotionRule } from '@/lib/promotions'
 import { isFrontDesk, isManager, type UserRole } from '@/types/database'
+import { currentMembershipPerks } from '@/lib/memberships'
+import { bestProductPerk, type PerkUnit } from '@/lib/member-product-perks'
 
 export const dynamic = 'force-dynamic'
 
@@ -209,7 +211,7 @@ export async function POST(request: NextRequest) {
       ? { data: [], error: null }
       : await admin
           .from('products')
-          .select('id, name, sku, price_cents, stock_qty, is_active, is_retail, external_url')
+          .select('id, name, sku, price_cents, category_id, stock_qty, is_active, is_retail, external_url')
           .in('id', [...wanted.keys()])
 
   if (productError || !products) {
@@ -221,6 +223,7 @@ export async function POST(request: NextRequest) {
 
   const lines: {
     product_id: number
+    category_id: number | null
     name_snapshot: string
     sku_snapshot: string | null
     unit_price_cents: number
@@ -270,6 +273,7 @@ export async function POST(request: NextRequest) {
 
     lines.push({
       product_id: p.id,
+      category_id: p.category_id,
       name_snapshot: p.name,
       sku_snapshot: p.sku,
       unit_price_cents: p.price_cents,
@@ -291,14 +295,37 @@ export async function POST(request: NextRequest) {
     .eq('is_active', true)
     .eq('kind', 'product_multibuy')
   const multibuy = multibuyPromo((promoRows ?? []) as PromotionRule[], Date.now())
-  const promoDiscount = multibuy
+  const multibuyCents = multibuy
     ? multibuyDiscountCents(
         multibuy,
         lines.flatMap((l) => Array<number>(l.qty).fill(l.unit_price_cents))
       )
     : 0
 
-  // The manager's hand-typed discount rides on top of the running deal but is
+  // A named client's membership perks (086), each priced over the whole
+  // basket, the single best one kept. It competes with the multibuy deal and
+  // the better single cut wins (no stacking). A tie goes to the membership:
+  // it is the client's own entitlement, and the receipt should say so.
+  const memberPerks = clientId && lines.length > 0 ? await currentMembershipPerks(clientId) : null
+  const units: PerkUnit[] = lines.flatMap((l) =>
+    Array.from({ length: l.qty }, () => ({
+      productId: l.product_id,
+      categoryId: l.category_id,
+      priceCents: l.unit_price_cents,
+    }))
+  )
+  const memberBest = memberPerks ? bestProductPerk(memberPerks.perks, units) : null
+  const memberCents = memberBest?.off ?? 0
+
+  const source: 'membership' | 'multibuy' | null =
+    memberCents > 0 && memberCents >= multibuyCents
+      ? 'membership'
+      : multibuy && multibuyCents > 0
+        ? 'multibuy'
+        : null
+  const promoDiscount = source === 'membership' ? memberCents : source === 'multibuy' ? multibuyCents : 0
+
+  // The manager's hand-typed discount rides on top of the winning deal but is
   // verified HERE — a front-desk request simply loses the field, and the sum
   // can never exceed the products being sold. A custom amount is already the
   // desk's own figure; discounting it as well would be the same thing twice.
@@ -340,6 +367,12 @@ export async function POST(request: NextRequest) {
       staff_notes: notes ?? null,
       tax_cents: tax,
       discount_cents: discount,
+      // Which deal supplied the deal part of discount_cents. The manual
+      // discount is not a source; it rides on top.
+      discount_source: source,
+      client_membership_id: source === 'membership' ? memberPerks!.clientMembershipId : null,
+      // The deal's own cut, kept apart from the manual amount on top.
+      deal_discount_cents: promoDiscount,
     })
     .select('id')
     .single()
@@ -353,7 +386,15 @@ export async function POST(request: NextRequest) {
   }
 
   const { error: itemsError } = await admin.from('order_items').insert([
-    ...lines.map((l) => ({ ...l, order_id: order.id })),
+    // category_id rode along only for the perk arithmetic; order_items has none.
+    ...lines.map((l) => ({
+      order_id: order.id,
+      product_id: l.product_id,
+      name_snapshot: l.name_snapshot,
+      sku_snapshot: l.sku_snapshot,
+      unit_price_cents: l.unit_price_cents,
+      qty: l.qty,
+    })),
     ...(custom && customCents > 0
       ? [
           {
@@ -420,9 +461,10 @@ export async function POST(request: NextRequest) {
     void logError('pos/sale', paymentError.message, { step: 'record_payment', order_id: paid.id })
   }
 
-  // The deal's paper trail — who it was and how much came off. Best effort:
-  // the sale stands either way.
-  if (multibuy && promoDiscount > 0) {
+  // The deal's paper trail — who it was and how much came off. A multibuy win
+  // only: a membership win is recorded on the order itself. Best effort: the
+  // sale stands either way.
+  if (multibuy && source === 'multibuy' && promoDiscount > 0) {
     const { error: redemptionError } = await admin.from('promotion_redemptions').insert({
       promotion_id: multibuy.id,
       promotion_name: multibuy.name,
@@ -444,6 +486,9 @@ export async function POST(request: NextRequest) {
       ok: true,
       order: paid,
       discount_cents: discount,
+      // What a membership perk took off, the way service-sale reports it.
+      membership_cents: source === 'membership' ? promoDiscount : 0,
+      membership_name: source === 'membership' ? memberPerks!.planName : null,
       applied,
       applied_cents: appliedCents,
       total_cents: paid.total_cents + appliedCents,

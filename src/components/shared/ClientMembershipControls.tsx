@@ -257,8 +257,12 @@ export function ClientMembershipControls({
 
         {chosen && (
           <p className="text-xs text-[var(--color-muted)]">
-            {describeMembershipBenefit(chosen)}. The first period starts today and shows
-            as due until the money is recorded.
+            {[
+              describeMembershipBenefit(chosen),
+              'The first period starts today and shows as due until the money is recorded.',
+            ]
+              .filter(Boolean)
+              .join('. ')}
           </p>
         )}
 

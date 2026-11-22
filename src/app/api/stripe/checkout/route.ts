@@ -6,6 +6,8 @@ import { createClient } from '@/lib/supabase/server'
 import { multibuyDiscountCents, multibuyPromo, type PromotionRule } from '@/lib/promotions'
 import { couponDiscountFor, lookupCoupon, type RedeemableCoupon } from '@/lib/stripe-coupon'
 import { checkRateLimit, rateLimitedResponse } from '@/lib/rate-limit'
+import { currentMembershipPerks } from '@/lib/memberships'
+import { bestProductPerk, type PerkUnit } from '@/lib/member-product-perks'
 
 export const dynamic = 'force-dynamic'
 
@@ -61,7 +63,7 @@ export async function POST(request: NextRequest) {
   const productIds = lines.map((l) => l.productId)
   const { data: products } = await admin
     .from('products')
-    .select('id, name, sku, price_cents, stock_qty, is_active, is_retail, archived_at')
+    .select('id, name, sku, price_cents, category_id, stock_qty, is_active, is_retail, archived_at')
     .in('id', productIds)
 
   const available = (products ?? []).filter(
@@ -114,6 +116,21 @@ export async function POST(request: NextRequest) {
       )
     : 0
 
+  // The signed-in shopper's membership perks (086): each perk priced over the
+  // whole basket, the single best one kept. A guest has no membership to ask
+  // about, so this is null for them without a query.
+  const units: PerkUnit[] = lines.flatMap((l) => {
+    const p = byId.get(l.productId)!
+    return Array.from({ length: l.qty }, () => ({
+      productId: p.id,
+      categoryId: p.category_id,
+      priceCents: p.price_cents,
+    }))
+  })
+  const memberPerks = await currentMembershipPerks(user?.id ?? null)
+  const memberBest = memberPerks ? bestProductPerk(memberPerks.perks, units) : null
+  const memberCents = memberBest?.off ?? 0
+
   // The promo code, checked before any order row exists so a bad code leaves
   // nothing behind. Refused loudly rather than silently charged full price:
   // a shopper who typed a code wants to know it did not take.
@@ -135,11 +152,27 @@ export async function POST(request: NextRequest) {
     couponCents = cut.cents
   }
 
-  // Discounts never stack (068): the best single cut wins. Stripe allows one
+  // Discounts never stack (068): the best single cut wins among the promo
+  // code, the membership's best perk and the multibuy deal. Stripe allows one
   // discount per Checkout Session anyway, so this is also the only honest
-  // reading of a code plus a running deal.
-  const couponWins = coupon !== null && couponCents > 0 && couponCents >= multibuyCents
-  const discount = couponWins ? couponCents : multibuyCents
+  // reading of a code plus a running deal. Ties go coupon, then membership,
+  // then multibuy: a code the shopper typed should not silently lose a tie,
+  // and a member's own entitlement outranks a deal anyone gets.
+  let source: 'coupon' | 'membership' | 'multibuy' | null = null
+  let discount = 0
+  if (coupon !== null && couponCents > 0) {
+    source = 'coupon'
+    discount = couponCents
+  }
+  if (memberCents > discount) {
+    source = 'membership'
+    discount = memberCents
+  }
+  if (multibuy && multibuyCents > discount) {
+    source = 'multibuy'
+    discount = multibuyCents
+  }
+  const couponWins = source === 'coupon'
 
   const { data: order, error: orderError } = await admin
     .from('orders')
@@ -151,6 +184,10 @@ export async function POST(request: NextRequest) {
       status: 'pending_payment',
       fulfillment,
       discount_cents: discount,
+      discount_source: source,
+      client_membership_id: source === 'membership' ? memberPerks!.clientMembershipId : null,
+      // Online there is no manual discount, so the whole cut is the deal's.
+      deal_discount_cents: discount,
       // Recorded whether or not it won: the shopper used it, and the
       // studio wants to know which codes get typed.
       promo_code: coupon?.code ?? null,
@@ -187,21 +224,23 @@ export async function POST(request: NextRequest) {
 
   // A winning promo code reaches Stripe as the promotion code itself, so
   // Stripe enforces its own rules (redemption cap, expiry, minimum) and its
-  // redemption counter ticks. couponCutCents is only our estimate for picking
+  // redemption counter ticks. couponCents is only our estimate for picking
   // the best single cut; after the session exists, Stripe's figure replaces
-  // it on the order. The multibuy deal is ours, not Stripe's, so it still
-  // goes as a single-use coupon: line items stay at list price (the receipt
-  // shows the deal rather than quietly cheaper bottles), and the webhook's
-  // recorded payment matches the order total.
+  // it on the order. The multibuy deal and a membership perk are ours, not
+  // Stripe's, so either goes as a single-use coupon named for the deal or the
+  // plan: line items stay at list price (the receipt shows the deal rather
+  // than quietly cheaper bottles), and the webhook's recorded payment matches
+  // the order total.
   let discounts: ({ coupon: string } | { promotion_code: string })[] | undefined
   if (couponWins) {
     discounts = [{ promotion_code: coupon!.promotionCodeId }]
   } else if (discount > 0) {
+    const dealName = source === 'membership' ? memberPerks!.planName : multibuy!.name
     const stripeCoupon = await stripe.coupons.create({
       amount_off: discount,
       currency: 'usd',
       duration: 'once',
-      name: multibuy!.name.slice(0, 40),
+      name: dealName.slice(0, 40),
     })
     discounts = [{ coupon: stripeCoupon.id }]
   }
@@ -228,7 +267,7 @@ export async function POST(request: NextRequest) {
     // marketing telemetry only — the webhook remains the record of payment,
     // and a client editing their own URL edits nothing but their own ad
     // attribution. It is fixed before Stripe has priced the session, so for
-    // a promotion code it carries our estimate (couponCutCents), which can be
+    // a promotion code it carries our estimate (couponCents), which can be
     // a cent off Stripe's rounding; the order row carries Stripe's figure.
     success_url: `${siteUrl()}/shop/confirmation?order=${order.id}&amount=${Math.max(
       subtotal - discount,
@@ -248,14 +287,25 @@ export async function POST(request: NextRequest) {
     .from('orders')
     .update({
       stripe_session_id: session.id,
-      ...(chargedDiscount !== discount ? { discount_cents: chargedDiscount } : {}),
+      ...(chargedDiscount !== discount
+        ? {
+            discount_cents: chargedDiscount,
+            // Online the whole cut is the deal's, so the deal figure follows
+            // Stripe's to the cent. In practice only a promo code is ever
+            // repriced (a percent rounded by Stripe); an amount_off coupon
+            // for the multibuy or a member perk charges exactly `discount`.
+            ...(source !== null ? { deal_discount_cents: chargedDiscount } : {}),
+          }
+        : {}),
     })
     .eq('id', order.id)
 
-  // The deal's paper trail. Written now rather than in the webhook — an
-  // abandoned checkout leaves an unpaid order AND its redemption row behind,
-  // and both read as what they are: an order that never happened.
-  if (multibuy && !couponWins && discount > 0) {
+  // The deal's paper trail, for a multibuy win only: a membership win is
+  // recorded on the order itself (discount_source, client_membership_id), and
+  // a promo code is counted by Stripe. Written now rather than in the webhook,
+  // because an abandoned checkout leaves an unpaid order AND its redemption
+  // row behind, and both read as what they are: an order that never happened.
+  if (multibuy && source === 'multibuy' && discount > 0) {
     await admin.from('promotion_redemptions').insert({
       promotion_id: multibuy.id,
       promotion_name: multibuy.name,

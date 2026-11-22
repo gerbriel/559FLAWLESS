@@ -11,8 +11,10 @@ import { Field, Input, Select, Textarea } from '@/components/ui/field'
 import { formatMoney, slugify } from '@/lib/utils'
 import {
   describeMembershipBenefit,
+  describeProductPerk,
   membershipPeriodLabel,
   type Membership,
+  type MembershipProductPerk,
 } from '@/types/memberships'
 
 export interface MembershipServiceOption {
@@ -29,6 +31,44 @@ function toCents(dollars: string): number | null {
 }
 
 const money = (cents: number) => (cents / 100).toFixed(2)
+
+export interface MembershipNamedOption {
+  id: number
+  name: string
+}
+
+/**
+ * One product perk row as typed. `scope` is the select's value: 'all', or
+ * 'c:<category id>', or 'p:<product id>'. Numbers stay strings until save so
+ * a half-typed field is not coerced to 0 under somebody's cursor.
+ */
+type PerkDraft = {
+  key: string
+  scope: string
+  kind: MembershipProductPerk['kind']
+  percent: string
+  buyQty: string
+  label: string
+}
+
+function perkScope(p: Pick<MembershipProductPerk, 'product_id' | 'category_id'>): string {
+  if (p.product_id !== null) return `p:${p.product_id}`
+  if (p.category_id !== null) return `c:${p.category_id}`
+  return 'all'
+}
+
+function scopeIds(scope: string): { product_id: number | null; category_id: number | null } {
+  if (scope.startsWith('p:')) return { product_id: Number(scope.slice(2)), category_id: null }
+  if (scope.startsWith('c:')) return { product_id: null, category_id: Number(scope.slice(2)) }
+  return { product_id: null, category_id: null }
+}
+
+/** A whole number inside [min, max], or null. */
+function wholeIn(text: string, min: number, max: number): number | null {
+  const n = Number(text.trim())
+  if (!text.trim() || !Number.isInteger(n) || n < min || n > max) return null
+  return n
+}
 
 type Draft = Omit<Membership, 'id' | 'created_at' | 'updated_at' | 'stripe_price_id'>
 
@@ -72,7 +112,10 @@ export function MembershipEditor({
   plan,
   scopeServiceIds = [],
   memberPrices = [],
+  productPerks = [],
   services,
+  products,
+  categories,
   trigger = 'button',
 }: {
   plan?: Membership
@@ -80,7 +123,13 @@ export function MembershipEditor({
   scopeServiceIds?: number[]
   /** Services a member pays a set price for (078), e.g. the Brazilian at $25. */
   memberPrices?: { service_id: number; price_cents: number }[]
+  /** Retail perks this plan already grants (086), loaded like the member prices. */
+  productPerks?: MembershipProductPerk[]
   services: MembershipServiceOption[]
+  /** Active retail products, for scoping a product perk to one of them. */
+  products: MembershipNamedOption[]
+  /** Product categories, for scoping a product perk to a whole shelf. */
+  categories: MembershipNamedOption[]
   trigger?: 'button' | 'link'
 }) {
   const router = useRouter()
@@ -94,6 +143,51 @@ export function MembershipEditor({
   const [prices, setPrices] = useState<{ serviceId: number; price: string }[]>(
     memberPrices.map((p) => ({ serviceId: p.service_id, price: money(p.price_cents) }))
   )
+  const [perks, setPerks] = useState<PerkDraft[]>(() =>
+    [...productPerks]
+      .sort((a, b) => a.sort_order - b.sort_order || a.id - b.id)
+      .map((p) => ({
+        key: `saved-${p.id}`,
+        scope: perkScope(p),
+        kind: p.kind,
+        percent: String(p.percent_off),
+        buyQty: p.buy_qty === null ? '' : String(p.buy_qty),
+        label: p.label ?? '',
+      }))
+  )
+
+  function setPerk(i: number, patch: Partial<PerkDraft>) {
+    setPerks((cur) => cur.map((x, j) => (j === i ? { ...x, ...patch } : x)))
+  }
+
+  function addPerk() {
+    setPerks((cur) => [
+      ...cur,
+      {
+        key: `new-${crypto.randomUUID()}`,
+        scope: 'all',
+        kind: 'percent_off',
+        percent: '10',
+        buyQty: '',
+        label: '',
+      },
+    ])
+  }
+
+  /** The perk's sentence, as the plan card will print it. Null while a field is not yet valid. */
+  function perkPreview(p: PerkDraft): string | null {
+    const percent = wholeIn(p.percent, 1, 100)
+    const buy = p.kind === 'buy_get' ? wholeIn(p.buyQty, 1, 10) : null
+    if (percent === null || (p.kind === 'buy_get' && buy === null)) return null
+    const ids = scopeIds(p.scope)
+    return describeProductPerk(
+      { kind: p.kind, percent_off: percent, buy_qty: buy, ...ids },
+      {
+        product: products.find((x) => x.id === ids.product_id)?.name,
+        category: categories.find((x) => x.id === ids.category_id)?.name,
+      }
+    )
+  }
 
   function set<K extends keyof Draft>(key: K, value: Draft[K]) {
     setForm((f) => ({ ...f, [key]: value }))
@@ -128,9 +222,42 @@ export function MembershipEditor({
       toast.error('One of the member prices is not a number.')
       return
     }
-    if (form.service_discount_pct === 0 && form.included_sessions_per_period === 0) {
+    const parsedPerks: {
+      kind: PerkDraft['kind']
+      percent_off: number
+      buy_qty: number | null
+      product_id: number | null
+      category_id: number | null
+      label: string | null
+    }[] = []
+    for (const p of perks) {
+      const percent = wholeIn(p.percent, 1, 100)
+      if (percent === null) {
+        toast.error('Each product perk needs a percent off, a whole number from 1 to 100.')
+        return
+      }
+      const buy = p.kind === 'buy_get' ? wholeIn(p.buyQty, 1, 10) : null
+      if (p.kind === 'buy_get' && buy === null) {
+        toast.error('A "buy some, get one cheaper" perk needs how many to buy, from 1 to 10.')
+        return
+      }
+      const ids = scopeIds(p.scope)
+      parsedPerks.push({
+        kind: p.kind,
+        percent_off: percent,
+        buy_qty: buy,
+        ...ids,
+        label: p.label.trim() || null,
+      })
+    }
+    if (
+      form.service_discount_pct === 0 &&
+      form.included_sessions_per_period === 0 &&
+      parsedPrices.length === 0 &&
+      parsedPerks.length === 0
+    ) {
       toast.error(
-        'A membership has to grant something — a discount, some included treatments, or both.'
+        'A membership has to grant something: a member discount, included treatments, a member price, or a product perk.'
       )
       return
     }
@@ -205,7 +332,26 @@ export function MembershipEditor({
       )
     }
 
+    // Product perks, replaced wholesale too. Order on the screen is the order
+    // on the plan card.
+    const { error: clearPerksError } = await supabase
+      .from('membership_product_perks')
+      .delete()
+      .eq('membership_id', saved.id)
+    let perksError = clearPerksError
+    if (!clearPerksError && parsedPerks.length > 0) {
+      const { error: insertPerksError } = await supabase
+        .from('membership_product_perks')
+        .insert(parsedPerks.map((p, i) => ({ ...p, membership_id: saved.id, sort_order: i })))
+      perksError = insertPerksError
+    }
+
     setBusy(false)
+    if (perksError) {
+      toast.error(perksError.message || 'The plan saved, but its product perks did not.')
+      router.refresh()
+      return
+    }
     toast.success(isNew ? `${payload.name} added.` : 'Saved.')
     setOpen(false)
     if (isNew) {
@@ -213,6 +359,7 @@ export function MembershipEditor({
       setPrice('0.00')
       setScope([])
       setPrices([])
+      setPerks([])
     }
     router.refresh()
   }
@@ -495,6 +642,155 @@ export function MembershipEditor({
             </Select>
           </fieldset>
 
+          <fieldset className="sm:col-span-2">
+            <legend className="label-caps text-[var(--color-muted)]">Product perks</legend>
+            <p className="mt-2 max-w-prose text-xs text-[var(--color-muted)]">
+              Savings on retail for a current member, in the online shop and at the studio
+              till. They never stack: the shop and the till take the best single discount
+              among these, the multibuy deal and a promo code.
+            </p>
+            {perks.length > 0 && (
+              <ul className="mt-3 space-y-3">
+                {perks.map((p, i) => {
+                  const preview = perkPreview(p)
+                  const ids = scopeIds(p.scope)
+                  // A saved perk on something since taken out of the shop still
+                  // needs an option, or the select would quietly show another.
+                  const orphaned =
+                    (ids.product_id !== null && !products.some((x) => x.id === ids.product_id)) ||
+                    (ids.category_id !== null && !categories.some((x) => x.id === ids.category_id))
+                  return (
+                    <li
+                      key={p.key}
+                      data-ui="tile"
+                      className="border border-[var(--color-border)] p-4"
+                    >
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <Field label="Applies to" htmlFor={`perk_scope_${p.key}`}>
+                          <Select
+                            id={`perk_scope_${p.key}`}
+                            value={p.scope}
+                            onChange={(e) => setPerk(i, { scope: e.target.value })}
+                          >
+                            <option value="all">Every retail product</option>
+                            {orphaned && (
+                              <option value={p.scope}>No longer in the shop</option>
+                            )}
+                            {categories.length > 0 && (
+                              <optgroup label="A category">
+                                {categories.map((c) => (
+                                  <option key={c.id} value={`c:${c.id}`}>
+                                    {c.name}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                            {products.length > 0 && (
+                              <optgroup label="A product">
+                                {products.map((x) => (
+                                  <option key={x.id} value={`p:${x.id}`}>
+                                    {x.name}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                          </Select>
+                        </Field>
+                        <Field label="Kind" htmlFor={`perk_kind_${p.key}`}>
+                          <Select
+                            id={`perk_kind_${p.key}`}
+                            value={p.kind}
+                            onChange={(e) =>
+                              setPerk(i, {
+                                kind: e.target.value === 'buy_get' ? 'buy_get' : 'percent_off',
+                                buyQty:
+                                  e.target.value === 'buy_get' && !p.buyQty ? '1' : p.buyQty,
+                              })
+                            }
+                          >
+                            <option value="percent_off">Percent off</option>
+                            <option value="buy_get">Buy some, get one cheaper</option>
+                          </Select>
+                        </Field>
+                        <Field
+                          label={p.kind === 'buy_get' ? 'The next one is' : 'Percent off'}
+                          htmlFor={`perk_pct_${p.key}`}
+                          hint={
+                            p.kind === 'buy_get'
+                              ? 'Per cent off. 100 means free, 50 means half off.'
+                              : 'Off every unit it covers, 1 to 100.'
+                          }
+                        >
+                          <Input
+                            id={`perk_pct_${p.key}`}
+                            type="number"
+                            min={1}
+                            max={100}
+                            step={1}
+                            value={p.percent}
+                            onChange={(e) => setPerk(i, { percent: e.target.value })}
+                          />
+                        </Field>
+                        {p.kind === 'buy_get' && (
+                          <Field
+                            label="Buy this many"
+                            htmlFor={`perk_buy_${p.key}`}
+                            hint="1 to 10. The cheapest of each group gets the cut."
+                          >
+                            <Input
+                              id={`perk_buy_${p.key}`}
+                              type="number"
+                              min={1}
+                              max={10}
+                              step={1}
+                              value={p.buyQty}
+                              onChange={(e) => setPerk(i, { buyQty: e.target.value })}
+                            />
+                          </Field>
+                        )}
+                        <Field
+                          label="Label"
+                          htmlFor={`perk_label_${p.key}`}
+                          hint="Optional. Shown on the plan card instead of the plain sentence."
+                          className="sm:col-span-2"
+                        >
+                          <Input
+                            id={`perk_label_${p.key}`}
+                            maxLength={120}
+                            value={p.label}
+                            placeholder={preview ?? ''}
+                            onChange={(e) => setPerk(i, { label: e.target.value })}
+                          />
+                        </Field>
+                      </div>
+                      <div className="mt-3 flex items-center justify-between gap-3">
+                        <p className="min-w-0 text-xs text-[var(--color-muted)]">
+                          {preview ?? (
+                            <span className="text-amber-700 dark:text-amber-400">
+                              Not finished yet
+                            </span>
+                          )}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setPerks((cur) => cur.filter((_, j) => j !== i))}
+                          className="flex h-8 shrink-0 items-center gap-1.5 text-xs text-[var(--color-muted)] hover:text-red-700"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+                          Remove
+                        </button>
+                      </div>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+            <Button type="button" size="sm" variant="subtle" className="mt-3" onClick={addPerk}>
+              <Plus className="h-4 w-4" strokeWidth={1.75} />
+              Add a product perk
+            </Button>
+          </fieldset>
+
           <label className="flex items-start gap-3 text-sm sm:col-span-2">
             <input
               type="checkbox"
@@ -561,9 +857,16 @@ export function MembershipEditor({
           <div>
             <dt className="label-caps text-[var(--color-muted)]">And gets</dt>
             <dd className="mt-1">
-              {describeMembershipBenefit(form) || (
-                <span className="text-amber-700 dark:text-amber-400">Nothing yet</span>
-              )}
+              {describeMembershipBenefit(form) ||
+                (prices.length > 0 && perks.length > 0
+                  ? 'Member prices and product perks only'
+                  : prices.length > 0
+                    ? 'Member prices only'
+                    : perks.length > 0
+                      ? 'Product perks only'
+                      : (
+                          <span className="text-amber-700 dark:text-amber-400">Nothing yet</span>
+                        ))}
             </dd>
           </div>
           {form.included_sessions_per_period > 0 && (

@@ -59,6 +59,7 @@ import type {
   Membership,
   MembershipService,
   MembershipMemberPrice,
+  MembershipProductPerk,
   MembershipStatus,
   MembershipCharge,
   MembershipRedemption,
@@ -797,6 +798,20 @@ export type Order = {
     | 'apple_pay' | 'zelle' | 'paypal' | 'venmo' | 'cashapp'
     | null
   staff_notes: string | null
+  /** The membership whose product perk supplied discount_cents (086). */
+  client_membership_id: number | null
+  /**
+   * Which deal supplied discount_cents (086). One, because deals never stack.
+   * A manager's manual discount at the till is not a source and rides on top.
+   * Null when no deal won.
+   */
+  discount_source: 'multibuy' | 'coupon' | 'membership' | null
+  /**
+   * The part of discount_cents that a deal supplied (086): the multibuy
+   * promotion, a promo code, or a member perk, named by discount_source. The
+   * rest of discount_cents is a manager's hand-typed discount at the till.
+   */
+  deal_discount_cents: number
   created_at: string
   updated_at: string
 }
@@ -1817,6 +1832,7 @@ export type Database = {
         [
           ToProfile<'orders', 'client_id'>,
           Rel<'orders_appointment_id_fkey', ['appointment_id'], 'appointments', ['id']>,
+          Rel<'orders_client_membership_id_fkey', ['client_membership_id'], 'client_memberships', ['id']>,
         ]
       >
       order_items: TableDef<
@@ -2184,6 +2200,15 @@ export type Database = {
         [
           Rel<'membership_member_prices_membership_id_fkey', ['membership_id'], 'memberships', ['id']>,
           Rel<'membership_member_prices_service_id_fkey', ['service_id'], 'services', ['id']>,
+        ]
+      >
+      // Retail perks on a plan, added in 086.
+      membership_product_perks: TableDef<
+        MembershipProductPerk & { created_at: string | null },
+        [
+          Rel<'membership_product_perks_membership_id_fkey', ['membership_id'], 'memberships', ['id']>,
+          Rel<'membership_product_perks_product_id_fkey', ['product_id'], 'products', ['id']>,
+          Rel<'membership_product_perks_category_id_fkey', ['category_id'], 'product_categories', ['id']>,
         ]
       >
       client_memberships: TableDef<

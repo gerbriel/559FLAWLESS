@@ -15,8 +15,10 @@ import {
   describeMembershipBenefit,
   membershipIsCurrent,
   membershipPeriodLabel,
+  describeProductPerk,
   type ClientMembership,
   type Membership,
+  type MembershipProductPerk,
   type MembershipService,
 } from '@/types/memberships'
 
@@ -54,8 +56,16 @@ export default async function MembershipsPage() {
 
   if (!profile || !isManager(profile.role)) redirect('/dashboard')
 
-  const [{ data: plans }, { data: scopes }, { data: services }, { data: held }, { data: memberPriceRows }] =
-    await Promise.all([
+  const [
+    { data: plans },
+    { data: scopes },
+    { data: services },
+    { data: held },
+    { data: memberPriceRows },
+    { data: productRows },
+    { data: categoryRows },
+    { data: perkRows },
+  ] = await Promise.all([
       supabase
         // One string literal — concatenating widens the select to `string` and
         // collapses the result type to SelectQueryError.
@@ -75,6 +85,21 @@ export default async function MembershipsPage() {
         .from('client_memberships')
         .select('membership_id, status, current_period_end'),
       supabase.from('membership_member_prices').select('membership_id, service_id, price_cents'),
+      // What a product perk can be scoped to: the retail shelf, by product or
+      // by category (086).
+      supabase
+        .from('products')
+        .select('id, name')
+        .eq('is_active', true)
+        .eq('is_retail', true)
+        .is('archived_at', null)
+        .order('name'),
+      supabase.from('product_categories').select('id, name, is_active').order('name'),
+      supabase
+        .from('membership_product_perks')
+        .select('id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order')
+        .order('sort_order')
+        .order('id'),
     ])
 
   const rows = (plans ?? []) as Membership[]
@@ -84,6 +109,23 @@ export default async function MembershipsPage() {
     ClientMembership,
     'membership_id' | 'status' | 'current_period_end'
   >[]
+
+  const productOptions = (productRows ?? []) as { id: number; name: string }[]
+  const allCategories = (categoryRows ?? []) as { id: number; name: string; is_active: boolean }[]
+  // Every category, hidden ones marked, so a perk on a shelf that was since
+  // hidden still reads as what it is rather than as a gap.
+  const categoryOptions = allCategories.map((c) => ({
+    id: c.id,
+    name: c.is_active ? c.name : `${c.name} (hidden)`,
+  }))
+  const perks = (perkRows ?? []) as MembershipProductPerk[]
+  const perksFor = (planId: number) => perks.filter((p) => p.membership_id === planId)
+  const perkLine = (p: MembershipProductPerk) =>
+    p.label?.trim() ||
+    describeProductPerk(p, {
+      product: productOptions.find((x) => x.id === p.product_id)?.name,
+      category: allCategories.find((x) => x.id === p.category_id)?.name,
+    })
 
   const memberPricesFor = (planId: number) =>
     (memberPriceRows ?? []).filter((r) => r.membership_id === planId)
@@ -110,7 +152,13 @@ export default async function MembershipsPage() {
         eyebrow="Catalog"
         title="Memberships"
         lede="A standing arrangement rather than a purchase: the member pays every period and the studio takes the benefit off every visit automatically. What a plan grants is read fresh on each visit; what a member pays is frozen on the day they joined."
-        actions={<MembershipEditor services={serviceOptions} />}
+        actions={
+          <MembershipEditor
+            services={serviceOptions}
+            products={productOptions}
+            categories={categoryOptions}
+          />
+        }
       />
 
       <div className="mt-8 grid gap-4 sm:grid-cols-3">
@@ -148,7 +196,13 @@ export default async function MembershipsPage() {
             icon={BadgeCheck}
             title="No memberships yet"
             description="A membership is a price per period plus what it grants — a discount on every visit, some treatments included, or both."
-            action={<MembershipEditor services={serviceOptions} />}
+            action={
+          <MembershipEditor
+            services={serviceOptions}
+            products={productOptions}
+            categories={categoryOptions}
+          />
+        }
           />
         ) : (
           <ul className="divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
@@ -173,9 +227,13 @@ export default async function MembershipsPage() {
                         {formatMoney(plan.price_cents)} /{' '}
                         {membershipPeriodLabel(plan.period_months)}
                       </p>
-                      <p className="mt-1 text-xs text-[var(--color-muted)]">
-                        {describeMembershipBenefit(plan)}
-                      </p>
+                      {/* Empty for a plan that grants only member prices or
+                          product perks; their own lines below say what it gives. */}
+                      {describeMembershipBenefit(plan) && (
+                        <p className="mt-1 text-xs text-[var(--color-muted)]">
+                          {describeMembershipBenefit(plan)}
+                        </p>
+                      )}
                       {plan.included_sessions_per_period > 0 && (
                         <p className="mt-1 text-xs text-[var(--color-muted)]">
                           {scoped.length === 0
@@ -199,6 +257,11 @@ export default async function MembershipsPage() {
                             .join(', ')}
                         </p>
                       )}
+                      {perksFor(plan.id).length > 0 && (
+                        <p className="mt-1 text-xs text-[var(--color-muted)]">
+                          Product perks: {perksFor(plan.id).map(perkLine).join('; ')}
+                        </p>
+                      )}
                       {plan.description && (
                         <p className="mt-2 max-w-prose text-xs text-[var(--color-muted)]">
                           {plan.description}
@@ -211,7 +274,10 @@ export default async function MembershipsPage() {
                         plan={plan}
                         scopeServiceIds={scoped}
                         memberPrices={memberPricesFor(plan.id)}
+                        productPerks={perksFor(plan.id)}
                         services={serviceOptions}
+                        products={productOptions}
+                        categories={categoryOptions}
                         trigger="link"
                       />
                     </div>
@@ -255,8 +321,10 @@ export default async function MembershipsPage() {
             What a member is not charged for
           </p>
           <p className="max-w-prose text-sm text-[var(--color-muted)]">
-            The deposit on a booking is unchanged by a membership, and retail is unchanged
-            too — the discount is on treatments. An included treatment is spent on the
+            The deposit on a booking is unchanged by a membership, and the member
+            percentage is on treatments only. Retail changes only through a plan&rsquo;s
+            product perks, and then only when a perk beats the multibuy deal or a promo
+            code: the shop and the till take the best single discount, never two. An included treatment is spent on the
             dearest eligible thing on the visit, which is what a member would choose if
             they were asked.
           </p>

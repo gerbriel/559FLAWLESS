@@ -24,7 +24,8 @@ import { Field, Input, Select } from '@/components/ui/field'
 import { createClient } from '@/lib/supabase/client'
 import { cn, formatMoney } from '@/lib/utils'
 import { formatDateTimeInTimeZone } from '@/lib/time'
-import { membershipDiscountCents } from '@/types/memberships'
+import { membershipDiscountCents, type MembershipProductPerk } from '@/types/memberships'
+import { bestProductPerk, type PerkUnit } from '@/lib/member-product-perks'
 import { sellPackage } from '@/app/dashboard/packages/actions'
 import { packageErrorMessage } from '@/app/dashboard/packages/errors'
 import {
@@ -50,6 +51,8 @@ export interface SellableProduct {
   /** The product shot. Optional so an older page keeps compiling. */
   image_url?: string | null
   brand: string | null
+  /** For a member's product perk scoped to a category (086). Optional so an older page keeps compiling. */
+  category_id?: number | null
 }
 
 /**
@@ -259,6 +262,8 @@ export function PointOfSale({
     scope: number[]
     pct: number
     prices: Map<number, number>
+    /** Retail perks (086), for the retail preview. */
+    perks: MembershipProductPerk[]
   } | null>(null)
   const [applyTo, setApplyTo] = useState<string[]>([])
 
@@ -278,7 +283,7 @@ export function PointOfSale({
       const { data: held } = await supabase
         .from('client_memberships')
         .select(
-          'id, membership_id, current_period_start, memberships!client_memberships_membership_id_fkey(name, included_sessions_per_period, service_discount_pct, membership_services(service_id), membership_member_prices(service_id, price_cents)), membership_redemptions(sessions, redeemed_for_period_start)'
+          'id, membership_id, current_period_start, memberships!client_memberships_membership_id_fkey(name, included_sessions_per_period, service_discount_pct, membership_services(service_id), membership_member_prices(service_id, price_cents), membership_product_perks(id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order)), membership_redemptions(sessions, redeemed_for_period_start)'
         )
         .eq('client_id', customerId)
         .eq('status', 'active')
@@ -291,6 +296,7 @@ export function PointOfSale({
           service_discount_pct: number
           membership_services: { service_id: number }[]
           membership_member_prices: { service_id: number; price_cents: number }[]
+          membership_product_perks: MembershipProductPerk[] | null
         } | null
         if (held && plan) {
           const used = ((held.membership_redemptions ?? []) as {
@@ -305,6 +311,7 @@ export function PointOfSale({
             scope: plan.membership_services.map((r) => r.service_id),
             pct: plan.service_discount_pct,
             prices: new Map(plan.membership_member_prices.map((r) => [r.service_id, r.price_cents])),
+            perks: plan.membership_product_perks ?? [],
           })
         } else {
           setMembership(null)
@@ -473,7 +480,25 @@ export function PointOfSale({
     return covered + priced + membershipDiscountCents(rest, membership.pct)
   })()
 
-  const afterDiscount = Math.max(subtotal - memberCut - manualDiscount, 0)
+  // A member's product perk on a retail sale (086), previewed with the same
+  // arithmetic the sale route uses. The route re-reads the membership and keeps
+  // the better of the perk and the multibuy deal; this line shows only the
+  // perk, so the rung-up figure can come out lower.
+  const sellingRetail = !sellingPackage && !sellingServices && !sellingCustom
+  const retailUnits: PerkUnit[] = sellingRetail
+    ? lines.flatMap((l) =>
+        Array.from({ length: l.qty }, () => ({
+          productId: l.product.id,
+          categoryId: l.product.category_id ?? null,
+          priceCents: l.product.price_cents,
+        }))
+      )
+    : []
+  const retailPerk =
+    sellingRetail && membership ? bestProductPerk(membership.perks, retailUnits) : null
+  const perkCut = retailPerk?.off ?? 0
+
+  const afterDiscount = Math.max(subtotal - memberCut - perkCut - manualDiscount, 0)
   // A custom amount is taxed only when the desk ticks that it is goods.
   const untaxed = sellingPackage || sellingServices || (sellingCustom && !customTaxable)
   const tax = untaxed ? 0 : Math.round(afterDiscount * taxRate)
@@ -574,6 +599,7 @@ export function PointOfSale({
           external_url: p.external_url,
           image_url: known?.image_url ?? null,
           brand: known?.brand ?? null,
+          category_id: known?.category_id ?? null,
         })
         toast.success(`${p.name} — ${formatMoney(p.price_cents)}`)
       }
@@ -871,6 +897,9 @@ export function PointOfSale({
 
       setReceipt({
         ...data.order,
+        // What a member's product perk took off, when it beat the multibuy deal.
+        membership_cents: data.membership_cents ?? 0,
+        membership_name: data.membership_name ?? null,
         customer: customerId
           ? (customers.find((c) => c.id === customerId)?.name ?? 'Client')
           : walkIn.trim(),
@@ -1564,6 +1593,15 @@ export function PointOfSale({
                 <dd className="tabular-nums">&minus;{formatMoney(memberCut)}</dd>
               </div>
             )}
+            {perkCut > 0 && membership && (
+              <div className="flex justify-between">
+                <dt className="text-[var(--color-muted)]">
+                  Member perk, {membership.name}{' '}
+                  <span className="text-xs">(preview)</span>
+                </dt>
+                <dd className="tabular-nums">&minus;{formatMoney(perkCut)}</dd>
+              </div>
+            )}
             {manualDiscount > 0 && (
               <div className="flex justify-between">
                 <dt className="text-[var(--color-muted)]">Discount</dt>
@@ -1635,6 +1673,8 @@ export function PointOfSale({
               {membership.name} member · {membership.left}{' '}
               {membership.left === 1 ? 'facial' : 'facials'} left this period. Applied
               automatically to services rung up here.
+              {membership.perks.length > 0 &&
+                ' Their product perks apply to retail too, when they beat the multibuy deal; the sale works out the best single discount.'}
             </p>
           )}
 

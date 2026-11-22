@@ -11,6 +11,8 @@ import { Button } from '@/components/ui/button'
 import { Field, Input, Select } from '@/components/ui/field'
 import { formatMoney } from '@/lib/utils'
 import { normalizeCouponCode } from '@/lib/coupon-code'
+import { bestProductPerk, type PerkUnit } from '@/lib/member-product-perks'
+import type { MembershipProductPerk } from '@/types/memberships'
 import { trackCartEvent } from './ClientAnalytics'
 import { trackMetaEvent } from './MetaPixelEvent'
 
@@ -23,6 +25,8 @@ interface CartProduct {
   /** The product's page on the studio's Rhonda Allison storefront — where
    *  shipping actually happens. The studio ships nothing itself. */
   external_url: string | null
+  /** For a member's product perk scoped to a category (086). */
+  category_id: number | null
 }
 
 export function CartView() {
@@ -35,6 +39,11 @@ export function CartView() {
   // prefilled fields.
   const me = useSignedInContact()
   const [products, setProducts] = useState<CartProduct[]>([])
+  // The signed-in shopper's current plan and its product perks, for a preview
+  // line only. Checkout re-reads the membership and decides on the server.
+  const [member, setMember] = useState<{ name: string; perks: MembershipProductPerk[] } | null>(
+    null
+  )
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [form, setForm] = useState({
@@ -88,7 +97,7 @@ export function CartView() {
       const supabase = createClient()
       const { data } = await supabase
         .from('products')
-        .select('id, name, slug, price_cents, stock_qty, external_url')
+        .select('id, name, slug, price_cents, stock_qty, external_url, category_id')
         .in(
           'id',
           lines.map((l) => l.productId)
@@ -108,6 +117,42 @@ export function CartView() {
     }
   }, [lines])
 
+  // RLS lets a client read their own membership row, and anyone read the perks
+  // of a live plan. A period that has run out grants nothing, here as at checkout.
+  const userId = me.userId
+  useEffect(() => {
+    let cancelled = false
+
+    async function load() {
+      if (!userId) {
+        setMember(null)
+        return
+      }
+      const { data } = await createClient()
+        .from('client_memberships')
+        .select(
+          'id, memberships!client_memberships_membership_id_fkey(name, membership_product_perks(id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order))'
+        )
+        .eq('client_id', userId)
+        .eq('status', 'active')
+        .gt('current_period_end', new Date().toISOString())
+        .maybeSingle()
+
+      if (cancelled) return
+      const plan = data?.memberships as unknown as {
+        name: string
+        membership_product_perks: MembershipProductPerk[] | null
+      } | null
+      const perks = plan?.membership_product_perks ?? []
+      setMember(plan && perks.length > 0 ? { name: plan.name, perks } : null)
+    }
+
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [userId])
+
   const rows = lines
     .map((line) => {
       const product = products.find((p) => p.id === line.productId)
@@ -116,6 +161,16 @@ export function CartView() {
     .filter((r): r is { productId: number; qty: number; product: CartProduct } => r !== null)
 
   const subtotal = rows.reduce((n, r) => n + r.product.price_cents * r.qty, 0)
+
+  // One entry per unit: quantity three is three units to the perk arithmetic.
+  const units: PerkUnit[] = rows.flatMap((r) =>
+    Array.from({ length: r.qty }, () => ({
+      productId: r.productId,
+      categoryId: r.product.category_id,
+      priceCents: r.product.price_cents,
+    }))
+  )
+  const memberPerk = member ? bestProductPerk(member.perks, units) : null
 
   async function checkout(e: React.FormEvent) {
     e.preventDefault()
@@ -431,6 +486,12 @@ export function CartView() {
                   <dt className="text-[var(--color-muted)]">Subtotal</dt>
                   <dd className="tabular-nums">{formatMoney(subtotal)}</dd>
                 </div>
+                {memberPerk && member && (
+                  <div className="flex justify-between">
+                    <dt className="text-[var(--color-muted)]">Member savings ({member.name})</dt>
+                    <dd className="tabular-nums">&minus;{formatMoney(memberPerk.off)}</dd>
+                  </div>
+                )}
                 {coupon && (
                   <div className="flex justify-between text-[var(--color-muted)]">
                     <dt>Code {coupon}</dt>
@@ -442,6 +503,12 @@ export function CartView() {
                   <dd>Calculated at checkout</dd>
                 </div>
               </dl>
+              {memberPerk && (
+                <p className="mt-3 text-xs text-[var(--color-muted)]">
+                  Your member savings are a preview. The best single discount applies at
+                  checkout, so a promo code or the multibuy deal may win instead.
+                </p>
+              )}
 
               <Button type="submit" size="lg" className="mt-6 w-full" disabled={submitting}>
                 {submitting ? 'Redirecting…' : 'Checkout'}

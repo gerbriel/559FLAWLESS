@@ -165,9 +165,11 @@ export async function ClientMembershipPanel({
             )}
           </p>
 
-          <p className="text-xs text-[var(--color-muted)]">
-            {describeMembershipBenefit(plan)}
-          </p>
+          {describeMembershipBenefit(plan) && (
+            <p className="text-xs text-[var(--color-muted)]">
+              {describeMembershipBenefit(plan)}
+            </p>
+          )}
 
           {plan.included_sessions_per_period > 0 && (
             <p className="text-xs text-[var(--color-muted)]">

@@ -59,6 +59,25 @@ export type MembershipMemberPrice = {
   price_cents: number
 }
 
+/**
+ * A retail perk on a plan (086). `percent_off` takes N% off every eligible
+ * unit; `buy_get` makes the cheapest unit of every full group of
+ * `buy_qty + 1` eligible units `percent_off` cheaper (100 = free). Scope is
+ * one product, one category, or (both null) every retail product. The
+ * arithmetic is src/lib/member-product-perks.ts.
+ */
+export type MembershipProductPerk = {
+  id: number
+  membership_id: number
+  kind: 'percent_off' | 'buy_get'
+  percent_off: number
+  buy_qty: number | null
+  product_id: number | null
+  category_id: number | null
+  label: string | null
+  sort_order: number
+}
+
 /** Somebody holding a plan. */
 export type ClientMembership = {
   id: number
@@ -229,4 +248,53 @@ export function describeMembershipBenefit(
     )
   }
   return parts.join(' · ')
+}
+
+const ORDINALS = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth', 'eleventh']
+
+/** "free", "half off", "25% off". */
+function perkCutPhrase(percentOff: number): string {
+  if (percentOff >= 100) return 'free'
+  if (percentOff === 50) return 'half off'
+  return `${percentOff}% off`
+}
+
+/**
+ * One line for a product perk, for the plan card and the editor preview:
+ * "15% off all products", "20% off Gentle Cleanser", "Buy 2 in Cleansers, get
+ * the third half off", "Buy one Gentle Cleanser, get one free". Names are the
+ * caller's to look up; a missing one falls back to a generic noun rather than
+ * an empty gap.
+ */
+export function describeProductPerk(
+  perk: Pick<MembershipProductPerk, 'kind' | 'percent_off' | 'buy_qty' | 'product_id' | 'category_id'>,
+  names: { product?: string | null; category?: string | null }
+): string {
+  const product = names.product?.trim() || 'this product'
+  const category = names.category?.trim() || 'this category'
+  const cut = perkCutPhrase(perk.percent_off)
+
+  if (perk.kind === 'percent_off') {
+    const what =
+      perk.product_id !== null
+        ? product
+        : perk.category_id !== null
+          ? `everything in ${category}`
+          : 'all products'
+    // "free all products" is not English; a whole-price perk reads the other way round.
+    if (perk.percent_off >= 100) return `${what.charAt(0).toUpperCase()}${what.slice(1)} free`
+    if (perk.percent_off === 50) return `Half off ${what}`
+    return `${cut} ${what}`
+  }
+
+  const buy = Math.max(1, Math.trunc(perk.buy_qty ?? 1))
+  if (buy === 1) {
+    if (perk.product_id !== null) return `Buy one ${product}, get one ${cut}`
+    if (perk.category_id !== null) return `Buy one in ${category}, get one ${cut}`
+    return `Buy one product, get one ${cut}`
+  }
+  const next = ORDINALS[buy] ?? `${buy + 1}th`
+  if (perk.product_id !== null) return `Buy ${buy} ${product}, get the ${next} ${cut}`
+  if (perk.category_id !== null) return `Buy ${buy} in ${category}, get the ${next} ${cut}`
+  return `Buy ${buy} products, get the ${next} ${cut}`
 }

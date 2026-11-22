@@ -34,7 +34,7 @@ export default async function SellPage() {
     await Promise.all([
     supabase
       .from('products')
-      .select('id, name, sku, barcode, price_cents, stock_qty, unit, external_url, image_url, brands(name)')
+      .select('id, name, sku, barcode, price_cents, stock_qty, unit, external_url, image_url, category_id, brands(name)')
       .eq('is_active', true)
       .eq('is_retail', true)
       .is('archived_at', null)
@@ -88,6 +88,8 @@ export default async function SellPage() {
     // The till picks by sight, not by name — see PointOfSale.
     image_url: p.image_url,
     brand: (p.brands as { name: string } | null)?.name ?? null,
+    // For a member's product perk scoped to a category (086).
+    category_id: p.category_id,
   }))
 
   const customers = (clients ?? []).map((c) => ({

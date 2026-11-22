@@ -27,7 +27,7 @@
 
 import 'server-only'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { membershipDiscountCents } from '@/types/memberships'
+import { membershipDiscountCents, type MembershipProductPerk } from '@/types/memberships'
 
 /** One priced service line on the visit, as `priceService()` produced it. */
 export interface MembershipBenefitLine {
@@ -235,4 +235,50 @@ export async function applyMembershipBenefit(opts: {
     discountCents,
     sessionsSpent,
   }
+}
+
+/** One literal, for the same reason as HELD_MEMBERSHIP_SELECT. */
+const PERK_HOLDER_SELECT =
+  'id, membership_id, memberships!client_memberships_membership_id_fkey(id, name)'
+
+/**
+ * The retail perks (086) the client's current membership grants, or null when
+ * there is no current membership or its plan carries none.
+ *
+ * Read with the service role: a guest checkout has no session, and a till
+ * sale is the staff member's session, not the client's. Callers have already
+ * decided who the client is (the session cookie online, the staff-picked
+ * client at the till); this only answers what that person is entitled to.
+ * "Current" is the same sentence as applyMembershipBenefit's: status 'active'
+ * and the period has not run out.
+ */
+export async function currentMembershipPerks(
+  clientId: string | null,
+  now?: Date
+): Promise<{ clientMembershipId: number; planName: string; perks: MembershipProductPerk[] } | null> {
+  if (!clientId) return null
+  const supabase = createAdminClient()
+  const at = now ?? new Date()
+
+  const { data: held } = await supabase
+    .from('client_memberships')
+    .select(PERK_HOLDER_SELECT)
+    .eq('client_id', clientId)
+    .eq('status', 'active')
+    .gt('current_period_end', at.toISOString())
+    .maybeSingle()
+  if (!held) return null
+
+  const plan = held.memberships as unknown as { id: number; name: string } | null
+  if (!plan) return null
+
+  const { data: perks } = await supabase
+    .from('membership_product_perks')
+    .select('id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order')
+    .eq('membership_id', plan.id)
+    .order('sort_order', { ascending: true })
+    .order('id', { ascending: true })
+  if (!perks || perks.length === 0) return null
+
+  return { clientMembershipId: held.id, planName: plan.name, perks }
 }

@@ -7,7 +7,11 @@ import { MembershipJoinButton } from '@/components/shared/MembershipJoinButton'
 import { MembershipSelfService } from '@/components/shared/MembershipSelfService'
 import { formatMoney } from '@/lib/utils'
 import { requestNow } from '@/lib/time'
-import { membershipIsCurrent } from '@/types/memberships'
+import {
+  describeProductPerk,
+  membershipIsCurrent,
+  type MembershipProductPerk,
+} from '@/types/memberships'
 
 // Who is looking changes the page (join, or your membership), so it is never cached.
 export const dynamic = 'force-dynamic'
@@ -52,7 +56,7 @@ export default async function MembershipsPage({ searchParams }: Props) {
     supabase
       .from('memberships')
       .select(
-        'id, name, description, price_cents, period_months, included_sessions_per_period, auto_renew_offered, membership_services(services(name)), membership_member_prices(price_cents, services(name, price_cents))'
+        'id, name, description, price_cents, period_months, included_sessions_per_period, auto_renew_offered, membership_services(services(name)), membership_member_prices(price_cents, services(name, price_cents)), membership_product_perks(id, membership_id, kind, percent_off, buy_qty, product_id, category_id, label, sort_order, products(name), product_categories(name))'
       )
       .eq('is_active', true)
       .eq('sell_online', true)
@@ -189,6 +193,12 @@ export default async function MembershipsPage({ searchParams }: Props) {
                 price_cents: number
                 services: { name: string; price_cents: number } | null
               }[]
+              const productPerks = ((p.membership_product_perks ?? []) as unknown as (MembershipProductPerk & {
+                products: { name: string } | null
+                product_categories: { name: string } | null
+              })[])
+                .slice()
+                .sort((a, b) => a.sort_order - b.sort_order || a.id - b.id)
               const months = p.period_months === 1 ? 'month' : `${p.period_months} months`
               const forMonths = p.period_months === 1 ? '1 month' : `${p.period_months} months`
 
@@ -237,6 +247,18 @@ export default async function MembershipsPage({ searchParams }: Props) {
                         </span>
                       </li>
                     ))}
+                    {productPerks.map((perk) => (
+                      <li key={`perk-${perk.id}`} className="flex gap-2.5">
+                        <Check className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-accent)]" strokeWidth={2} />
+                        <span>
+                          {perk.label?.trim() ||
+                            describeProductPerk(perk, {
+                              product: perk.products?.name,
+                              category: perk.product_categories?.name,
+                            })}
+                        </span>
+                      </li>
+                    ))}
                     <li className="flex gap-2.5">
                       <Check className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-accent)]" strokeWidth={2} />
                       <span>{VISITS_CONFIRMED}</span>
@@ -271,6 +293,14 @@ export default async function MembershipsPage({ searchParams }: Props) {
                       </p>
                     )}
                   </div>
+                  {productPerks.length > 0 && (
+                    <p className="mt-4 text-xs text-[var(--color-muted)]">
+                      Product perks apply in the online shop and at the studio while your
+                      membership is current. Savings never stack: the best single discount
+                      on your order applies, whether that is a perk, a multibuy deal or a
+                      promo code.
+                    </p>
+                  )}
                   <p className="mt-4 text-xs text-[var(--color-muted)]">
                     Prefer to pay in person? Ask at your next visit and we will set it up at
                     the counter. Unused facials do not carry past the end date.
