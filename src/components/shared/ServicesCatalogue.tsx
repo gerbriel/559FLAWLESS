@@ -14,6 +14,7 @@ import {
   type EditableService,
   type ServiceCategoryOption,
 } from '@/components/shared/ServiceEditor'
+import { SortableList } from '@/components/shared/SortableList'
 import { formatDuration, formatMoney, formatServicePrice } from '@/lib/utils'
 
 /** A category, with the fields the rail and the thumbnails need. */
@@ -159,6 +160,7 @@ export function ServicesCatalogue({
   }, [byId, categories, filter, query, services])
 
   const shown = groups.reduce((n, g) => n + g.rows.length, 0)
+  const searching = query.trim() !== ''
 
   const pills = [
     { value: 'all', label: 'All', count: services.length },
@@ -245,10 +247,22 @@ export function ServicesCatalogue({
                   </span>
                 </div>
 
-                <ul className="mt-3 space-y-2.5">
-                  {group.rows.map((s) => (
-                    <li key={s.id}>
+                {/* Reordered a whole category at a time, which is what
+                    reorder_catalog is sent: a search shows part of one, so the
+                    controls wait until it is cleared. A category pill alone
+                    still shows every service in it. */}
+                <SortableList
+                  kind="services"
+                  canManage={canEdit && group.key !== 'other'}
+                  disabled={searching}
+                  disabledReason="Clear the search to change the order"
+                  className="mt-3 space-y-2.5"
+                  draggingClassName="drop-shadow-lg"
+                  items={group.rows.map((s) => ({ ...s, label: s.name }))}
+                >
+                  {(s, controls) => (
                       <Panel className="flex flex-wrap items-start gap-4 p-4 sm:flex-nowrap sm:p-5">
+                        {controls}
                         <ServiceThumb src={s.image_url ?? group.image_url} />
 
                         <div className="min-w-0 flex-1">
@@ -330,9 +344,8 @@ export function ServicesCatalogue({
                           )}
                         </div>
                       </Panel>
-                    </li>
-                  ))}
-                </ul>
+                  )}
+                </SortableList>
               </section>
             )
           )
@@ -351,9 +364,18 @@ export function ServicesCatalogue({
           {categories.length === 0 ? (
             <p className="mt-4 text-sm text-[var(--color-muted)]">No categories yet.</p>
           ) : (
-            <ul className="mt-4 divide-y divide-[var(--color-border)] border-t border-[var(--color-border)]">
-              {categories.map((cat) => (
-                <li key={cat.id} className="flex items-center gap-2.5 py-1.5 text-sm">
+            // The order here is the order the groups appear on this page, on
+            // the site and in the booking flow. Always the whole list.
+            <SortableList
+              kind="service_categories"
+              canManage={canEdit}
+              className="mt-4 divide-y divide-[var(--color-border)] border-t border-[var(--color-border)]"
+              draggingClassName="bg-[var(--color-surface)] shadow-md"
+              items={categories.map((cat) => ({ ...cat, label: cat.name }))}
+            >
+              {(cat, controls) => (
+                <div className="flex items-center gap-2.5 py-1.5 text-sm">
+                  {controls}
                   <span className="min-w-0 flex-1 truncate">{cat.name}</span>
                   {!cat.is_active && (
                     <Badge tone="neutral" size="sm">
@@ -376,12 +398,14 @@ export function ServicesCatalogue({
                       <span className="sr-only">See {cat.name} on the site</span>
                     </ButtonLink>
                   )}
-                </li>
-              ))}
-            </ul>
+                </div>
+              )}
+            </SortableList>
           )}
 
           <p className="mt-4 text-xs leading-relaxed text-[var(--color-muted)]">
+            {canEdit &&
+              'Drag a category or a service by its grip, or use the arrows, to change the order clients see. '}
             A service&rsquo;s category is chosen when you edit it.{' '}
             <Link
               href="/dashboard/categories/services"

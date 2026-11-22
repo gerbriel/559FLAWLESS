@@ -782,7 +782,7 @@ export function ServiceEditor({
             />
           </Field>
 
-          <Field label="Order on the menu" htmlFor="sv_sort" hint="Lower shows first.">
+          <Field label="Order on the menu" htmlFor="sv_sort" hint="Lower shows first. Dragging the list numbers the whole menu in tens, so 15 lands between 10 and 20.">
             <Input
               id="sv_sort"
               type="number"

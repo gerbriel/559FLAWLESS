@@ -9,6 +9,7 @@ import {
   type MembershipScopeRow,
   type MembershipServiceOption,
 } from '@/components/shared/MembershipEditor'
+import { SortableList } from '@/components/shared/SortableList'
 import { formatMoney } from '@/lib/utils'
 import { requestNow } from '@/lib/time'
 import { isManager } from '@/types/database'
@@ -265,12 +266,22 @@ export default async function MembershipsPage() {
         }
           />
         ) : (
-          <ul className="divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
-            {rows.map((plan) => {
+          // Drag the grip, or Move up / Move down, to set the order plans are
+          // listed in here and on the public memberships page. Every row on
+          // this page is a manager's (the redirect above), and reorder_catalog
+          // checks is_manager() again itself.
+          <SortableList
+            kind="memberships"
+            canManage
+            className="divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]"
+            itemClassName="py-5"
+            items={rows.map((plan) => {
               const scoped = scopeFor(plan.id)
               const members = countFor(plan.id)
-              return (
-                <li key={plan.id} className="py-5">
+              return {
+                id: plan.id,
+                label: plan.name,
+                content: (
                   <div className="flex flex-wrap items-start justify-between gap-4">
                     <div className="min-w-0">
                       <p className="flex flex-wrap items-center gap-2.5">
@@ -340,10 +351,10 @@ export default async function MembershipsPage() {
                       />
                     </div>
                   </div>
-                </li>
-              )
+                ),
+              }
             })}
-          </ul>
+          />
         )}
       </div>
 

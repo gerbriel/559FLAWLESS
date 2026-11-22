@@ -4,8 +4,6 @@ import { useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import {
-  ArrowDown,
-  ArrowUp,
   ExternalLink,
   Eye,
   EyeOff,
@@ -18,6 +16,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Badge } from '@/components/ui/badge'
 import { Button, ButtonLink } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/dashboard'
+import { SortableList } from '@/components/shared/SortableList'
 import { Field, Input, Select, Textarea } from '@/components/ui/field'
 import { categoryFormLinkIsTickable, formLinkForCategory } from '@/lib/forms'
 import { formatMoney } from '@/lib/utils'
@@ -755,7 +754,7 @@ export function ServiceCategoryManager({
       // A new category joins the end of the menu rather than tying with
       // whatever is already at the front.
       ...(target === 'new'
-        ? { sort_order: categories.reduce((n, c) => Math.max(n, c.sort_order), 0) + 1 }
+        ? { sort_order: categories.reduce((n, c) => Math.max(n, c.sort_order), 0) + 10 }
         : {}),
     }
 
@@ -922,42 +921,6 @@ export function ServiceCategoryManager({
       )
     } else {
       toast.success(`${plural(outcomes.length, 'service', 'services')} updated.`)
-    }
-    router.refresh()
-  }
-
-  /**
-   * Move one place up or down the menu.
-   *
-   * Every row is renumbered from 1 rather than swapping two values, because
-   * `sort_order` defaults to 0 and a menu where everything ties has no order to
-   * swap. Only the rows whose number actually changed are written.
-   */
-  async function move(index: number, by: -1 | 1) {
-    const to = index + by
-    if (to < 0 || to >= categories.length) return
-
-    const next = [...categories]
-    ;[next[index], next[to]] = [next[to], next[index]]
-
-    const changed = next
-      .map((c, i) => ({ id: c.id, sort_order: i + 1, before: c.sort_order }))
-      .filter((r) => r.sort_order !== r.before)
-    if (changed.length === 0) return
-
-    setBusy(true)
-    const supabase = createClient()
-    const results = await Promise.all(
-      changed.map((r) =>
-        supabase.from('service_categories').update({ sort_order: r.sort_order }).eq('id', r.id)
-      )
-    )
-    setBusy(false)
-
-    const failed = results.find((r) => r.error)
-    if (failed) {
-      toast.error(explain(failed.error, 'Could not reorder the menu.'))
-      return
     }
     router.refresh()
   }
@@ -1760,37 +1723,27 @@ export function ServiceCategoryManager({
           />
         )
       ) : (
-        <ul className="mt-6 space-y-px border border-[var(--color-border)] bg-[var(--color-border)]">
-          {categories.map((category, index) => {
+        // Drag the grip or press the arrows; the whole list's order is saved
+        // in one call (reorder_catalog, 093), which also renumbers the
+        // services so every flat list follows the category order.
+        <SortableList
+          kind="service_categories"
+          canManage={canManage}
+          disabled={busy}
+          className="mt-6 space-y-px border border-[var(--color-border)] bg-[var(--color-border)]"
+          itemClassName="bg-[var(--color-surface)] p-5"
+          draggingClassName="shadow-lg"
+          items={categories.map((c) => ({ ...c, label: c.name }))}
+        >
+          {(category, controls) => {
             const isEditing = editing === category.id
             const stat = usageOf(category.id)
             const notes = rowNotes(category)
 
             return (
-              <li key={category.id} className="bg-[var(--color-surface)] p-5">
+              <>
                 <div className="flex flex-wrap items-start gap-4">
-                  {canManage && (
-                    <div className="-ml-2 flex shrink-0 flex-col">
-                      <button
-                        type="button"
-                        onClick={() => move(index, -1)}
-                        disabled={busy || index === 0}
-                        aria-label={`Move ${category.name} up`}
-                        className="p-1.5 text-[var(--color-muted)] hover:text-[var(--color-foreground)] disabled:opacity-30"
-                      >
-                        <ArrowUp className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => move(index, 1)}
-                        disabled={busy || index === categories.length - 1}
-                        aria-label={`Move ${category.name} down`}
-                        className="p-1.5 text-[var(--color-muted)] hover:text-[var(--color-foreground)] disabled:opacity-30"
-                      >
-                        <ArrowDown className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden />
-                      </button>
-                    </div>
-                  )}
+                  {controls && <div className="-ml-2">{controls}</div>}
 
                   <div className="min-w-0 flex-1">
                     <p className="flex flex-wrap items-center gap-2">
@@ -1872,10 +1825,10 @@ export function ServiceCategoryManager({
                     {editor}
                   </div>
                 )}
-              </li>
+              </>
             )
-          })}
-        </ul>
+          }}
+        </SortableList>
       )}
     </div>
   )

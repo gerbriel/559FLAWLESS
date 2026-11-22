@@ -1249,7 +1249,7 @@ export function MembershipEditor({
             </span>
           </label>
 
-          <Field label="Sort order" htmlFor="mem_sort" hint="Lower shows first.">
+          <Field label="Sort order" htmlFor="mem_sort" hint="Lower shows first. Dragging the list numbers the plans in tens, so 15 lands between 10 and 20.">
             <Input
               id="mem_sort"
               type="number"

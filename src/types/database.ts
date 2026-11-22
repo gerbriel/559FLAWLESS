@@ -2476,6 +2476,20 @@ export type Database = {
         Returns: undefined
       }
       /**
+       * Write a whole new order for one list, as 10, 20, 30 in array order.
+       * Manager only. Unknown ids are ignored. 'services' and
+       * 'service_categories' both renumber services as one menu-wide sequence
+       * grouped by category, so flat lists by sort_order stay grouped. Added
+       * in 093.
+       */
+      reorder_catalog: {
+        Args: {
+          p_kind: 'services' | 'service_categories' | 'memberships'
+          p_ids: number[]
+        }
+        Returns: undefined
+      }
+      /**
        * Replace a provider's cached busy intervals for one window with what
        * Google just reported. Windowed, so syncing next month leaves this
        * month alone. Added in 027.

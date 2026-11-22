@@ -65,10 +65,11 @@ export default async function SellPage() {
     // The counter sells treatments too (services mode of the till).
     supabase
       .from('services')
-      .select('id, name, price_cents, duration_minutes, service_categories(name)')
+      .select('id, name, price_cents, duration_minutes, service_categories(name, sort_order)')
       .eq('is_active', true)
       .eq('requires_consultation', false)
       .order('sort_order')
+      .order('id'),
   ])
 
   const parsedRate = Number(rateSetting?.text_value)
@@ -133,14 +134,25 @@ export default async function SellPage() {
         customers={customers}
         taxRate={taxRate}
         packages={sellablePackages}
-        services={(services ?? []).map((s) => ({
-          id: s.id,
-          name: s.name,
-          price_cents: s.price_cents,
-          duration_minutes: s.duration_minutes,
-          category:
-            (s.service_categories as unknown as { name: string } | null)?.name ?? 'Other',
-        }))}
+        // Menu order: category by category, each in its own order. 093 keeps
+        // services.sort_order grouped already; the stable sort by category
+        // holds the grouping for a menu nobody has reordered since.
+        services={(services ?? [])
+          .map((s) => {
+            const cat = s.service_categories as unknown as { name: string; sort_order: number } | null
+            return {
+              row: {
+                id: s.id,
+                name: s.name,
+                price_cents: s.price_cents,
+                duration_minutes: s.duration_minutes,
+                category: cat?.name ?? 'Other',
+              },
+              catOrder: cat?.sort_order ?? Number.MAX_SAFE_INTEGER,
+            }
+          })
+          .sort((a, b) => a.catOrder - b.catOrder)
+          .map((x) => x.row)}
         canDiscount={isManager((profile?.role ?? 'provider') as UserRole)}
       />
     </div>
